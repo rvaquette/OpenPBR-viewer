@@ -18,6 +18,7 @@
  *   --screenshot=out.png    Alias de --output
  *   --spp=N                 Samples path-tracing à attendre avant la capture (défaut: 10)
  *   --size=WxH             Résolution du rendu (défaut: 256x256)  ex: --size=1280x720
+ *   --mtlx=file.mtlx       Charge les paramètres matériau depuis un fichier MaterialX OpenPBR
  *
  * Options rendu :
  *   --mode=Rasterizer|Pathtracer
@@ -47,8 +48,52 @@
 
 import { chromium }    from 'playwright-core';
 import { spawn, execSync } from 'child_process';
-import { existsSync }  from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { setTimeout as sleep } from 'timers/promises';
+
+// ---------------------------------------------------------------------------
+// Parseur MaterialX (open_pbr_surface, bloc unique)
+// ---------------------------------------------------------------------------
+
+// Noms MaterialX qui diffèrent des noms params du viewer
+const MTLX_NAME_MAP = {
+    specular_roughness_anisotropy : 'specular_anisotropy',
+    coat_roughness_anisotropy     : 'coat_anisotropy',
+};
+
+function parseMtlx(filePath) {
+    const xml = readFileSync(filePath, 'utf8');
+
+    // Extraire le bloc <open_pbr_surface ...>...</open_pbr_surface>
+    // ou <open_pbr_surface ... /> (auto-fermant)
+    const blockRe = /<open_pbr_surface\b[^>]*>([\s\S]*?)<\/open_pbr_surface>|<open_pbr_surface\b([^>]*\/\s*)>/;
+    const blockMatch = xml.match(blockRe);
+    if (!blockMatch) throw new Error(`Aucun nœud <open_pbr_surface> trouvé dans ${filePath}`);
+
+    const innerXml = blockMatch[1] ?? blockMatch[0]; // contenu ou tag entier
+
+    // Extraire chaque <input name="..." type="..." value="..." />
+    const inputRe = /<input\b([^>]*)\/>/g;
+    const result = {};
+    let m;
+    while ((m = inputRe.exec(innerXml)) !== null) {
+        const attrs = m[1];
+        const name  = (attrs.match(/\bname="([^"]+)"/)  ?? [])[1];
+        const type  = (attrs.match(/\btype="([^"]+)"/)  ?? [])[1];
+        const value = (attrs.match(/\bvalue="([^"]+)"/) ?? [])[1];
+        if (!name || !type || value === undefined) continue;
+
+        const paramName = MTLX_NAME_MAP[name] ?? name;
+
+        if (type === 'color3' || type === 'vector3') {
+            // "0.912, 0.914, 0.920" → "0.912,0.914,0.920"
+            result[paramName] = value.replace(/\s*,\s*/g, ',').trim();
+        } else {
+            result[paramName] = value.trim();
+        }
+    }
+    return result;
+}
 
 function killProcessTree(proc) {
     if (!proc) return;
@@ -73,7 +118,7 @@ for (const arg of cliArgs) {
 }
 
 const port          = options.port           ?? '5173';
-const useGpu        = (options.gpu           ?? 'true') !== 'false';
+const useGpu        = (options.gpu           ?? 'false') !== 'false';
 const headless      = (options.headless      ?? 'true') !== 'false';
 const startServer   = (options['start-server'] ?? 'true') !== 'false';
 function defaultOutputPath() {
@@ -87,15 +132,25 @@ function defaultOutputPath() {
     return `render_${ts}.png`;
 }
 const screenshotPath = options.output ?? options.screenshot ?? defaultOutputPath();
-const waitSamples   = parseInt(options['spp'] ?? options['wait-samples'] ?? '10', 10);
-const mode          = options.mode           ?? 'Rasterizer';
+const waitSamples   = parseInt(options['spp'] ?? options['wait-samples'] ?? '16', 16);
+const mode          = options.mode           ?? 'Pathracer';
 const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').map(Number);
 
+const mtlxPath = options.mtlx ?? null;
 delete options.port; delete options.gpu; delete options.headless;
 delete options['start-server']; delete options.screenshot; delete options.output;
 delete options['wait-samples']; delete options['spp']; delete options.mode; delete options.size;
+delete options.mtlx;
 
 if (!options.renderer_mode) options.renderer_mode = mode;
+
+// Injection des paramètres MaterialX (priorité sur les autres options CLI)
+if (mtlxPath) {
+    if (!existsSync(mtlxPath)) throw new Error(`Fichier .mtlx introuvable : ${mtlxPath}`);
+    const mtlxParams = parseMtlx(mtlxPath);
+    Object.assign(options, mtlxParams);
+    console.log(`MTLX      : ${mtlxPath} (${Object.keys(mtlxParams).length} paramètres)`);
+}
 
 // ---------------------------------------------------------------------------
 // Démarrage optionnel du serveur Vite
