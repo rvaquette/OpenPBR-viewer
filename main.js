@@ -694,6 +694,26 @@ function init()
     renderer.shadowMap.type = PCFSoftShadowMap; // default THREE.PCFShadowMap
     renderer.physicallyBasedShading = true;
 
+    // Intercept GLSL compilation errors with full driver log + line numbers
+    renderer.debug.onShaderError = function(gl, program, vertexShader, fragmentShader) {
+        const vertLog = gl.getShaderInfoLog(vertexShader);
+        const fragLog = gl.getShaderInfoLog(fragmentShader);
+        let msg = '';
+        if (vertLog && vertLog.trim().length > 0) {
+            console.error('[GLSL vertex shader error]\n' + vertLog);
+            msg += '── VERTEX SHADER ──\n' + vertLog.trim() + '\n\n';
+        }
+        if (fragLog && fragLog.trim().length > 0) {
+            console.error('[GLSL fragment shader error]\n' + fragLog);
+            msg += '── FRAGMENT SHADER ──\n' + fragLog.trim();
+        }
+        if (msg.length > 0) {
+            const overlay = document.getElementById('shader-error');
+            document.getElementById('shader-error-content').textContent = msg;
+            overlay.style.display = 'block';
+        }
+    };
+
     // Enable parallel shader compilation if available
     const gl = renderer.getContext();
     const parallelShaderCompileExt = gl.getExtension('KHR_parallel_shader_compile');
@@ -1189,6 +1209,9 @@ function trigger_recompile()
 function startCompilationProgress()
 {
     console.log('startCompilationProgress');
+    // Hide any previous shader error
+    document.getElementById('shader-error').style.display = 'none';
+    document.getElementById('shader-error-content').textContent = '';
     let progress_overlay = document.getElementById('progress_overlay');
     progress_overlay.style.display = 'block';
     progress_overlay.style.opacity = 1;

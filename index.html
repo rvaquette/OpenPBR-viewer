@@ -62,6 +62,35 @@
             opacity: 1.0;
             overflow:hidden;
         }
+        #shader-error {
+            display: none;
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%;
+            max-height: 50%;
+            overflow-y: auto;
+            background: rgba(20, 0, 0, 0.92);
+            color: #ff6b6b;
+            font-family: monospace;
+            font-size: 12px;
+            white-space: pre;
+            padding: 12px 16px;
+            box-sizing: border-box;
+            z-index: 10000;
+            border-bottom: 2px solid #ff2222;
+        }
+        #shader-error-close {
+            position: sticky;
+            top: 0;
+            float: right;
+            cursor: pointer;
+            color: #fff;
+            background: #550000;
+            border: none;
+            padding: 2px 8px;
+            font-family: monospace;
+            font-size: 12px;
+        }
     </style>
 </head>
 <body>
@@ -69,6 +98,7 @@
 		OpenPBR viewer
 	</div>
     <div id="samples"></div>
+    <div id="shader-error"><button id="shader-error-close" onclick="this.parentElement.style.display='none'">✕ fermer</button><span id="shader-error-content"></span></div>
     <div id="output">
         <div id="progress_overlay"></div>
     </div>
