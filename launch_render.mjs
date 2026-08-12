@@ -184,25 +184,44 @@ await page.addInitScript(() => {
 });
 
 // Relayer les logs console du navigateur vers le terminal
-page.on('console', msg => console.log(`[browser] ${msg.type().toUpperCase()}: ${msg.text()}`));
+page.on('console', msg => {
+    if (msg.type() === 'warning') return;
+    console.log(`[browser] ${msg.type().toUpperCase()}: ${msg.text()}`);
+});
 page.on('pageerror', err => console.error('[browser] PAGE ERROR:', err.stack ?? err.message));
 page.on('response',      resp => { if (resp.status() >= 400) console.error(`[browser] HTTP ${resp.status()}: ${resp.url()}`); });
 page.on('requestfailed', req  => console.error(`[browser] REQUEST FAILED: ${req.url()} — ${req.failure()?.errorText ?? ''}`));
 
 await page.goto(url, { waitUntil: 'domcontentloaded' });
 
+// Masquer l'UI (GUI, stats, overlays) pour un screenshot propre
+if (headless) {
+    await page.addStyleTag({ content: `
+        #info, #samples, #output, #shader-error, .lil-gui { display: none !important; }
+        body > div[style*="position:fixed"] { display: none !important; }
+    `});
+}
+
 // Attendre la fin de la compilation des shaders
 console.log('Attente de la fin de compilation des shaders...');
 await page.waitForFunction(() => window.__openpbrReady === true, null, { timeout: 120_000 });
 console.log('Shaders compilés.');
 
-if (options.renderer_mode === 'Pathtracing' && waitSamples > 0) {
+if (options.renderer_mode === 'Pathtracer' && waitSamples > 0) {
     console.log(`Attente de ${waitSamples} spp...`);
-    await page.waitForFunction(
-        n => (window.__openpbrSamples ?? 0) >= n,
-        waitSamples,
-        { timeout: 300_000 }
-    );
+    const deadline = Date.now() + 300_000;
+    let lastSpp = -1;
+    while (true) {
+        const spp = await page.evaluate(() => window.__openpbrSamples ?? 0);
+        if (spp !== lastSpp) {
+            process.stdout.write(`\r  spp: ${spp} / ${waitSamples}`);
+            lastSpp = spp;
+        }
+        if (spp >= waitSamples) break;
+        if (Date.now() > deadline) throw new Error(`Timeout: ${waitSamples} spp non atteints en 5 min`);
+        await sleep(250);
+    }
+    process.stdout.write('\n');
     console.log(`${waitSamples} spp atteints.`);
 }
 try {

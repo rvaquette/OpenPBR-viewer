@@ -224,7 +224,7 @@ var scene_names = {
     'Glavenus':             'glavenus',
     'Terrain':              'terrain',
     'Bearded Man':          'bearded-man'
-}
+};
 
 // ---------------------------------------------------------------------------
 // Apply URL query parameters to override params defaults before init()
@@ -1432,7 +1432,6 @@ function sync_shader_uniforms(uniforms)
 
 function render()
 {
-    console.log('render()')
     if (!LOADED)
     {
         console.log('not LOADED')
