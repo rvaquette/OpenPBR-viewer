@@ -133,7 +133,7 @@ function defaultOutputPath() {
 }
 const screenshotPath = options.output ?? options.screenshot ?? defaultOutputPath();
 const waitSamples   = parseInt(options['spp'] ?? options['wait-samples'] ?? '16', 16);
-const mode          = options.mode           ?? 'Pathracer';
+const mode          = options.mode           ?? 'Pathtracer';
 const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').map(Number);
 
 const mtlxPath = options.mtlx ?? null;
