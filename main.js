@@ -1179,6 +1179,9 @@ function post_load_setup()
     resize();
 }
 
+const SHADER_COMPILE_WARN_MS  = 10000;  // avertissement après 10 s
+const SHADER_COMPILE_ABORT_MS = 600000;  // timeout d'abandon après 600 s
+
 function trigger_recompile()
 {
     let tmp_cam = new OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
@@ -1191,7 +1194,31 @@ function trigger_recompile()
         promises.push(renderer.compileAsync(pathtracedQuad._mesh, tmp_cam));
     }
 
+    // Avertissement progressif si la compilation est longue
+    const warnTimer = setTimeout(() => {
+        progress_bar.setText('shaders compiling… (long shader, please wait)');
+        console.warn('Shader compilation taking longer than expected (> ' + (SHADER_COMPILE_WARN_MS/1000) + 's)');
+    }, SHADER_COMPILE_WARN_MS);
+
+    // Timeout d'abandon : arrêter d'attendre et afficher une erreur
+    let aborted = false;
+    const abortTimer = setTimeout(() => {
+        aborted = true;
+        clearTimeout(warnTimer);
+        finishCompilationProgress();
+        const overlay = document.getElementById('shader-error');
+        document.getElementById('shader-error-content').textContent =
+            'Shader compilation timeout (' + (SHADER_COMPILE_ABORT_MS/1000) + 's).\n' +
+            'La compilation GPU ne s\'est pas terminée dans le délai imparti.\n' +
+            'Essayez de recharger la page ou de réduire la complexité des shaders.';
+        overlay.style.display = 'block';
+        console.error('Shader compilation timed out after ' + (SHADER_COMPILE_ABORT_MS/1000) + 's.');
+    }, SHADER_COMPILE_ABORT_MS);
+
     Promise.all(promises).then(() => {
+        if (aborted) return;
+        clearTimeout(warnTimer);
+        clearTimeout(abortTimer);
         console.log('shaders successfully compiled.');
         // Warm-up render to flush any remaining GPU pipeline stalls
         if (PATHTRACING && pathtracedQuad && pathtracingRenderTarget) {
@@ -1202,6 +1229,8 @@ function trigger_recompile()
         }
         finishCompilationProgress();
     }).catch((err) => {
+        clearTimeout(warnTimer);
+        clearTimeout(abortTimer);
         console.log('shader compilation error: ' + err);
     });
 }
