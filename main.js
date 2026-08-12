@@ -226,6 +226,30 @@ var scene_names = {
     'Bearded Man':          'bearded-man'
 }
 
+// ---------------------------------------------------------------------------
+// Apply URL query parameters to override params defaults before init()
+// Usage: ?renderer_mode=Pathtracing&base_color=1,0,0&base_metalness=1
+// ---------------------------------------------------------------------------
+(function applyUrlParams() {
+    const search = new URLSearchParams(window.location.search);
+    for (const [key, rawVal] of search) {
+        if (!(key in params)) continue;
+        const current = params[key];
+        if (Array.isArray(current)) {
+            params[key] = rawVal.split(',').map(Number);
+        } else if (typeof current === 'boolean') {
+            params[key] = (rawVal === 'true' || rawVal === '1');
+        } else if (typeof current === 'number') {
+            params[key] = parseFloat(rawVal);
+        } else if (typeof current === 'string') {
+            params[key] = rawVal;
+        }
+    }
+    if (search.has('renderer_mode')) {
+        console.log('[URL params] renderer_mode =', params.renderer_mode);
+    }
+})();
+
 init();
 render();
 
@@ -1255,6 +1279,9 @@ function finishCompilationProgress()
     progress_bar.set(1.0);
     progress_finished_timer = performance.now();
     COMPILING = false;
+    // Signal headless readiness (used by launch_render.mjs)
+    window.__openpbrReady   = true;
+    window.__openpbrSamples = 0;
 }
 
 function resize()
@@ -1444,6 +1471,7 @@ function render()
             pathtracedFinalQuad.render( renderer );
 
             samples++;
+            window.__openpbrSamples = samples;
         }
         else
         {
