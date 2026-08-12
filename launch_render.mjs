@@ -17,9 +17,10 @@
  *   --output=out.png        Fichier image de sortie (défaut: render_YYYYMMDD_HHMMSS.png)
  *   --screenshot=out.png    Alias de --output
  *   --spp=N                 Samples path-tracing à attendre avant la capture (défaut: 10)
+ *   --size=WxH             Résolution du rendu (défaut: 256x256)  ex: --size=1280x720
  *
  * Options rendu :
- *   --mode=Rasterizer|Pathtracing
+ *   --mode=Rasterizer|Pathtracer
  *   --gpu=true|false        false = rendu logiciel SwiftShader (défaut: true)
  *   --scene=standard-shader-ball|glavenus|terrain|bearded-man
  *
@@ -35,19 +36,29 @@
  *
  * Exemples :
  *   # Screenshot métal rouge en path-tracing (headless, GPU)
- *   node launch_render.mjs --headless --mode=Pathtracing --base_color=0.8,0.1,0.1 --base_metalness=1 --screenshot=metal.png --spp=64
+ *   node launch_render.mjs --headless --mode=Pathtracer --base_color=0.8,0.1,0.1 --base_metalness=1 --screenshot=metal.png --spp=64
  *
  *   # Verre en rasterizer sans GPU, démarrage serveur automatique
- *   node launch_render.mjs --headless --start-server --mode=Rasterizer --transmission_weight=1 --gpu=false --screenshot=glass.png
+ *   node launch_render.mjs --headless --start-server --mode=Rasterizer --transmission_weight=1 --gpu=false --output=glass.png
  *
  *   # Aperçu fenêtré (mode normal)
- *   node launch_render.mjs --mode=Pathtracing --base_metalness=1 --base_color=0.2,0.5,1
+ *   node launch_render.mjs --mode=Pathtracer --base_metalness=1 --base_color=0.2,0.5,1
  */
 
-import { chromium }  from 'playwright-core';
-import { spawn }     from 'child_process';
-import { existsSync } from 'fs';
+import { chromium }    from 'playwright-core';
+import { spawn, execSync } from 'child_process';
+import { existsSync }  from 'fs';
 import { setTimeout as sleep } from 'timers/promises';
+
+function killProcessTree(proc) {
+    if (!proc) return;
+    try {
+        // Sur Windows, kill() ne tue que le shell (cmd.exe) — taskkill tue l'arbre complet
+        execSync(`taskkill /F /T /PID ${proc.pid}`, { stdio: 'ignore' });
+    } catch (_) {
+        proc.kill();
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Parse des arguments CLI
@@ -78,10 +89,11 @@ function defaultOutputPath() {
 const screenshotPath = options.output ?? options.screenshot ?? defaultOutputPath();
 const waitSamples   = parseInt(options['spp'] ?? options['wait-samples'] ?? '10', 10);
 const mode          = options.mode           ?? 'Rasterizer';
+const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').map(Number);
 
 delete options.port; delete options.gpu; delete options.headless;
 delete options['start-server']; delete options.screenshot; delete options.output;
-delete options['wait-samples']; delete options['spp'];
+delete options['wait-samples']; delete options['spp']; delete options.mode; delete options.size;
 
 if (!options.renderer_mode) options.renderer_mode = mode;
 
@@ -153,22 +165,35 @@ if (!useGpu) {
 console.log(`Mode      : ${headless ? 'headless' : 'fenêtré'}`);
 console.log(`Renderer  : ${options.renderer_mode}`);
 console.log(`URL       : ${url}`);
-console.log(`Output    : ${screenshotPath}${options.renderer_mode === 'Pathtracing' ? ` (${waitSamples} spp)` : ''}`);
+console.log(`Size      : ${renderW}x${renderH}`);
+console.log(`Output    : ${screenshotPath}${options.renderer_mode === 'Pathtracer' ? ` (${waitSamples} spp)` : ''}`);
 console.log('');
 
 const browser = await chromium.launch({ executablePath, headless, args });
-const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+const context = await browser.newContext({ viewport: { width: renderW, height: renderH } });
 const page    = await context.newPage();
+
+// Capture les erreurs JS avec stack trace AVANT le chargement des scripts
+await page.addInitScript(() => {
+    window.addEventListener('error', e => {
+        console.error('[JS ERROR]', e.message, '\nat', e.filename + ':' + e.lineno + ':' + e.colno, '\n' + (e.error?.stack ?? ''));
+    });
+    window.addEventListener('unhandledrejection', e => {
+        console.error('[UNHANDLED REJECTION]', e.reason?.message ?? String(e.reason), '\n' + (e.reason?.stack ?? ''));
+    });
+});
 
 // Relayer les logs console du navigateur vers le terminal
 page.on('console', msg => console.log(`[browser] ${msg.type().toUpperCase()}: ${msg.text()}`));
-page.on('pageerror', err => console.error('[browser] ERROR:', err.message));
+page.on('pageerror', err => console.error('[browser] PAGE ERROR:', err.stack ?? err.message));
+page.on('response',      resp => { if (resp.status() >= 400) console.error(`[browser] HTTP ${resp.status()}: ${resp.url()}`); });
+page.on('requestfailed', req  => console.error(`[browser] REQUEST FAILED: ${req.url()} — ${req.failure()?.errorText ?? ''}`));
 
 await page.goto(url, { waitUntil: 'domcontentloaded' });
 
 // Attendre la fin de la compilation des shaders
 console.log('Attente de la fin de compilation des shaders...');
-await page.waitForFunction(() => window.__openpbrReady === true, { timeout: 120_000 });
+await page.waitForFunction(() => window.__openpbrReady === true, null, { timeout: 120_000 });
 console.log('Shaders compilés.');
 
 if (options.renderer_mode === 'Pathtracing' && waitSamples > 0) {
@@ -180,16 +205,19 @@ if (options.renderer_mode === 'Pathtracing' && waitSamples > 0) {
     );
     console.log(`${waitSamples} spp atteints.`);
 }
-await page.screenshot({ path: screenshotPath, fullPage: false });
-console.log(`Image enregistrée : ${screenshotPath}`);
+try {
+    await page.screenshot({ path: screenshotPath, fullPage: false });
+    console.log(`Image enregistrée : ${screenshotPath}`);
 
-if (headless) {
-    await browser.close();
-    viteProcess?.kill();
+    if (!headless) {
+        console.log('Navigateur ouvert. Fermez la fenêtre pour terminer.');
+        await page.waitForEvent('close').catch(() => {});
+    }
+} finally {
+    await browser.close().catch(() => {});
+    if (viteProcess) {
+        killProcessTree(viteProcess);
+        console.log('Serveur Vite arrêté.');
+    }
     console.log('Terminé.');
-} else {
-    console.log('Navigateur ouvert. Fermez la fenêtre pour terminer.');
-    await page.waitForEvent('close').catch(() => {});
-    await browser.close();
-    viteProcess?.kill();
 }
