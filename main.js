@@ -106,6 +106,7 @@ var params =
     //////////////////////////////////////////////////////
 
     scene_name:                         'standard-shader-ball',
+    renderer_mode:                      'Rasterizer',
     smooth_normals:                     true,
     bounces:                            6,
     max_samples:                        512,
@@ -704,7 +705,7 @@ function init()
 
     document.body.appendChild( renderer.domElement );
 
-    PATHTRACING = false;
+    PATHTRACING = (params.renderer_mode === 'Pathtracer');
 
     // stats setup
     stats = new Stats();
@@ -878,6 +879,8 @@ function load_scene(scene_name)
 {
     console.log('Loading scene: ', scene_name);
     LOADED = false;
+
+    PATHTRACING = (params.renderer_mode === 'Pathtracer');
 
     create_materials()
 
@@ -1063,6 +1066,7 @@ function setup_gui()
 
     ///// Renderer folder /////////////////////////////////////
     const renderer_folder = gui.addFolder('Renderer');
+    renderer_folder.add(params, 'renderer_mode', ['Rasterizer', 'Pathtracer']).onChange(              v => { load_scene(params.scene_name); });
     renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => { load_scene(v); });
     renderer_folder.add( params, 'smooth_normals' ).onChange(                                         v => { resetSamples(); });
     renderer_folder.add( params, 'wireframe' ).onChange(                                              v => { resetSamples(); });
