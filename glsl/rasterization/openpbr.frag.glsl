@@ -1333,6 +1333,7 @@ void main()
     }
 
     gl_FragColor.rgb = radiance;
-    gl_FragColor.a = 1.0;
+    float F_surface = FresnelDielectricReflectance(abs(Vlocal.z), specular_ior_modulated(pbr));
+    gl_FragColor.a = 1.0 - pbr.transmission_weight * (1.0 - F_surface);
 
 }

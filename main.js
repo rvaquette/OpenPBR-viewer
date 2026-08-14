@@ -449,7 +449,9 @@ function create_materials()
 
                 vertexShader:   glsl_rasterization_openpbr_vert,
                 fragmentShader: glsl_rasterization_openpbr_frag,
-                lights: true
+                lights: true,
+                transparent: transmission_enabled(),
+                depthWrite:  !transmission_enabled()
             } );
 
 

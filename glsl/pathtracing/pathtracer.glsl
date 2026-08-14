@@ -558,6 +558,9 @@ void main()
                                            pW_next, dW_next, NsW_next, NgW_next, TsW_next, baryCoord_next, material_next);
             dW = dW_next;
             throughput *= volume_throughput;
+            // Clamp volumetric fireflies (volume_throughput can be extreme for chromatic media)
+            float maxVolT = maxComponent(throughput);
+            if (maxVolT > firefly_clamp) throughput *= firefly_clamp / maxVolT;
         }
 #endif // VOLUME_ENABLED
 
@@ -620,8 +623,9 @@ void main()
         vec3 winputW = -dW; // winputW, points *towards* the incident direction (parallel to photon)
         vec3 winputL = worldToLocal(winputW, basis);
 
-        // Skip shading if view direction is nearly tangent to the surface (avoids fireflies with flat normals)
-        if (winputL.z < 1.0e-3) break;
+        // Skip shading if view direction is nearly tangent to the surface (avoids fireflies with flat normals).
+        // Use abs() because inside a dielectric winputL.z is negative (z points interior→exterior by convention).
+        if (abs(winputL.z) < 1.0e-3) break;
 
         // Prepare OpenPBR if that material is used at the current vertex
         bool thin_walled = false;
@@ -659,9 +663,9 @@ void main()
         {
 #ifdef TRANSMISSION_ENABLED
             {
-                // On first transmission into dielectric, apply spectral weight for dispersion
+                // On entry into dielectric (not exit), apply spectral weight for dispersion.
                 // (skip if thin-film already applied spectral weight at path start)
-                if (transmission_dispersion_scale > 0.0)
+                if (!in_dielectric && transmission_dispersion_scale > 0.0)
                 {
 #ifndef THIN_FILM_ENABLED
                     surface_throughput *= xyzToRgb(xyzFit_1931(wavelength_nm)) * SPECTRAL_NORM;

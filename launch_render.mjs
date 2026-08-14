@@ -112,7 +112,7 @@ const cliArgs = process.argv.slice(2);
 const options = {};
 
 for (const arg of cliArgs) {
-    const m = arg.match(/^--([^=]+)(?:=(.*))?$/);
+    const m = arg.match(/^--([^=:]+)(?:[=:](.*))?$/);
     if (!m) { console.warn('Argument ignoré :', arg); continue; }
     options[m[1]] = m[2] ?? 'true';
 }
@@ -132,7 +132,7 @@ function defaultOutputPath() {
     return `render_${ts}.png`;
 }
 const screenshotPath = options.output ?? options.screenshot ?? defaultOutputPath();
-const waitSamples   = parseInt(options['spp'] ?? options['wait-samples'] ?? '16', 16);
+const waitSamples   = parseInt(options['spp'] ?? options['wait-samples'] ?? '16', 10);
 const mode          = options.mode           ?? 'Pathtracer';
 const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').map(Number);
 
@@ -164,7 +164,7 @@ if (startServer) {
     });
     // Attendre que Vite soit prêt
     await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Vite timeout')), 30000);
+        const timeout = setTimeout(() => reject(new Error('Vite timeout')), 300000);
         viteProcess.stdout.on('data', data => {
             if (data.toString().includes('localhost:')) {
                 clearTimeout(timeout);
@@ -264,7 +264,7 @@ console.log('Shaders compilés.');
 
 if (options.renderer_mode === 'Pathtracer' && waitSamples > 0) {
     console.log(`Attente de ${waitSamples} spp...`);
-    const deadline = Date.now() + 300_000;
+    const deadline = Date.now() + 3000_000;
     let lastSpp = -1;
     while (true) {
         const spp = await page.evaluate(() => window.__openpbrSamples ?? 0);
