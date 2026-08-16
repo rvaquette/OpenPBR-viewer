@@ -259,7 +259,7 @@ if (headless) {
 
 // Attendre la fin de la compilation des shaders
 console.log('Attente de la fin de compilation des shaders...');
-await page.waitForFunction(() => window.__openpbrReady === true, null, { timeout: 120_000 });
+await page.waitForFunction(() => window.__openpbrReady === true, null, { timeout: 1200_000 });
 console.log('Shaders compilés.');
 
 if (options.renderer_mode === 'Pathtracer' && waitSamples > 0) {
@@ -280,7 +280,8 @@ if (options.renderer_mode === 'Pathtracer' && waitSamples > 0) {
     console.log(`${waitSamples} spp atteints.`);
 }
 try {
-    await page.screenshot({ path: screenshotPath, fullPage: false });
+    await sleep(500); // let GPU compositor finish before screenshot
+    await page.screenshot({ path: screenshotPath, fullPage: false, timeout: 60_000 });
     console.log(`Image enregistrée : ${screenshotPath}`);
 
     if (!headless) {

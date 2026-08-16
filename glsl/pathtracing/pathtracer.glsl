@@ -558,9 +558,6 @@ void main()
                                            pW_next, dW_next, NsW_next, NgW_next, TsW_next, baryCoord_next, material_next);
             dW = dW_next;
             throughput *= volume_throughput;
-            // Clamp volumetric fireflies (volume_throughput can be extreme for chromatic media)
-            float maxVolT = maxComponent(throughput);
-            if (maxVolT > firefly_clamp) throughput *= firefly_clamp / maxVolT;
         }
 #endif // VOLUME_ENABLED
 
