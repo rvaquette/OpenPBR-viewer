@@ -364,7 +364,7 @@ float LiPDF(in vec3 shadowW, in Basis basis)
 
 vec3 evaluateEdf(in vec3 pW, in Basis basis, in vec3 winputL)
 {
-    return pt_mEmission; // set by pt_InitMaterialSummary() in openpbr_prepare()
+    return emission_color * emission_luminance;
 }
 
 
@@ -620,9 +620,8 @@ void main()
         vec3 winputW = -dW; // winputW, points *towards* the incident direction (parallel to photon)
         vec3 winputL = worldToLocal(winputW, basis);
 
-        // Skip shading if view direction is nearly tangent to the surface (avoids fireflies with flat normals).
-        // Use abs() because inside a dielectric winputL.z is negative (z points interior→exterior by convention).
-        if (abs(winputL.z) < 1.0e-3) break;
+        // Skip shading if view direction is nearly tangent to the surface (avoids fireflies with flat normals)
+        if (winputL.z < 1.0e-3) break;
 
         // Prepare OpenPBR if that material is used at the current vertex
         bool thin_walled = false;
@@ -639,9 +638,7 @@ void main()
             vec3 woutputL; // points *towards* the outgoing ray direction (opposite to photon)
             vec3 f = sampleBsdf(pW, basis, winputL, rndSeed, material, woutputL, bsdfPdf_continuation, internal_medium);
             vec3 woutputW = localToWorld(woutputL, basis);
-            // MaterialX BSDFs include NdotL; neutral/ground BRDFs do not — apply cos only for non-OPENPBR.
-            float cos_out = (material == MATERIAL_OPENPBR) ? 1.0 : abs(dot(woutputW, basis.nW));
-            surface_throughput = f / max(PDF_EPSILON, bsdfPdf_continuation) * cos_out;
+            surface_throughput = f / max(PDF_EPSILON, bsdfPdf_continuation) * abs(dot(woutputW, basis.nW));
             // Clamp to prevent fireflies from extreme BSDF values (e.g. grazing microfacets on flat normals)
             float maxComp = maxComponent(surface_throughput);
             if (maxComp > firefly_clamp) surface_throughput *= firefly_clamp / maxComp;
@@ -662,9 +659,9 @@ void main()
         {
 #ifdef TRANSMISSION_ENABLED
             {
-                // On entry into dielectric (not exit), apply spectral weight for dispersion.
+                // On first transmission into dielectric, apply spectral weight for dispersion
                 // (skip if thin-film already applied spectral weight at path start)
-                if (!in_dielectric && transmission_dispersion_scale > 0.0)
+                if (transmission_dispersion_scale > 0.0)
                 {
 #ifndef THIN_FILM_ENABLED
                     surface_throughput *= xyzToRgb(xyzFit_1931(wavelength_nm)) * SPECTRAL_NORM;
@@ -696,9 +693,7 @@ void main()
                 float bsdfPdf_shadow = PDF_EPSILON;
                 vec3 fshadow = evaluateBsdf(pW, basis, winputL, shadowL, material, bsdfPdf_shadow);
                 float misWeightLight = powerHeuristic(lightPdf, bsdfPdf_shadow);
-                // MaterialX BSDFs include NdotL; neutral/ground BRDFs do not.
-                float cos_shadow = (material == MATERIAL_OPENPBR) ? 1.0 : abs(dot(shadowW, basis.nW));
-                vec3 Ld = misWeightLight * fshadow * cos_shadow * Li / max(PDF_EPSILON, lightPdf);
+                vec3 Ld = misWeightLight * fshadow * abs(dot(shadowW, basis.nW)) * Li / max(PDF_EPSILON, lightPdf);
                 float maxLd = maxComponent(Ld);
                 if (maxLd > firefly_clamp) Ld *= firefly_clamp / maxLd;
                 L += throughput * Ld;

@@ -158,12 +158,29 @@ if (!options.renderer_mode) options.renderer_mode = mode;
 // --scene is a shorthand alias for the scene_name param
 if (options.scene) { options.scene_name ??= options.scene; delete options.scene; }
 
-// Injection des paramètres MaterialX (priorité sur les autres options CLI)
+// Injection des paramètres MaterialX via WASM (génération GLSL côté Node.js)
+// Le .mtlx est copié dans public/ pour que Vite le serve ; le browser le fetchera via ?mtlx_url=.
+// En mode legacy, les params sont en plus extraits via parseMtlx() et injectés dans l'URL.
+let mtlxPublicUrl = null;
 if (mtlxPath) {
     if (!existsSync(mtlxPath)) throw new Error(`Fichier .mtlx introuvable : ${mtlxPath}`);
-    const mtlxParams = parseMtlx(mtlxPath);
-    Object.assign(options, mtlxParams);
-    console.log(`MTLX      : ${mtlxPath} (${Object.keys(mtlxParams).length} paramètres)`);
+    // Copier le .mtlx dans public/ pour qu'il soit servi par Vite.
+    const tmpName = 'tmp_material.mtlx';
+    const destPath = new URL(`./public/${tmpName}`, import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1');
+    writeFileSync(destPath, readFileSync(mtlxPath));
+    mtlxPublicUrl = `/${tmpName}`;
+    console.log(`MTLX      : ${mtlxPath} → servi via ${mtlxPublicUrl}`);
+
+    // En mode legacy, injecter aussi les params comme query string pour alimenter les uniforms.
+    if (mode === 'Pathtracer legacy') {
+        try {
+            const mtlxParams = parseMtlx(mtlxPath);
+            Object.assign(options, mtlxParams);
+            console.log(`MTLX legacy params : ${Object.keys(mtlxParams).length} paramètres`);
+        } catch (e) {
+            console.warn('[mtlx] parseMtlx failed:', e.message);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +212,7 @@ if (startServer) {
 // Construction de l'URL
 // ---------------------------------------------------------------------------
 const BASE_URL = `http://localhost:${port}/OpenPBR-viewer/`;
+if (mtlxPublicUrl) options.mtlx_url = mtlxPublicUrl;
 const query = Object.entries(options)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join('&');
@@ -274,6 +292,16 @@ if (headless) {
 // Attendre la fin de la compilation des shaders
 console.log('Attente de la fin de compilation des shaders...');
 await page.waitForFunction(() => window.__openpbrReady === true, null, { timeout: 1200_000 });
+
+// Vérifier qu'il n'y a pas eu d'erreur de compilation GLSL
+const shaderError = await page.evaluate(() => window.__openpbrShaderError ?? null);
+if (shaderError) {
+    console.error('\n[ERREUR] Compilation GLSL échouée — arrêt du rendu.');
+    process.exitCode = 1;
+    await browser.close();
+    if (viteProcess) viteProcess.kill();
+    process.exit(1);
+}
 console.log('Shaders compilés.');
 
 if (options.renderer_mode === 'Pathtracer' && waitSamples > 0) {

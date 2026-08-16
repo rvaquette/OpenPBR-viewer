@@ -41,8 +41,70 @@ uniform int bounces;
 uniform int max_volume_steps;
 uniform float firefly_clamp;
 
-// Material params are now folded as globals by the MaterialX WASM generator.
-// Enabled-feature flags are no longer used (MaterialX handles them internally).
+//////////////////////////////////////////////////////
+// material uniforms
+//////////////////////////////////////////////////////
+
+uniform float base_weight;
+uniform vec3  base_color;
+uniform float base_diffuse_roughness;
+uniform float base_metalness;
+
+uniform float specular_weight;
+uniform vec3  specular_color;
+uniform float specular_roughness;
+uniform float specular_anisotropy;
+uniform float specular_ior;
+uniform float specular_haze;
+uniform float specular_haze_spread;
+uniform float specular_retroreflectivity;
+
+uniform float transmission_weight;
+uniform vec3  transmission_color;
+uniform float transmission_depth;
+uniform vec3  transmission_scatter;
+uniform float transmission_scatter_anisotropy;
+uniform float transmission_dispersion_abbe_number;
+uniform float transmission_dispersion_scale;
+
+uniform float subsurface_weight;
+uniform vec3  subsurface_color;
+uniform float subsurface_radius;
+uniform vec3  subsurface_radius_scale;
+uniform float subsurface_anisotropy;
+
+uniform float coat_weight;
+uniform vec3  coat_color;
+uniform float coat_roughness;
+uniform float coat_anisotropy;
+uniform float coat_ior;
+uniform float coat_darkening;
+
+uniform float fuzz_weight;
+uniform vec3  fuzz_color;
+uniform float fuzz_roughness;
+
+uniform float thin_film_weight;
+uniform float thin_film_thickness;
+uniform float thin_film_ior;
+
+uniform float emission_weight;
+uniform float emission_luminance;
+uniform vec3  emission_color;
+
+uniform float geometry_opacity;
+uniform bool geometry_thin_walled;
+
+//////////////////////////////////////////////////////
+// enabled uniforms
+//////////////////////////////////////////////////////
+
+uniform bool fuzz_enabled;
+uniform bool coat_enabled;
+uniform bool transmission_enabled;
+uniform bool volume_enabled;
+uniform bool dispersion_enabled;
+uniform bool thin_film_enabled;
 
 //////////////////////////////////////////////////////
 // lighting uniforms
@@ -294,6 +356,17 @@ float sample_triangle_filter(float xi)
 
 const float ambient_ior = 1.0;
 
+bool cutout(in int material, inout uint rndSeed)
+{
+    if (material != MATERIAL_OPENPBR)
+        return false;
+    if (!geometry_thin_walled || geometry_opacity==1.0)
+        return false;
+    float X = rand(rndSeed);
+    if (X < 1.0 - geometry_opacity) return true;
+    return false;
+}
+
 // mui     = magnitude of the cosine of the incident ray angle to the micronormal
 // eta_ti  = ratio et/ei of the transmitted IOR (et) and incident IOR (ei)
 float FresnelDielectricReflectance(in float mui, in float eta_ti)
@@ -303,6 +376,40 @@ float FresnelDielectricReflectance(in float mui, in float eta_ti)
     if (mut2 <= 0.0) return 1.0;
     float g = sqrt(mut2);
     return 0.5 * sqr((g-c)/(g+c)) * (1.0 + sqr(((g+c)*c-1.0)/((g-c)*c+1.0)));
+}
+
+// PR #247 (https://github.com/AcademySoftwareFoundation/OpenPBR/pull/247):
+// specular_weight (>= 0) modulates the Fresnel F0 linearly, without disturbing refraction (decoupled IOR)
+float FresnelDielectricReflectanceModulated(in float mui, in float eta_ti)
+{
+    float etam1 = eta_ti - 1.0;
+    float etam1sqr = sqr(etam1);
+    if (etam1sqr < FLT_EPSILON) return 0.0;
+    if (specular_weight != 1.0)
+    {
+        // Compute modified IOR ratio (modulates F0 by specular_weight)
+        float F0 = etam1sqr / sqr(1.0+eta_ti);
+        float epsilon = sign(etam1) * sqrt(clamp(specular_weight * F0, 0.0, 1.0));
+        float eta_ti_prime = (1.0 + epsilon) / max(1.0 - epsilon, DENOM_TOLERANCE);
+
+        if (eta_ti_prime >= 1.0) // (No TIR possible)
+        {
+            // Directly use modulated IOR
+            return FresnelDielectricReflectance(mui, eta_ti_prime);
+        }
+        else
+        {
+            // TIR is possible - use Stokes reciprocity to maintain energy conservation
+            // Check for TIR using the *unmodified* IOR (refraction direction unchanged)
+            float mu2_t = 1.0 - (1.0 - sqr(mui))/sqr(eta_ti);
+            if (mu2_t <= 0.0)
+                return 1.0; // (TIR occurs)
+            // Use "squeezed" Fresnel curve at the refracted angle with modulated IOR
+            float mu_t = sqrt(mu2_t);
+            return FresnelDielectricReflectance(mu_t, 1.0/eta_ti_prime);
+        }
+    }
+    return FresnelDielectricReflectance(mui, eta_ti);
 }
 
 vec3 FresnelSchlick(vec3 F0, float mu)
