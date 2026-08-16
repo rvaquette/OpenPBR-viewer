@@ -147,8 +147,8 @@ const mode          = options.mode           ?? 'Pathtracer';
 const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').map(Number);
 
 const mtlxPath      = options.mtlx    ?? null;
-const denoiseEnabled = (options.denoise ?? 'false') !== 'false';
-const oidnPath       = options.oidn    ?? 'oidnDenoise';
+const denoiseEnabled = (options.denoise ?? 'true') !== 'false';
+const oidnPath       = options.oidn    ?? 'D:\\oidn-2.5.0\\bin\\oidnDenoise.exe';
 delete options.port; delete options.gpu; delete options.headless;
 delete options['start-server']; delete options.screenshot; delete options.output;
 delete options['wait-samples']; delete options['spp']; delete options.mode; delete options.size;
