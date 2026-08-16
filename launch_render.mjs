@@ -19,11 +19,20 @@
  *   --spp=N                 Samples path-tracing à attendre avant la capture (défaut: 10)
  *   --size=WxH             Résolution du rendu (défaut: 256x256)  ex: --size=1280x720
  *   --mtlx=file.mtlx       Charge les paramètres matériau depuis un fichier MaterialX OpenPBR
+ *   --denoise=true|false    Débruitage OIDN après capture (défaut: false)
+ *   --oidn=path             Chemin vers oidnDenoise.exe (défaut: oidnDenoise dans PATH)
  *
  * Options rendu :
  *   --mode=Rasterizer|Pathtracer
- *   --gpu=true|false        false = rendu logiciel SwiftShader (défaut: true)
+ *   --gpu=true|false              false = rendu logiciel SwiftShader (défaut: true)
  *   --scene=standard-shader-ball|glavenus|terrain|bearded-man
+ *   --smooth_normals=true|false   Lissage des normales (défaut: true)
+ *   --bounces=N                   Nombre de rebonds (défaut: 6)
+ *   --max_samples=N               Samples max avant arrêt (défaut: 512)
+ *   --max_volume_steps=N          Pas volume max (défaut: 8)
+ *   --firefly_clamp=N             Clamp anti-firefly (défaut: 10)
+ *   --wireframe=true|false        Fil de fer (défaut: false)
+ *   --neutral_color=R,G,B         Couleur neutre (défaut: 0.99,0.99,0.99)
  *
  * Paramètres matériau OpenPBR :
  *   --base_color=R,G,B      ex: --base_color=0.8,0.1,0.1
@@ -48,8 +57,9 @@
 
 import { chromium }    from 'playwright-core';
 import { spawn, execSync } from 'child_process';
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { setTimeout as sleep } from 'timers/promises';
+import sharp from 'sharp';
 
 // ---------------------------------------------------------------------------
 // Parseur MaterialX (open_pbr_surface, bloc unique)
@@ -136,13 +146,17 @@ const waitSamples   = parseInt(options['spp'] ?? options['wait-samples'] ?? '16'
 const mode          = options.mode           ?? 'Pathtracer';
 const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').map(Number);
 
-const mtlxPath = options.mtlx ?? null;
+const mtlxPath      = options.mtlx    ?? null;
+const denoiseEnabled = (options.denoise ?? 'false') !== 'false';
+const oidnPath       = options.oidn    ?? 'oidnDenoise';
 delete options.port; delete options.gpu; delete options.headless;
 delete options['start-server']; delete options.screenshot; delete options.output;
 delete options['wait-samples']; delete options['spp']; delete options.mode; delete options.size;
-delete options.mtlx;
+delete options.mtlx; delete options.denoise; delete options.oidn;
 
 if (!options.renderer_mode) options.renderer_mode = mode;
+// --scene is a shorthand alias for the scene_name param
+if (options.scene) { options.scene_name ??= options.scene; delete options.scene; }
 
 // Injection des paramètres MaterialX (priorité sur les autres options CLI)
 if (mtlxPath) {
@@ -283,6 +297,55 @@ try {
     await sleep(500); // let GPU compositor finish before screenshot
     await page.screenshot({ path: screenshotPath, fullPage: false, timeout: 60_000 });
     console.log(`Image enregistrée : ${screenshotPath}`);
+
+    if (denoiseEnabled) {
+        const pfmIn  = screenshotPath.replace(/\.png$/i, '_oidn_in.pfm');
+        const pfmOut = screenshotPath.replace(/\.png$/i, '_oidn_out.pfm');
+        console.log('Débruitage OIDN...');
+        try {
+            // OIDN 2.x accepte PFM (float32, rows bottom-to-top, little-endian avec scale -1.0)
+            const { data, info } = await sharp(screenshotPath).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+            const { width, height } = info;
+            const floatBuf = Buffer.allocUnsafe(width * height * 3 * 4);
+            for (let row = 0; row < height; row++) {
+                const dstRow = height - 1 - row; // PFM: bottom-to-top
+                for (let col = 0; col < width; col++) {
+                    const s = (row * width + col) * 3;
+                    const d = (dstRow * width + col) * 3 * 4;
+                    floatBuf.writeFloatLE(data[s]   / 255, d);
+                    floatBuf.writeFloatLE(data[s+1] / 255, d + 4);
+                    floatBuf.writeFloatLE(data[s+2] / 255, d + 8);
+                }
+            }
+            writeFileSync(pfmIn, Buffer.concat([
+                Buffer.from(`PF\n${width} ${height}\n-1.0\n`, 'ascii'), floatBuf
+            ]));
+            execSync(`"${oidnPath}" --ldr "${pfmIn}" -o "${pfmOut}"`, { stdio: 'pipe' });
+            // PFM → PNG (rows bottom-to-top → flip back, float32 → uint8)
+            const pfmBuf = readFileSync(pfmOut);
+            let pos = 0, nl = 0;
+            while (nl < 3) if (pfmBuf[pos++] === 0x0A) nl++;
+            const [outW, outH] = pfmBuf.slice(pfmBuf.indexOf(0x0A) + 1).toString('ascii', 0, 30).trim().split(/\s+/).map(Number);
+            const rgbOut = Buffer.allocUnsafe(outW * outH * 3);
+            for (let row = 0; row < outH; row++) {
+                const srcRow = outH - 1 - row;
+                for (let col = 0; col < outW; col++) {
+                    const s = pos + (srcRow * outW + col) * 3 * 4;
+                    const d = (row * outW + col) * 3;
+                    rgbOut[d]   = Math.min(255, Math.max(0, Math.round(pfmBuf.readFloatLE(s)     * 255)));
+                    rgbOut[d+1] = Math.min(255, Math.max(0, Math.round(pfmBuf.readFloatLE(s + 4) * 255)));
+                    rgbOut[d+2] = Math.min(255, Math.max(0, Math.round(pfmBuf.readFloatLE(s + 8) * 255)));
+                }
+            }
+            await sharp(rgbOut, { raw: { width: outW, height: outH, channels: 3 } }).png().toFile(screenshotPath);
+            unlinkSync(pfmIn); unlinkSync(pfmOut);
+            console.log('Débruitage terminé.');
+        } catch (e) {
+            console.warn('OIDN échoué :', e.message.trim());
+            try { unlinkSync(pfmIn); } catch {}
+            try { unlinkSync(pfmOut); } catch {}
+        }
+    }
 
     if (!headless) {
         console.log('Navigateur ouvert. Fermez la fenêtre pour terminer.');
