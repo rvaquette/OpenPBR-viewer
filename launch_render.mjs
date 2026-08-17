@@ -172,7 +172,7 @@ if (mtlxPath) {
     console.log(`MTLX      : ${mtlxPath} → servi via ${mtlxPublicUrl}`);
 
     // En mode legacy, injecter aussi les params comme query string pour alimenter les uniforms.
-    if (mode === 'Pathtracer legacy') {
+    if (options.renderer_mode === 'Pathtracer legacy') {
         try {
             const mtlxParams = parseMtlx(mtlxPath);
             Object.assign(options, mtlxParams);
