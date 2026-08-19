@@ -175,7 +175,10 @@ if (mtlxPath) {
     if (options.renderer_mode === 'Pathtracer legacy') {
         try {
             const mtlxParams = parseMtlx(mtlxPath);
-            Object.assign(options, mtlxParams);
+            // CLI args take priority over mtlx values
+            for (const [k, v] of Object.entries(mtlxParams)) {
+                if (!(k in options)) options[k] = v;
+            }
             console.log(`MTLX legacy params : ${Object.keys(mtlxParams).length} paramètres`);
         } catch (e) {
             console.warn('[mtlx] parseMtlx failed:', e.message);
@@ -189,7 +192,7 @@ if (mtlxPath) {
 let viteProcess = null;
 if (startServer) {
     console.log('Démarrage du serveur Vite...');
-    viteProcess = spawn('npx', ['vite', '--port', port], {
+    viteProcess = spawn(`npx vite --port ${port}`, [], {
         shell: true,
         stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -253,7 +256,8 @@ console.log(`Mode      : ${headless ? 'headless' : 'fenêtré'}`);
 console.log(`Renderer  : ${options.renderer_mode}`);
 console.log(`URL       : ${url}`);
 console.log(`Size      : ${renderW}x${renderH}`);
-console.log(`Output    : ${screenshotPath}${options.renderer_mode === 'Pathtracer' ? ` (${waitSamples} spp)` : ''}`);
+const isPathtracing = options.renderer_mode === 'Pathtracer' || options.renderer_mode === 'Pathtracer legacy';
+console.log(`Output    : ${screenshotPath}${isPathtracing ? ` (${waitSamples} spp)` : ''}`);
 console.log('');
 
 const browser = await chromium.launch({ executablePath, headless, args });
@@ -304,7 +308,7 @@ if (shaderError) {
 }
 console.log('Shaders compilés.');
 
-if (options.renderer_mode === 'Pathtracer' && waitSamples > 0) {
+if (isPathtracing && waitSamples > 0) {
     console.log(`Attente de ${waitSamples} spp...`);
     const deadline = Date.now() + 3000_000;
     let lastSpp = -1;

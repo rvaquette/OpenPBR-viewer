@@ -499,14 +499,9 @@ void main()
 #endif
     bool in_dielectric = false;
 
-#if defined(TRANSMISSION_ENABLED) || defined(THIN_FILM_ENABLED)
-    // Stochastically choose hero wavelength for spectral rendering
-    // (used by both dispersion and thin-film iridescence)
-    wavelength_nm = 360.0 + (700.0 - 360.0)*rand(rndSeed);
-#endif
-
 #ifdef THIN_FILM_ENABLED
-    // Thin-film requires spectral rendering: apply CIE spectral weight at path start
+    // Thin-film requires spectral rendering: sample hero wavelength and apply CIE weight
+    wavelength_nm = 360.0 + (700.0 - 360.0)*rand(rndSeed);
     throughput *= xyzToRgb(xyzFit_1931(wavelength_nm)) * SPECTRAL_NORM;
 #endif
 
@@ -558,6 +553,9 @@ void main()
                                            pW_next, dW_next, NsW_next, NgW_next, TsW_next, baryCoord_next, material_next);
             dW = dW_next;
             throughput *= volume_throughput;
+            // Clamp throughput after volume RR amplification to prevent fireflies
+            float maxVT = maxComponent(throughput);
+            if (maxVT > firefly_clamp) throughput *= firefly_clamp / maxVT;
         }
 #endif // VOLUME_ENABLED
 
@@ -570,7 +568,10 @@ void main()
                 float lightPdf = LiPDF(dW, basis); // surface basis of previous hit
                 misWeightLight = powerHeuristic(bsdfPdf_continuation, lightPdf);
             }
-            L += throughput * misWeightLight * (sunRadiance(dW) + skyRadiance(dW));
+            vec3 Lenv = throughput * misWeightLight * (sunRadiance(dW) + skyRadiance(dW));
+            float maxLenv = maxComponent(Lenv);
+            if (maxLenv > firefly_clamp) Lenv *= firefly_clamp / maxLenv;
+            L += Lenv;
             break; // Ray escapes to infinity, terminate path
         }
 
@@ -620,8 +621,9 @@ void main()
         vec3 winputW = -dW; // winputW, points *towards* the incident direction (parallel to photon)
         vec3 winputL = worldToLocal(winputW, basis);
 
-        // Skip shading if view direction is nearly tangent to the surface (avoids fireflies with flat normals)
-        if (winputL.z < 1.0e-3) break;
+        // Skip shading if view direction is nearly tangent to the surface (avoids fireflies with flat normals).
+        // Use abs() because inside a dielectric winputL.z is negative (z points interior→exterior by convention).
+        if (abs(winputL.z) < 1.0e-3) break;
 
         // Prepare OpenPBR if that material is used at the current vertex
         bool thin_walled = false;
@@ -657,19 +659,6 @@ void main()
         bool transmitted = !thin_walled && (material == MATERIAL_OPENPBR) && (dot(winputW, NgW) * dot(dW, NgW) < 0.0);
         if (transmitted)
         {
-#ifdef TRANSMISSION_ENABLED
-            {
-                // On first transmission into dielectric, apply spectral weight for dispersion
-                // (skip if thin-film already applied spectral weight at path start)
-                if (transmission_dispersion_scale > 0.0)
-                {
-#ifndef THIN_FILM_ENABLED
-                    surface_throughput *= xyzToRgb(xyzFit_1931(wavelength_nm)) * SPECTRAL_NORM;
-#endif
-                }
-            }
-#endif // TRANSMISSION_ENABLED
-
             // Update in_dielectric state
             in_dielectric = !in_dielectric;
 
@@ -694,14 +683,17 @@ void main()
                 vec3 fshadow = evaluateBsdf(pW, basis, winputL, shadowL, material, bsdfPdf_shadow);
                 float misWeightLight = powerHeuristic(lightPdf, bsdfPdf_shadow);
                 vec3 Ld = misWeightLight * fshadow * abs(dot(shadowW, basis.nW)) * Li / max(PDF_EPSILON, lightPdf);
-                float maxLd = maxComponent(Ld);
-                if (maxLd > firefly_clamp) Ld *= firefly_clamp / maxLd;
-                L += throughput * Ld;
+                vec3 Lcontrib = throughput * Ld;
+                float maxLcontrib = maxComponent(Lcontrib);
+                if (maxLcontrib > firefly_clamp) Lcontrib *= firefly_clamp / maxLcontrib;
+                L += Lcontrib;
             }
         } // direct lighting
 
         // Update path continuation throughput
         throughput *= surface_throughput;
+        float maxTP = maxComponent(throughput);
+        if (maxTP > firefly_clamp) throughput *= firefly_clamp / maxTP;
 
         // Russian roulette termination (unbiased)
         if (maxComponent(throughput) < 1.0 && vertex > 1)

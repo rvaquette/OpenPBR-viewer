@@ -32,11 +32,7 @@ void specular_haze_ndf_roughnesses(out float alpha_x, out float alpha_y)
 // Ratio of dielectric IOR to external IOR (approximate as a stochastic blend if coat partially present)
 float eta_s()
 {
-#ifdef TRANSMISSION_ENABLED
-    float n_s = specular_ior_dispersive();
-#else
-    float n_s = specular_ior;
-#endif
+    float n_s = specular_ior; // legacy mode: no wavelength-dependent IOR
     // Flip spec/coat IOR ratio if needed to keep it > 1, to correct for lack of refraction in coat]
     float eta_sc = n_s/coat_ior;
     if (eta_sc < 1.0)

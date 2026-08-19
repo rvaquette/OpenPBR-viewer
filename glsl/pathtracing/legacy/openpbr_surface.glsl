@@ -210,12 +210,13 @@ vec3 openpbr_bsdf_evaluate_lobes(in vec3 pW, in Basis basis, in vec3 winputL, in
     if (skip_lobe_id != ID_DIFF_BRDF && lobe_probs.m[ID_DIFF_BRDF] > 0.0) f += lobe_weights.m[ID_DIFF_BRDF] *  diffuse_brdf_evaluate(pW, basis, winputL, woutputL, pdfs.m[ID_DIFF_BRDF]);
     if (skip_lobe_id != ID_DIFF_BTDF && lobe_probs.m[ID_DIFF_BTDF] > 0.0) f += lobe_weights.m[ID_DIFF_BTDF] *  diffuse_btdf_evaluate(pW, basis, winputL, woutputL, pdfs.m[ID_DIFF_BTDF]);
 
-    // Both transmission and bulk SSS use specular_btdf_evaluate
+    // Both transmission and bulk SSS use specular_btdf_evaluate; keep both PDFs in sync
     bool eval_spec_btdf = (skip_lobe_id != ID_SPEC_BTDF && lobe_probs.m[ID_SPEC_BTDF] > 0.0);
     bool eval_sssc_btdf = (skip_lobe_id != ID_SSSC_BTDF && lobe_probs.m[ID_SSSC_BTDF] > 0.0);
     if (eval_spec_btdf || eval_sssc_btdf)
     {
         vec3 f_spec_btdf = specular_btdf_evaluate(pW, basis, winputL, woutputL, pdfs.m[ID_SPEC_BTDF]);
+        pdfs.m[ID_SSSC_BTDF] = pdfs.m[ID_SPEC_BTDF]; // shared BTDF — prevents uninitialized PDF in total_pdf
         if (eval_spec_btdf) f += lobe_weights.m[ID_SPEC_BTDF] * f_spec_btdf;
         if (eval_sssc_btdf) f += lobe_weights.m[ID_SSSC_BTDF] * f_spec_btdf;
     }
