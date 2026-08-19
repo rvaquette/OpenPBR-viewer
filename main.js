@@ -115,7 +115,7 @@ var params =
     smooth_normals:                     true,
     bounces:                            6,
     max_samples:                        512,
-    max_volume_steps:                   8,
+    max_volume_steps:                   64,
     firefly_clamp:                      10.0,
     wireframe:                          false,
     neutral_color:                      [0.99, 0.99, 0.99],
@@ -675,7 +675,7 @@ function create_materials()
             COAT_ENABLED:         true,
             TRANSMISSION_ENABLED: true,
             VOLUME_ENABLED:       true,
-            THIN_FILM_ENABLED:    false,
+            THIN_FILM_ENABLED:    true,
             HAZE_ENABLED:         false,
             RETRO_ENABLED:        false,
             SUBSURFACE_ENABLED:   false,
@@ -889,6 +889,7 @@ function init()
 
     // stats setup
     stats = new Stats();
+    stats.dom.id = 'stats-panel';
     document.body.appendChild( stats.dom );
 
     // Samples count text

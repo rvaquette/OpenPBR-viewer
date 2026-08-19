@@ -102,6 +102,10 @@ function parseMtlx(filePath) {
             result[paramName] = value.trim();
         }
     }
+    // emission_weight defaults to 0 in OpenPBR, but a material that explicitly sets
+    // emission_luminance/color clearly intends to emit — default to 1 when absent.
+    if (result.emission_luminance !== undefined && result.emission_weight === undefined)
+        result.emission_weight = '1';
     return result;
 }
 
@@ -288,7 +292,7 @@ await page.goto(url, { waitUntil: 'domcontentloaded' });
 // Masquer l'UI (GUI, stats, overlays) pour un screenshot propre
 if (headless) {
     await page.addStyleTag({ content: `
-        #info, #samples, #output, #shader-error, .lil-gui { display: none !important; }
+        #info, #samples, #output, #shader-error, #stats-panel, .lil-gui { display: none !important; }
         body > div[style*="position:fixed"] { display: none !important; }
     `});
 }

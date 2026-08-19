@@ -364,7 +364,7 @@ float LiPDF(in vec3 shadowW, in Basis basis)
 
 vec3 evaluateEdf(in vec3 pW, in Basis basis, in vec3 winputL)
 {
-    return emission_color * emission_luminance;
+    return emission_luminance * emission_color;
 }
 
 
@@ -450,7 +450,9 @@ bool trace_volumetric(in vec3 pW, in vec3 dW, inout uint rndSeed,
         dWalk = samplePhaseFunction(dWalk, volume.anisotropy, rndSeed);
         dWalk = normalize(dWalk);
     }
-    volume_throughput = vec3(0.0); // path terminated in the medium
+    // max_volume_steps exhausted without surface exit: keep current throughput so high-albedo
+    // SSS materials (pearl, ketchup) contribute sky radiance in last scatter direction.
+    dW_hit = dWalk;
     return false;
 }
 #endif // VOLUME_ENABLED
@@ -500,9 +502,11 @@ void main()
     bool in_dielectric = false;
 
 #ifdef THIN_FILM_ENABLED
-    // Thin-film requires spectral rendering: sample hero wavelength and apply CIE weight
-    wavelength_nm = 360.0 + (700.0 - 360.0)*rand(rndSeed);
-    throughput *= xyzToRgb(xyzFit_1931(wavelength_nm)) * SPECTRAL_NORM;
+    // Thin-film requires spectral rendering: only activate when the material actually uses it
+    if (thin_film_weight > 0.0) {
+        wavelength_nm = 360.0 + (700.0 - 360.0)*rand(rndSeed);
+        throughput *= xyzToRgb(xyzFit_1931(wavelength_nm)) * SPECTRAL_NORM;
+    }
 #endif
 
     for (int vertex=0; vertex <= bounces; vertex++)
@@ -563,7 +567,8 @@ void main()
         {
             // Ray missed all geometry; add contribution from distant lights
             float misWeightLight = 1.0;
-            if (vertex > 0)
+            // Skip MIS for volumetric paths: dW is a random scatter direction decoupled from the entry BSDF
+            if (vertex > 0 && !inside_scattering_volume)
             {
                 float lightPdf = LiPDF(dW, basis); // surface basis of previous hit
                 misWeightLight = powerHeuristic(bsdfPdf_continuation, lightPdf);
@@ -649,7 +654,12 @@ void main()
 
         // Add emission from the surface point, if present
         if (material == MATERIAL_OPENPBR)
-            L += throughput * evaluateEdf(pW, basis, winputL);
+        {
+            vec3 Le = throughput * evaluateEdf(pW, basis, winputL);
+            float maxLe = maxComponent(Le);
+            if (maxLe > firefly_clamp) Le *= firefly_clamp / maxLe;
+            L += Le;
+        }
 
         // Prepare for tracing the direct lighting and continuation rays
         pW += NgW * sign(dot(dW, NgW)) * RAY_OFFSET; // perturb vertex into geometric half-space of scattered ray

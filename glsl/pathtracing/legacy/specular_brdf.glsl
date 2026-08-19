@@ -57,8 +57,13 @@ vec3 specular_brdf_evaluate_impl(in vec3 pW, in Basis basis, in vec3 winputL, in
     //  eta_ti_refl = (IOR in hemi. opposite to reflection) / (IOR in hemi. of reflection)
     float eta_ie = eta_s(); // n_interior / n_exterior
     float eta_ti_refl = external_reflection ? eta_ie : 1.0/eta_ie;
-    if (abs(eta_ti_refl - 1.0) < IOR_EPSILON) // degenerate case of index-matched interface, BRDF goes to zero
-        return vec3(0.0);
+    // Allow IOR=1 when thin-film provides its own Fresnel (e.g. soap bubble)
+    bool degenerate = abs(eta_ti_refl - 1.0) < IOR_EPSILON;
+#ifdef THIN_FILM_ENABLED
+    if (degenerate && thin_film_weight <= 0.0) return vec3(0.0);
+#else
+    if (degenerate) return vec3(0.0);
+#endif
 
    // Compute the NDF roughnesses
     float alpha_x, alpha_y;
@@ -131,8 +136,12 @@ vec3 specular_brdf_sample_impl(in vec3 pW, in Basis basis, in vec3 winputL, inou
     //  eta_ti_refl = (IOR in hemi. opposite to reflection) / (IOR in hemi. of reflection)
     float eta_ie = eta_s(); // n_interior / n_exterior
     float eta_ti_refl = external_reflection ? eta_ie : 1.0/eta_ie;
-    if (abs(eta_ti_refl - 1.0) < IOR_EPSILON) // degenerate case of index-matched interface, BRDF goes to zero
-        return vec3(0.0);
+    bool degenerate = abs(eta_ti_refl - 1.0) < IOR_EPSILON;
+#ifdef THIN_FILM_ENABLED
+    if (degenerate && thin_film_weight <= 0.0) return vec3(0.0);
+#else
+    if (degenerate) return vec3(0.0);
+#endif
 
     // Compute the NDF roughnesses
     float alpha_x, alpha_y;
