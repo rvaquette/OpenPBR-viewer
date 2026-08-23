@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openpbr-viewer/specs/002/contracts/substitution-report.schema.json",
+  "title": "SubstitutionReportEntry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "materialId",
+    "substitutionStatus",
+    "renderStatus",
+    "generatedFunctionsUsed",
+    "visualDifferenceType",
+    "renderTimeMs",
+    "wasmGenerationVersion",
+    "criticalDifference"
+  ],
+  "properties": {
+    "materialId": { "type": "string", "minLength": 1 },
+    "substitutionStatus": { "type": "string", "enum": ["success", "failure"] },
+    "renderStatus": { "type": "string", "enum": ["success", "failure"] },
+    "generatedFunctionsUsed": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "failureCause": { "type": "string" },
+    "visualDifferenceType": {
+      "type": "string",
+      "enum": ["none", "energy", "hue", "detail", "mixed"]
+    },
+    "renderTimeMs": { "type": "number", "minimum": 0 },
+    "wasmGenerationVersion": { "type": "string", "minLength": 1 },
+    "criticalDifference": { "type": "boolean" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "anyOf": [
+          { "properties": { "substitutionStatus": { "const": "failure" } }, "required": ["substitutionStatus"] },
+          { "properties": { "renderStatus": { "const": "failure" } }, "required": ["renderStatus"] }
+        ]
+      },
+      "then": {
+        "required": ["failureCause"]
+      }
+    }
+  ]
+}
