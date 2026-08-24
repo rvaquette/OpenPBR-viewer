@@ -1,117 +1,113 @@
-# Implementation Plan: WASM BXDF Replacement
+# Implementation Plan: [FEATURE]
 
-**Branch**: `002-le-code-wasm` | **Date**: 2026-08-23 | **Spec**: [spec.md](./spec.md)
+**Branch**: `[###-feature-name]` | **Date**: [DATE] | **Spec**: [link]
 
-**Input**: Feature specification from /specs/002-wasm-bxdf-replacement/spec.md
+**Input**: Feature specification from `/specs/[###-feature-name]/spec.md`
+
+**Note**: This template is filled in by the `/speckit.plan` command. See `.specify/templates/plan-template.md` for the execution workflow.
 
 ## Summary
 
-Replace legacy hand-written BXDF usage in the pathtracer main flow with MaterialX WASM generated shading functions, enforce strict no-fallback behavior on missing/incompatible generated functions, and validate substitution outcomes through structured per-material reporting and manual legacy comparison workflow. The scope explicitly includes C++ updates in PathTracerGlslShaderGenerator so generated GLSL is conformant with legacy pathtracing expectations.
+[Extract from feature spec: primary requirement + technical approach from research]
 
 ## Technical Context
 
-**Language/Version**: JavaScript (ES modules, Node.js runtime), GLSL (WebGL shaders), C++ (MaterialX generator side)
+<!--
+  ACTION REQUIRED: Replace the content in this section with the technical details
+  for the project. The structure here is presented in advisory capacity to guide
+  the iteration process.
+-->
 
-**Primary Dependencies**: three, three-mesh-bvh, vite, playwright-core, sharp, MaterialX WASM integration, MaterialXGenGlsl PathTracerGlslShaderGenerator
+**Language/Version**: [e.g., Python 3.11, Swift 5.9, Rust 1.75 or NEEDS CLARIFICATION]
 
-**Storage**: File-based assets, generated GLSL snippets, and JSON report artifacts
+**Primary Dependencies**: [e.g., FastAPI, UIKit, LLVM or NEEDS CLARIFICATION]
 
-**Testing**: Headless render validation via launch_render.mjs, generator-output ABI conformance checks, substitution report schema validation, manual legacy comparison runs
+**Storage**: [if applicable, e.g., PostgreSQL, CoreData, files or N/A]
 
-**Target Platform**: Browser WebGL viewer + Node.js tooling + C++/WASM generator toolchain
+**Testing**: [e.g., pytest, XCTest, cargo test or NEEDS CLARIFICATION]
 
-**Project Type**: Single-page WebGL application with cross-repo shader-generation integration
+**Target Platform**: [e.g., Linux server, iOS 15+, WASM or NEEDS CLARIFICATION]
 
-**Performance Goals**: Preserve interactive viewer behavior and keep integration readiness under 15 minutes for 90% of validation runs
+**Project Type**: [e.g., library/cli/web-service/mobile-app/compiler/desktop-app or NEEDS CLARIFICATION]
 
-**Constraints**: Strict per-material failure on missing/incompatible generated functions, no production fallback to legacy BXDF, legacy comparison manual-only, generated GLSL ABI must match legacy integration contract
+**Performance Goals**: [domain-specific, e.g., 1000 req/s, 10k lines/sec, 60 fps or NEEDS CLARIFICATION]
 
-**Scale/Scope**: Substitution on prioritized material corpus plus C++ generator conformance updates in MaterialX-rva for PathTracerGlslShaderGenerator outputs
+**Constraints**: [domain-specific, e.g., <200ms p95, <100MB memory, offline-capable or NEEDS CLARIFICATION]
+
+**Scale/Scope**: [domain-specific, e.g., 10k users, 1M LOC, 50 screens or NEEDS CLARIFICATION]
 
 ## Constitution Check
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-- Status: PASS
-- Observation: Constitution is now operational and defines generated-shading authority, explicit contracts, cross-repo discipline, and release gates.
-- Decision: Proceed under constitutional constraints and enforce contract/diagnostic requirements during implementation.
-
-Post-Phase 1 Re-check:
-- Research/design artifacts include strict failure policy, manual comparison boundary, report schema completeness, and C++ ABI conformance coverage.
-- No constitutional blockers identified.
+[Gates determined based on constitution file]
 
 ## Project Structure
 
 ### Documentation (this feature)
 
 ```text
-specs/002-wasm-bxdf-replacement/
-├── plan.md
-├── research.md
-├── data-model.md
-├── quickstart.md
-├── contracts/
-│   ├── generated-shading-contract.md
-│   ├── generator-abi-contract.md
-│   └── substitution-report.schema.json
-└── tasks.md
+specs/[###-feature]/
+├── plan.md              # This file (/speckit.plan command output)
+├── research.md          # Phase 0 output (/speckit.plan command)
+├── data-model.md        # Phase 1 output (/speckit.plan command)
+├── quickstart.md        # Phase 1 output (/speckit.plan command)
+├── contracts/           # Phase 1 output (/speckit.plan command)
+└── tasks.md             # Phase 2 output (/speckit.tasks command - NOT created by /speckit.plan)
 ```
 
 ### Source Code (repository root)
+<!--
+  ACTION REQUIRED: Replace the placeholder tree below with the concrete layout
+  for this feature. Delete unused options and expand the chosen structure with
+  real paths (e.g., apps/admin, packages/something). The delivered plan must
+  not include Option labels.
+-->
 
 ```text
-main.js
-launch_render.mjs
+# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
+src/
+├── models/
+├── services/
+├── cli/
+└── lib/
 
-glsl/
-├── pathtracing/
-│   ├── main.glsl
-│   ├── mtlx_host.glsl
-│   ├── mtlx_adapters.glsl
-│   ├── pathtracer.glsl
-│   └── legacy/
-└── rasterization/
+tests/
+├── contract/
+├── integration/
+└── unit/
 
-public/
-└── mtlx/
+# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
+backend/
+├── src/
+│   ├── models/
+│   ├── services/
+│   └── api/
+└── tests/
+
+frontend/
+├── src/
+│   ├── components/
+│   ├── pages/
+│   └── services/
+└── tests/
+
+# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
+api/
+└── [same as backend above]
+
+ios/ or android/
+└── [platform-specific structure: feature modules, UI flows, platform tests]
 ```
 
-### External Generator Repository (cross-repo dependency)
-
-```text
-../MaterialX-rva/
-├── source/MaterialXGenGlsl/
-│   └── PathTracerGlslShaderGenerator (C++ implementation)
-└── javascript/
-    └── WASM generation scripts
-```
-
-**Structure Decision**: Keep existing viewer layout and integrate generated shading through current pathtracing boundary while adding C++ generator conformance changes in the external MaterialX-rva repository.
-
-## Phase Plan
-
-### Phase 0 - Research and Contract Decisions
-- Lock strict-failure and no-fallback behavior.
-- Define generator-to-legacy ABI mapping (entry points, signatures, helper dependencies).
-- Confirm manual-only comparison policy and release-critical criteria.
-
-### Phase 1 - Design and Contracts
-- Maintain data entities and transitions in data-model.md.
-- Maintain runtime rules in contracts/generated-shading-contract.md.
-- Add ABI conformance rules in contracts/generator-abi-contract.md.
-- Keep substitution report schema in contracts/substitution-report.schema.json.
-- Update quickstart with C++ generator regeneration and verification flow.
-
-### Phase 2 - Implementation Planning Readiness
-- Decompose into executable tasks for:
-  - viewer-side runtime and shader integration changes
-  - C++ PathTracerGlslShaderGenerator conformance updates
-  - WASM regeneration and artifact propagation
-  - strict failure diagnostics and report generation
-  - validation workflow and release gating
+**Structure Decision**: [Document the selected structure and reference the real
+directories captured above]
 
 ## Complexity Tracking
 
+> **Fill ONLY if Constitution Check has violations that must be justified**
+
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |-----------|------------|-------------------------------------|
-| None | N/A | N/A |
+| [e.g., 4th project] | [current need] | [why 3 projects insufficient] |
+| [e.g., Repository pattern] | [specific problem] | [why direct DB access insufficient] |
