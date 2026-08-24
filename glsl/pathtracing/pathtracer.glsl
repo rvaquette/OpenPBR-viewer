@@ -225,6 +225,7 @@ vec3 ground_brdf_sample(in vec3 pW, in Basis basis, in vec3 winputL, inout uint 
 vec3 evaluateBsdf(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL, in int material,
                   inout float pdf_woutputL)
 {
+    // Main flow uses generated MaterialX closures for OpenPBR materials.
     if      (material == MATERIAL_OPENPBR) return openpbr_bsdf_evaluate(pW, basis, winputL, woutputL, pdf_woutputL);
     else if (material == MATERIAL_GROUND)  return ground_brdf_evaluate(pW, basis, winputL, woutputL, pdf_woutputL);
     else                                   return neutral_brdf_evaluate(pW, basis, winputL, woutputL, pdf_woutputL);
@@ -234,6 +235,7 @@ vec3 evaluateBsdf(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL,
 vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed, in int material,
                 out vec3 woutputL, out float pdf_woutputL, out Volume internal_medium)
 {
+    // Main flow uses generated MaterialX closures for OpenPBR materials.
     if      (material == MATERIAL_OPENPBR) return openpbr_bsdf_sample(pW, basis, winputL, rndSeed, woutputL, pdf_woutputL, internal_medium);
     else if (material == MATERIAL_GROUND)  return ground_brdf_sample(pW, basis, winputL, rndSeed, woutputL, pdf_woutputL);
     else                                   return neutral_brdf_sample(pW, basis, winputL, rndSeed, woutputL, pdf_woutputL);
@@ -458,6 +460,13 @@ bool trace_volumetric(in vec3 pW, in vec3 dW, inout uint rndSeed,
 
 void main()
 {
+    if (strictGeneratedContractFailure())
+    {
+        // Magenta output is reserved for explicit substitution-contract failures.
+        gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
+        return;
+    }
+
     vec2 frag = gl_FragCoord.xy;
 
     // Initialize RNG

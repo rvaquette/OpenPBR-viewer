@@ -1,0 +1,8 @@
+{
+  "requiredSymbols": [
+    "pt_InitMaterialSummary",
+    "EvalMtlxClosure",
+    "SampleMtlxClosure"
+  ],
+  "requiredSignatures": {}
+}

@@ -35,7 +35,7 @@
   - comparisonMode must be manual-only.
 
 ## Entity: GeneratorAbiManifest
-- Description: Declares the GLSL ABI produced by the C++ PathTracerShaderGenerator for one generator version.
+- Description: Declares the GLSL ABI produced by the C++ PathTracerGlslShaderGenerator for one generator version.
 - Fields:
   - generatorVersion (string, required)
   - exportedEntryPoints (array<string>, required)

@@ -12,10 +12,10 @@
 
 **Purpose**: Prepare validation tooling and cross-repo ABI check utilities.
 
-- [ ] T001 Add substitution workflow scripts in package.json
-- [ ] T002 Create substitution runner scaffold in tools/run-substitution-validation.mjs
-- [ ] T003 [P] Create substitution report schema validator in tools/validate-substitution-report.mjs
-- [ ] T004 [P] Create generator ABI conformance checker script in tools/check-generator-abi.mjs
+- [X] T001 Add substitution workflow scripts in package.json
+- [X] T002 Create substitution runner scaffold in tools/run-substitution-validation.mjs
+- [X] T003 [P] Create substitution report schema validator in tools/validate-substitution-report.mjs
+- [X] T004 [P] Create generator ABI conformance checker script in tools/check-generator-abi.mjs
 
 ---
 
@@ -25,13 +25,13 @@
 
 **CRITICAL**: No user story implementation starts before this phase is complete.
 
-- [ ] T005 Implement per-material contract loader and runtime binding in main.js
-- [ ] T006 [P] Implement generated-function registry and signature lookup in public/mtlx/generated-function-registry.mjs
-- [ ] T007 Enforce strict no-fallback failure path in glsl/pathtracing/main.glsl
-- [ ] T008 [P] Wire strict-failure diagnostics bridge to runtime state in main.js
-- [ ] T009 Implement substitution report writer core in tools/substitution-report.mjs
-- [ ] T010 Wire report schema validation into substitution runner in tools/run-substitution-validation.mjs
-- [ ] T011 Add ABI manifest conformance check integration in tools/run-substitution-validation.mjs
+- [X] T005 Implement per-material contract loader and runtime binding in main.js
+- [X] T006 [P] Implement generated-function registry and signature lookup in public/mtlx/generated-function-registry.mjs
+- [X] T007 Enforce strict no-fallback failure path in glsl/pathtracing/main.glsl
+- [X] T008 [P] Wire strict-failure diagnostics bridge to runtime state in main.js
+- [X] T009 Implement substitution report writer core in tools/substitution-report.mjs
+- [X] T010 Wire report schema validation into substitution runner in tools/run-substitution-validation.mjs
+- [X] T011 Add ABI manifest conformance check integration in tools/run-substitution-validation.mjs
 
 **Checkpoint**: Foundational contract, strict failure behavior, and report/ABI gates are ready.
 
@@ -45,12 +45,12 @@
 
 ### Implementation for User Story 1
 
-- [ ] T012 [P] [US1] Refactor generated entrypoint mapping per material contract in glsl/pathtracing/mtlx_adapters.glsl
-- [ ] T013 [US1] Replace legacy BXDF main-flow call sites with generated entrypoints in glsl/pathtracing/pathtracer.glsl
-- [ ] T014 [US1] Update shader assembly routing to prioritize generated shading in main.js
-- [ ] T015 [US1] Keep manual legacy comparison disabled by default in production path in main.js
-- [ ] T016 [US1] Add strict-failure substitution flags in launch_render.mjs
-- [ ] T017 [US1] Document substitution runtime behavior in README.md
+- [X] T012 [P] [US1] Refactor generated entrypoint mapping per material contract in glsl/pathtracing/mtlx_adapters.glsl
+- [X] T013 [US1] Replace legacy BXDF main-flow call sites with generated entrypoints in glsl/pathtracing/pathtracer.glsl
+- [X] T014 [US1] Update shader assembly routing to prioritize generated shading in main.js
+- [X] T015 [US1] Keep manual legacy comparison disabled by default in production path in main.js
+- [X] T016 [US1] Add strict-failure substitution flags in launch_render.mjs
+- [X] T017 [US1] Document substitution runtime behavior in README.md
 
 **Checkpoint**: US1 is independently functional and demonstrable.
 
@@ -64,16 +64,16 @@
 
 ### Implementation for User Story 2
 
-- [ ] T018 [P] [US2] Add generator version binding and propagation in main.js
-- [ ] T019 [P] [US2] Implement signature compatibility checks for required symbols in public/mtlx/generated-function-registry.mjs
-- [ ] T020 [US2] Add contract validation stage before shader compile in main.js
-- [ ] T021 [US2] Implement normalized contract failure causes in tools/substitution-report.mjs
-- [ ] T022 [US2] Update C++ generator entrypoint/signature conformance in ../MaterialX-rva/source/MaterialXGenGlsl/PathTracerGlslShaderGenerator.cpp
-- [ ] T023 [US2] Update matching C++ generator declarations in ../MaterialX-rva/source/MaterialXGenGlsl/PathTracerGlslShaderGenerator.h
-- [ ] T024 [US2] Update WASM generation flow after C++ changes in ../MaterialX-rva/javascript/build_javascript_win.bat and ../MaterialX-rva/javascript/package.json
-- [ ] T025 [US2] Publish regenerated artifacts for viewer runtime consumption in public/mtlx/
-- [ ] T026 [US2] Add explicit ABI contract checks against generated output in tools/check-generator-abi.mjs
-- [ ] T027 [US2] Update runtime integration contract details in specs/002-wasm-bxdf-replacement/contracts/generated-shading-contract.md
+- [X] T018 [P] [US2] Add generator version binding and propagation in main.js
+- [X] T019 [P] [US2] Implement signature compatibility checks for required symbols in public/mtlx/generated-function-registry.mjs
+- [X] T020 [US2] Add contract validation stage before shader compile in main.js
+- [X] T021 [US2] Implement normalized contract failure causes in tools/substitution-report.mjs
+- [X] T022 [US2] Update C++ generator entrypoint/signature conformance in ../MaterialX-rva/source/MaterialXGenGlsl/PathTracerGlslShaderGenerator.cpp
+- [X] T023 [US2] Update matching C++ generator declarations in ../MaterialX-rva/source/MaterialXGenGlsl/PathTracerGlslShaderGenerator.h
+- [X] T024 [US2] Update WASM generation flow after C++ changes in ../MaterialX-rva/javascript/build_javascript_win.bat and ../MaterialX-rva/javascript/package.json
+- [X] T025 [US2] Publish regenerated artifacts for viewer runtime consumption in public/mtlx/
+- [X] T026 [US2] Add explicit ABI contract checks against generated output in tools/check-generator-abi.mjs
+- [X] T027 [US2] Update runtime integration contract details in specs/002-wasm-bxdf-replacement/contracts/generated-shading-contract.md
 
 **Checkpoint**: US2 is independently functional with C++ generator conformance and ABI checks.
 
@@ -87,13 +87,13 @@
 
 ### Implementation for User Story 3
 
-- [ ] T028 [P] [US3] Implement corpus batch execution and per-material timing capture in tools/run-substitution-validation.mjs
-- [ ] T029 [P] [US3] Emit all required report fields including WASM generation version in tools/substitution-report.mjs
-- [ ] T030 [US3] Add explicit manual-vs-automated boundary contract in specs/002-wasm-bxdf-replacement/contracts/manual-comparison-boundary.md
-- [ ] T031 [US3] Implement ingestion of manually produced comparison categories (energy/hue/detail/mixed) in tools/run-substitution-validation.mjs
-- [ ] T032 [US3] Implement critical-difference release gate decision from manual comparison inputs in tools/run-substitution-validation.mjs
-- [ ] T033 [US3] Add manual comparison workflow conventions in legacy-mtlx/README.md
-- [ ] T034 [US3] Update validation runbook with C++ regeneration + report flow in specs/002-wasm-bxdf-replacement/quickstart.md
+- [X] T028 [P] [US3] Implement corpus batch execution and per-material timing capture in tools/run-substitution-validation.mjs
+- [X] T029 [P] [US3] Emit all required report fields including WASM generation version in tools/substitution-report.mjs
+- [X] T030 [US3] Add explicit manual-vs-automated boundary contract in specs/002-wasm-bxdf-replacement/contracts/manual-comparison-boundary.md
+- [X] T031 [US3] Implement ingestion of manually produced comparison categories (energy/hue/detail/mixed) in tools/run-substitution-validation.mjs
+- [X] T032 [US3] Implement critical-difference release gate decision from manual comparison inputs in tools/run-substitution-validation.mjs
+- [X] T033 [US3] Add manual comparison workflow conventions in legacy-mtlx/README.md
+- [X] T034 [US3] Update validation runbook with C++ regeneration + report flow in specs/002-wasm-bxdf-replacement/quickstart.md
 
 **Checkpoint**: US3 is independently functional with release gating.
 
@@ -103,14 +103,14 @@
 
 **Purpose**: Final cleanup, cross-repo traceability, and rollout hardening.
 
-- [ ] T035 [P] Mark legacy comparison-only intent in glsl/pathtracing/legacy/openpbr_surface.glsl
-- [ ] T036 [P] Mark legacy comparison-only intent in glsl/pathtracing/legacy/pathtracer.glsl
-- [ ] T037 Add substitution report sample artifact in specs/002-wasm-bxdf-replacement/contracts/substitution-report.sample.json
-- [ ] T038 [P] Add strict-failure and ABI troubleshooting guide in README.md
-- [ ] T039 Add explicit SC-003 and SC-005 KPI assertions (95% pass rate, 15-minute integration target) in tools/run-substitution-validation.mjs
-- [ ] T040 Add runtime stability watchdog validation (no crash/no unbounded loop) in tools/run-substitution-validation.mjs
-- [ ] T041 Add ABI conformance quick check commands in specs/002-wasm-bxdf-replacement/quickstart.md
-- [ ] T042 Run end-to-end quickstart validation and record outcomes in specs/002-wasm-bxdf-replacement/quickstart.md
+- [X] T035 [P] Mark legacy comparison-only intent in glsl/pathtracing/legacy/openpbr_surface.glsl
+- [X] T036 [P] Mark legacy comparison-only intent in glsl/pathtracing/legacy/pathtracer.glsl
+- [X] T037 Add substitution report sample artifact in specs/002-wasm-bxdf-replacement/contracts/substitution-report.sample.json
+- [X] T038 [P] Add strict-failure and ABI troubleshooting guide in README.md
+- [X] T039 Add explicit SC-003 and SC-005 KPI assertions (95% pass rate, 15-minute integration target) in tools/run-substitution-validation.mjs
+- [X] T040 Add runtime stability watchdog validation (no crash/no unbounded loop) in tools/run-substitution-validation.mjs
+- [X] T041 Add ABI conformance quick check commands in specs/002-wasm-bxdf-replacement/quickstart.md
+- [X] T042 Run end-to-end quickstart validation and record outcomes in specs/002-wasm-bxdf-replacement/quickstart.md
 
 ---
 

@@ -36,7 +36,7 @@
 - Alternatives considered: Big-bang rewrite of all legacy shaders at once (rejected due to integration risk).
 
 ## Decision 8: C++ Generator Conformance Updates
-- Decision: Update PathTracerShaderGenerator in MaterialX C++ code so generated GLSL conforms to legacy pathtracing expectations (entrypoint names, signatures, helper layout).
+- Decision: Update PathTracerGlslShaderGenerator in MaterialX C++ code so generated GLSL conforms to legacy pathtracing expectations (entrypoint names, signatures, helper layout).
 - Rationale: Viewer-side adapter complexity and fragility are reduced when generator outputs match expected ABI directly.
 - Alternatives considered: Handle all compatibility via viewer-side GLSL adapters only (rejected due to long-term maintenance cost).
 

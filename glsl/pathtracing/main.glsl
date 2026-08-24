@@ -40,6 +40,9 @@ uniform bool smooth_normals;
 uniform int bounces;
 uniform int max_volume_steps;
 uniform float firefly_clamp;
+uniform bool strict_failure_enabled;
+uniform bool generated_contract_valid;
+uniform int generated_contract_failure_code;
 
 // Material params are now folded as globals by the MaterialX WASM generator.
 // Enabled-feature flags are no longer used (MaterialX handles them internally).
@@ -86,6 +89,11 @@ const float FLT_EPSILON           = 1.1920929e-7;
 const int MATERIAL_PROPS   = 0;
 const int MATERIAL_OPENPBR = 1;
 const int MATERIAL_GROUND  = 2;
+
+bool strictGeneratedContractFailure()
+{
+    return strict_failure_enabled && !generated_contract_valid;
+}
 
 //////////////////////////////////////////////////////
 // utils

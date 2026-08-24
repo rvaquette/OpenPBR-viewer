@@ -24,7 +24,10 @@
     "deploy": "gh-pages -d dist",
     "build": "vite build",
     "preview": "vite preview --port 8080",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "substitution:run": "node tools/run-substitution-validation.mjs",
+    "substitution:validate-report": "node tools/validate-substitution-report.mjs --report=artifacts/substitution-report.json --schema=specs/002-wasm-bxdf-replacement/contracts/substitution-report.schema.json",
+    "substitution:check-abi": "node tools/check-generator-abi.mjs"
   },
   "author": "portsmouth",
   "license": "ISC"

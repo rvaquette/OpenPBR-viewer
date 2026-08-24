@@ -1,0 +1,26 @@
+{
+  "ok": true,
+  "checks": {
+    "schemaValidation": true,
+    "passRateGte95Percent": true,
+    "noCriticalDifferences": true,
+    "abiConformance": true,
+    "integrationTimeWithinTarget": true
+  },
+  "summary": {
+    "runId": "substitution-1787521440635",
+    "wasmGenerationVersion": "dev",
+    "startedAt": "2026-08-23T21:44:00.635Z",
+    "completedAt": "2026-08-23T21:44:00.641Z",
+    "totalMaterials": 1,
+    "successCount": 1,
+    "failureCount": 0,
+    "criticalCount": 0,
+    "passRate": 1,
+    "avgRenderTimeMs": 0.2944999999999993,
+    "durationMs": 1.0334999999999752,
+    "durationMinutes": 0.00001722499999999959,
+    "integrationTargetMinutes": 15,
+    "integrationTargetMet": true
+  }
+}

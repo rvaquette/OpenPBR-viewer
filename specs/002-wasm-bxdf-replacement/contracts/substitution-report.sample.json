@@ -1,0 +1,36 @@
+{
+  "runId": "substitution-0000000000000",
+  "startedAt": "2026-08-23T00:00:00.000Z",
+  "completedAt": "2026-08-23T00:02:10.000Z",
+  "summary": {
+    "runId": "substitution-0000000000000",
+    "wasmGenerationVersion": "unknown",
+    "startedAt": "2026-08-23T00:00:00.000Z",
+    "completedAt": "2026-08-23T00:02:10.000Z",
+    "totalMaterials": 1,
+    "successCount": 1,
+    "failureCount": 0,
+    "criticalCount": 0,
+    "passRate": 1,
+    "avgRenderTimeMs": 530,
+    "durationMs": 130000,
+    "durationMinutes": 2.1666666667,
+    "integrationTargetMinutes": 15,
+    "integrationTargetMet": true
+  },
+  "entries": [
+    {
+      "materialId": "default-material",
+      "substitutionStatus": "success",
+      "renderStatus": "success",
+      "generatedFunctionsUsed": [
+        "EvalMtlxClosure",
+        "SampleMtlxClosure"
+      ],
+      "visualDifferenceType": "none",
+      "renderTimeMs": 530,
+      "wasmGenerationVersion": "unknown",
+      "criticalDifference": false
+    }
+  ]
+}

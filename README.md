@@ -22,6 +22,27 @@ Then open http://localhost:5173/OpenPBR-viewer in your browser.
 
 Then open http://localhost:8080/OpenPBR-viewer in your browser.
 
+## WASM substitution workflow
+
+Run the strict substitution validation pipeline:
+
+    npm run substitution:run
+
+Validate a generated report against the substitution schema:
+
+    npm run substitution:validate-report
+
+Run an ABI quick check on generated GLSL output:
+
+    npm run substitution:check-abi -- --glsl=artifacts/generated.glsl --expectations=public/mtlx/generator-abi-expectations.json
+
+## Strict-failure and ABI troubleshooting
+
+- If generated shading contract validation fails, the runtime enforces explicit failure and does not fallback to legacy BXDF.
+- If the rendered output becomes magenta in pathtracer mode, inspect browser logs for substitution failure details.
+- Verify required symbols using the ABI checker and `public/mtlx/generator-abi-expectations.json`.
+- For manual visual comparison, enable legacy mode explicitly with `?legacy_comparison=true`.
+
 <img src="https://github.com/portsmouth/OpenPBR-viewer/blob/main/images/metal2.png" width="49%"> <img src="https://github.com/portsmouth/OpenPBR-viewer/blob/main/images/absorption.png" width="49%">
 
 <img src="https://github.com/portsmouth/OpenPBR-viewer/blob/main/images/dispersion2.png" width="49%"> <img src="https://github.com/portsmouth/OpenPBR-viewer/blob/main/images/bubbles.png" width="49%">

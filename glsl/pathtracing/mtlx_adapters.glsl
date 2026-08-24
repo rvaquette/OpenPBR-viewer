@@ -19,6 +19,51 @@ State mtlx_make_state(in vec3 pW, in Basis basis, in float eta)
     return s;
 }
 
+int openpbr_contract_material_id()
+{
+    // Single-material default contract in current integration.
+    return 0;
+}
+
+vec3 openpbr_eval_generated_closure(
+    in int matID,
+    in State state,
+    in vec3 V,
+    in vec3 N,
+    in vec3 L,
+    inout float pdf,
+    inout int flags)
+{
+    if (matID == 0)
+    {
+        return EvalMtlxClosure(0, state, V, N, L, pdf, flags);
+    }
+    // No fallback to legacy BXDF path.
+    flags = CLOSURE_FLAG_REFLECT;
+    pdf = 1.0;
+    return vec3(0.0);
+}
+
+vec3 openpbr_sample_generated_closure(
+    in int matID,
+    in State state,
+    in vec3 V,
+    in vec3 N,
+    out vec3 L,
+    out float pdf,
+    out int flags)
+{
+    if (matID == 0)
+    {
+        return SampleMtlxClosure(0, state, V, N, L, pdf, flags);
+    }
+    // No fallback to legacy BXDF path.
+    L = N;
+    flags = CLOSURE_FLAG_REFLECT;
+    pdf = 1.0;
+    return vec3(0.0);
+}
+
 void openpbr_prepare(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed)
 {
     // Sync the stateful RNG used by SampleMtlxClosure's rand() calls.
@@ -52,7 +97,8 @@ vec3 openpbr_bsdf_evaluate(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 
     vec3 N = basis.nW;
     vec3 L = localToWorld(exiting ? -woutputL : woutputL, basis);
     int flags;
-    return EvalMtlxClosure(0, state, V, N, L, pdf_woutputL, flags);
+    int matID = openpbr_contract_material_id();
+    return openpbr_eval_generated_closure(matID, state, V, N, L, pdf_woutputL, flags);
 }
 
 vec3 openpbr_bsdf_sample(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
@@ -73,7 +119,8 @@ vec3 openpbr_bsdf_sample(in vec3 pW, in Basis basis, in vec3 winputL, inout uint
     vec3 N = basis.nW;
     vec3 L;
     int flags;
-    vec3 f = SampleMtlxClosure(0, state, V, N, L, pdf_woutputL, flags);
+    int matID = openpbr_contract_material_id();
+    vec3 f = openpbr_sample_generated_closure(matID, state, V, N, L, pdf_woutputL, flags);
 
     // For exit the closure returns L in the flipped frame; un-flip it.
     woutputL = worldToLocal(exiting ? -L : L, basis);

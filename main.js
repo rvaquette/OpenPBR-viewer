@@ -197,6 +197,114 @@ var materialDefines = {
 // Generated GLSL from MaterialX WASM (set before create_materials() is called).
 var mtlxGeneratedGlsl = '';
 
+const LEGACY_COMPARISON_ENABLED_BY_DEFAULT = false;
+const legacyComparisonEnabled = (() => {
+    const search = new URLSearchParams(window.location.search);
+    if (search.has('legacy_comparison')) {
+        const v = search.get('legacy_comparison');
+        return v === 'true' || v === '1';
+    }
+    return LEGACY_COMPARISON_ENABLED_BY_DEFAULT;
+})();
+
+var substitutionRuntimeState = {
+    strictFailureEnabled: true,
+    contractStatus: 'unknown',
+    failureCause: '',
+    contractValidationStep: '',
+    materialContract: null,
+    generatorVersion: 'unknown',
+    registry: null
+};
+
+let _generatedRegistryModulePromise = null;
+
+function getPublicAssetUrl(relPath)
+{
+    const origin = window.location.origin;
+    const base = import.meta.env.BASE_URL;
+    return origin + base + relPath.replace(/^\/+/, '');
+}
+
+async function loadGeneratedRegistryModule()
+{
+    if (_generatedRegistryModulePromise) return _generatedRegistryModulePromise;
+    const url = getPublicAssetUrl('mtlx/generated-function-registry.mjs');
+    _generatedRegistryModulePromise = import(/* @vite-ignore */ url);
+    return _generatedRegistryModulePromise;
+}
+
+function extractGeneratorVersionFromGlsl(glsl)
+{
+    const m = String(glsl || '').match(/generator[_\s-]*version\s*[:=]\s*"([^"]+)"/i);
+    return m ? m[1] : 'unknown';
+}
+
+async function loadMaterialContract(search, materialId)
+{
+    let contract = null;
+    let contractUrl = search.get('contract_url') || '/mtlx/material-contract.json';
+    if (contractUrl.startsWith('/') && !contractUrl.startsWith('//')) {
+        contractUrl = import.meta.env.BASE_URL.replace(/\/$/, '') + contractUrl;
+    }
+    try {
+        const resp = await fetch(contractUrl);
+        if (resp.ok) {
+            const payload = await resp.json();
+            if (payload?.materials && payload.materials[materialId]) {
+                contract = payload.materials[materialId];
+            } else if (Array.isArray(payload?.materials)) {
+                contract = payload.materials.find(m => m.materialId === materialId) || null;
+            } else {
+                contract = payload;
+            }
+        }
+    } catch (e) {
+        console.warn('[substitution] material contract load failed:', e?.message || e);
+    }
+
+    if (!contract) {
+        const mod = await loadGeneratedRegistryModule();
+        contract = mod.deriveDefaultMaterialContract(materialId);
+    }
+
+    return contract;
+}
+
+async function validateGeneratedShadingContract(generatedGlsl, search)
+{
+    const mod = await loadGeneratedRegistryModule();
+    const materialId = search.get('material_id') || 'default-material';
+    const generatorVersion = extractGeneratorVersionFromGlsl(generatedGlsl);
+    const contract = await loadMaterialContract(search, materialId);
+    const registry = mod.buildGeneratedFunctionRegistry(generatedGlsl, { generatorVersion });
+    const compatibility = mod.checkRequiredFunctions(registry, contract);
+
+    substitutionRuntimeState.materialContract = contract;
+    substitutionRuntimeState.generatorVersion = generatorVersion;
+    substitutionRuntimeState.registry = registry.toJSON();
+
+    if (!compatibility.ok) {
+        substitutionRuntimeState.contractStatus = 'invalid';
+        substitutionRuntimeState.contractValidationStep = 'generated-function-registry-check';
+        substitutionRuntimeState.failureCause = compatibility.missingFunctions.length > 0
+            ? `missing_required_function:${compatibility.missingFunctions.join(',')}`
+            : 'signature_mismatch';
+        throw new Error(`[substitution] Contract check failed at ${substitutionRuntimeState.contractValidationStep}: ${substitutionRuntimeState.failureCause}; generator=${generatorVersion}`);
+    }
+
+    substitutionRuntimeState.contractStatus = 'valid';
+    substitutionRuntimeState.contractValidationStep = 'generated-function-registry-check';
+    substitutionRuntimeState.failureCause = '';
+}
+
+function getRendererModes()
+{
+    return legacyComparisonEnabled
+        ? ['Rasterizer', 'Pathtracer', 'Pathtracer legacy']
+        : ['Rasterizer', 'Pathtracer'];
+}
+
 // Minimal default OpenPBR material used when no .mtlx file is supplied.
 const DEFAULT_MTLX = `<?xml version="1.0"?>
 <materialx version="1.39">
@@ -345,6 +453,12 @@ var scene_names = {
 // ---------------------------------------------------------------------------
 (async function applyUrlParams() {
     const search = new URLSearchParams(window.location.search);
+
+    if (search.has('strict_generated_contract')) {
+        const v = search.get('strict_generated_contract');
+        substitutionRuntimeState.strictFailureEnabled = (v === 'true' || v === '1');
+    }
+
     for (const [key, rawVal] of search) {
         if (!(key in params)) continue;
         const current = params[key];
@@ -360,6 +474,10 @@ var scene_names = {
     }
     if (search.has('renderer_mode')) {
         console.log('[URL params] renderer_mode =', params.renderer_mode);
+    }
+    if (!legacyComparisonEnabled && params.renderer_mode === 'Pathtracer legacy') {
+        console.warn('[substitution] Pathtracer legacy mode disabled by default; forcing Pathtracer. Use ?legacy_comparison=true to enable manual comparison mode.');
+        params.renderer_mode = 'Pathtracer';
     }
 
     // Generate GLSL from .mtlx before building the first shader.
@@ -395,8 +513,14 @@ var scene_names = {
 
         console.log('[mtlx] generated', mtlxGeneratedGlsl.split('\n').length, 'lines of GLSL',
             '| volume:', hasVolume, '| dispersion:', hasDispersion, '| thin-film:', hasThinFilm);
+
+        await validateGeneratedShadingContract(mtlxGeneratedGlsl, search);
+        console.log('[substitution] contract=valid generatorVersion=', substitutionRuntimeState.generatorVersion);
     } catch (e) {
-        console.error('[mtlx] GLSL generation failed:', e);
+        substitutionRuntimeState.contractStatus = 'invalid';
+        substitutionRuntimeState.contractValidationStep = substitutionRuntimeState.contractValidationStep || 'glsl-generation';
+        substitutionRuntimeState.failureCause = substitutionRuntimeState.failureCause || 'generated_shading_unavailable';
+        console.error('[mtlx] strict generated shading init failed:', e);
     }
 
     init();
@@ -617,6 +741,9 @@ function create_materials()
                 bounces:                             { value: params.bounces },
                 max_volume_steps:                    { value: params.max_volume_steps },
                 firefly_clamp:                       { value: params.firefly_clamp },
+                strict_failure_enabled:              { value: substitutionRuntimeState.strictFailureEnabled },
+                generated_contract_valid:            { value: substitutionRuntimeState.contractStatus === 'valid' },
+                generated_contract_failure_code:     { value: substitutionRuntimeState.contractStatus === 'valid' ? 0 : 1 },
 
                 //////////////////////////////////////////////////////
                 // lighting
@@ -1255,7 +1382,7 @@ function setup_gui()
 
     ///// Renderer folder /////////////////////////////////////
     const renderer_folder = gui.addFolder('Renderer');
-    renderer_folder.add(params, 'renderer_mode', ['Rasterizer', 'Pathtracer', 'Pathtracer legacy']).onChange(              v => { load_scene(params.scene_name); });
+    renderer_folder.add(params, 'renderer_mode', getRendererModes()).onChange(                           v => { load_scene(params.scene_name); });
     renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => { load_scene(v); });
     renderer_folder.add( params, 'smooth_normals' ).onChange(                                         v => { resetSamples(); });
     renderer_folder.add( params, 'wireframe' ).onChange(                                              v => { resetSamples(); });
@@ -1785,9 +1912,9 @@ document.onkeydown = function (event)
             break;
         }
 
-        case 82: // R key: cycle Rasterizer → Pathtracer → Pathtracer legacy
+        case 82: // R key: cycle available renderer modes
         {
-            const modes = ['Rasterizer', 'Pathtracer', 'Pathtracer legacy'];
+            const modes = getRendererModes();
             params.renderer_mode = modes[(modes.indexOf(params.renderer_mode) + 1) % modes.length];
             PATHTRACING = (params.renderer_mode !== 'Rasterizer');
             load_scene(params.scene_name);

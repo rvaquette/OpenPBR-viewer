@@ -1,10 +1,10 @@
 # Generator ABI Contract
 
 ## Purpose
-Define the ABI compatibility requirements between C++ PathTracerShaderGenerator output and the legacy GLSL pathtracing integration expected by the viewer.
+Define the ABI compatibility requirements between C++ PathTracerGlslShaderGenerator output and the legacy GLSL pathtracing integration expected by the viewer.
 
 ## Scope
-- Producer: MaterialX C++ PathTracerShaderGenerator in MaterialXGenGlsl.
+- Producer: MaterialX C++ PathTracerGlslShaderGenerator in MaterialXGenGlsl.
 - Consumer: Viewer pathtracing integration layer and adapters in this repository.
 - Applies to each generator version used to produce WASM shading artifacts.
 

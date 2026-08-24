@@ -12,6 +12,8 @@
  *
  * Options serveur :
  *   --headless              Navigateur invisible (défaut: true)
+ *   --browser=auto|chrome|edge Navigateur a utiliser (defaut: auto)
+ *   --launch-timeout-ms=N   Timeout de lancement navigateur (defaut: 180000)
  *   --start-server          Démarre npx vite avant le lancement (défaut: true)
  *   --port=5173             Port Vite (défaut: 5173)
  *   --output=out.png        Fichier image de sortie (défaut: render_YYYYMMDD_HHMMSS.png)
@@ -19,6 +21,9 @@
  *   --spp=N                 Samples path-tracing à attendre avant la capture (défaut: 10)
  *   --size=WxH             Résolution du rendu (défaut: 256x256)  ex: --size=1280x720
  *   --mtlx=file.mtlx       Charge les paramètres matériau depuis un fichier MaterialX OpenPBR
+ *   --contract_url=/mtlx/material-contract.json  Contrat de fonctions générées par matériau
+ *   --strict_generated_contract=true|false       Active l'echec strict sans fallback legacy (defaut: true)
+ *   --legacy_comparison=true|false               Active le mode manuel Pathtracer legacy (defaut: false)
  *   --denoise=true|false    Débruitage OIDN après capture (défaut: false)
  *   --oidn=path             Chemin vers oidnDenoise.exe (défaut: oidnDenoise dans PATH)
  *
@@ -134,6 +139,8 @@ for (const arg of cliArgs) {
 const port          = options.port           ?? '5173';
 const useGpu        = (options.gpu           ?? 'false') !== 'false';
 const headless      = (options.headless      ?? 'true') !== 'false';
+const browserChoice = (options.browser       ?? 'auto').toLowerCase();
+const launchTimeoutMs = parseInt(options['launch-timeout-ms'] ?? '180000', 10);
 const startServer   = (options['start-server'] ?? 'true') !== 'false';
 function defaultOutputPath() {
     const d = new Date();
@@ -154,11 +161,14 @@ const mtlxPath      = options.mtlx    ?? null;
 const denoiseEnabled = (options.denoise ?? 'true') !== 'false';
 const oidnPath       = options.oidn    ?? 'D:\\oidn-2.5.0\\bin\\oidnDenoise.exe';
 delete options.port; delete options.gpu; delete options.headless;
+delete options.browser; delete options['launch-timeout-ms'];
 delete options['start-server']; delete options.screenshot; delete options.output;
 delete options['wait-samples']; delete options['spp']; delete options.mode; delete options.size;
 delete options.mtlx; delete options.denoise; delete options.oidn;
 
 if (!options.renderer_mode) options.renderer_mode = mode;
+if (options.strict_generated_contract === undefined) options.strict_generated_contract = 'true';
+if (options.legacy_comparison === undefined) options.legacy_comparison = 'false';
 // --scene is a shorthand alias for the scene_name param
 if (options.scene) { options.scene_name ??= options.scene; delete options.scene; }
 
@@ -229,14 +239,24 @@ const url = query ? `${BASE_URL}?${query}` : BASE_URL;
 // Chemin du navigateur (playwright-core ne l'inclut pas)
 // ---------------------------------------------------------------------------
 const BROWSER_CANDIDATES = [
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    { kind: 'chrome', path: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' },
+    { kind: 'chrome', path: 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe' },
+    { kind: 'edge', path: 'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe' },
+    { kind: 'edge', path: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe' },
 ];
-const executablePath = BROWSER_CANDIDATES.find(p => existsSync(p));
-if (!executablePath) {
+const availableCandidates = BROWSER_CANDIDATES.filter(c => existsSync(c.path));
+if (availableCandidates.length === 0) {
     console.error('Chrome ou Edge introuvable.\nAjoutez le chemin dans BROWSER_CANDIDATES dans launch_render.mjs.');
+    viteProcess?.kill();
+    process.exit(1);
+}
+
+let launchCandidates = availableCandidates;
+if (browserChoice === 'chrome' || browserChoice === 'edge') {
+    launchCandidates = availableCandidates.filter(c => c.kind === browserChoice);
+}
+if (launchCandidates.length === 0) {
+    console.error(`Aucun navigateur disponible pour --browser=${browserChoice}`);
     viteProcess?.kill();
     process.exit(1);
 }
@@ -264,7 +284,28 @@ const isPathtracing = options.renderer_mode === 'Pathtracer' || options.renderer
 console.log(`Output    : ${screenshotPath}${isPathtracing ? ` (${waitSamples} spp)` : ''}`);
 console.log('');
 
-const browser = await chromium.launch({ executablePath, headless, args });
+let browser = null;
+let launchError = null;
+for (const candidate of launchCandidates) {
+    try {
+        console.log(`Lancement navigateur: ${candidate.kind} (${candidate.path})`);
+        browser = await chromium.launch({
+            executablePath: candidate.path,
+            headless,
+            args,
+            timeout: launchTimeoutMs
+        });
+        launchError = null;
+        break;
+    } catch (err) {
+        launchError = err;
+        console.warn(`[launch] Echec ${candidate.kind}: ${err?.message ?? err}`);
+    }
+}
+
+if (!browser) {
+    throw launchError ?? new Error('Echec de lancement navigateur');
+}
 const context = await browser.newContext({ viewport: { width: renderW, height: renderH } });
 const page    = await context.newPage();
 

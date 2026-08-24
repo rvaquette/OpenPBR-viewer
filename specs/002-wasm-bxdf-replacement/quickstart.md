@@ -13,10 +13,16 @@
 2. Load a target material and verify generated shading payload is present before pathtracer compile.
 
 ## 2b. Apply C++ generator conformance updates
-1. In the MaterialX generator repository, update PathTracerShaderGenerator implementation to match legacy GLSL expectations.
+1. In the MaterialX generator repository, update PathTracerGlslShaderGenerator implementation to match legacy GLSL expectations.
 2. Regenerate WASM shading artifacts from the updated C++ generator.
 3. Publish regenerated artifacts to the viewer runtime location used by this repository.
 4. Verify exported entrypoints and signatures against contracts/generator-abi-contract.md.
+
+### ABI quick check commands
+1. Generate or collect the GLSL output under `artifacts/generated.glsl`.
+2. Run the ABI checker:
+   - `npm run substitution:check-abi -- --glsl=artifacts/generated.glsl --expectations=public/mtlx/generator-abi-expectations.json --out=artifacts/abi-manifest.json`
+3. Confirm `conformsToLegacyExpectations=true` in the generated manifest.
 
 ## 3. Execute substitution validation run
 1. Run a pathtracer capture with target material:
@@ -49,3 +55,8 @@ For each material in corpus, collect:
 
 ## 7. Release gate
 Release is blocked if any report entry is marked `criticalDifference=true` within the defined scope.
+
+## Validation outcomes (2026-08-23)
+- Command: `node launch_render.mjs --headless --browser=edge --mode=Pathtracer --spp=2 --size=128x128 --output=artifacts/quickstart-smoke.png --strict_generated_contract=true --legacy_comparison=false --launch-timeout-ms=240000`
+- Result: SUCCESS (shader compile completed, 2 spp reached, screenshot and OIDN denoise completed).
+- Evidence artifact: `artifacts/quickstart-smoke.png`.
