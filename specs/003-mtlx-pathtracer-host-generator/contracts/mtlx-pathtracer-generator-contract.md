@@ -1,7 +1,7 @@
 # MTLX Pathtracer Generator Contract
 
 ## Purpose
-Define the C++ generator contract for emitting pathtracer host dispatch GLSL from selected MaterialX material graphs.
+Define the C++ generator contract for emitting per-material pathtracer host dispatch GLSL from selected MaterialX material graphs.
 
 ## Producer
 `../MaterialX-rva/source/MaterialXGenGlsl/MtlxPathTracerHostShaderGenerator.*`
@@ -12,8 +12,22 @@ Define the C++ generator contract for emitting pathtracer host dispatch GLSL fro
 ## Explicit Non-Dependency
 `PathTracerGlslShaderGenerator` must not be used as the implementation generator for this chantier. Limited copied/adapted helper concepts are allowed only when moved into the new generator and documented.
 
-## Required Generated GLSL
-The generator must emit:
+## Required Material Models
+The first delivery must support:
+- `open_pbr_surface`
+- `standard_surface`
+- `disney_principled`
+- `gltf_pbr`
+- `usd_preview_surface`
+
+## Required Generated Artifact
+For each selected `.mtlx` material, the generator must emit one deterministic dispatch artifact:
+
+```text
+glsl/pathtracing/mtlx/generated/<material-id>/generated_bsdf_dispatch.glsl
+```
+
+Each artifact must define:
 
 ```glsl
 vec3 evaluateBsdf(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL, in int material,
@@ -31,7 +45,7 @@ Generated dispatch must consume MaterialX-generated closure/helper functions for
 - BTDF
 
 ## Forbidden References
-Generated dispatch and MTLX route must not depend on:
+Generated dispatch and the MTLX route must not depend on:
 - `glsl/pathtracing/legacy/*_brdf.glsl`
 - `glsl/pathtracing/legacy/*_btdf.glsl`
 - legacy OpenPBR-only lobe dispatch as the production implementation
@@ -40,7 +54,9 @@ Generated dispatch and MTLX route must not depend on:
 - Unsupported material models fail explicitly.
 - Missing generated closure functions fail explicitly.
 - Signature mismatch fails explicitly.
+- Incomplete evaluate/sample/pdf strategy fails explicitly.
+- No generic approximation is allowed.
 - No fallback to legacy BXDF implementation files is allowed.
 
-## First Required Fixture
-`D:\WebGL2\MaterialX\materials\open_pbr_carpaint.mtlx`
+## Validation Corpus
+The generator must produce artifacts for every fixture listed in `validation-corpus-contract.md`.
