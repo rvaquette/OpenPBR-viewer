@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<materialx version="1.39" colorspace="lin_rec709">
+  <open_pbr_surface name="SR_synthetic" type="surfaceshader">
+    <input name="base_weight" type="float" value="1.0" />
+    <input name="base_color" type="color3" value="0.62, 0.15, 0.09" />
+    <input name="base_metalness" type="float" value="0.0" />
+    <input name="specular_weight" type="float" value="1.0" />
+    <input name="specular_color" type="color3" value="1.0, 1.0, 1.0" />
+    <input name="specular_roughness" type="float" value="0.25" />
+    <input name="specular_ior" type="float" value="1.5" />
+  </open_pbr_surface>
+  <surfacematerial name="Synthetic_OpenPbr" type="material">
+    <input name="surfaceshader" type="surfaceshader" nodename="SR_synthetic" />
+  </surfacematerial>
+</materialx>

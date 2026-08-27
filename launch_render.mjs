@@ -28,7 +28,9 @@
  *   --oidn=path             Chemin vers oidnDenoise.exe (défaut: oidnDenoise dans PATH)
  *
  * Options rendu :
- *   --mode=Rasterizer|Pathtracer
+ *   --mode=Rasterizer|Pathtracer|Pathtracer MTLX|Pathtracer legacy
+ *                                (alias: --mode=mtlx pour la route MTLX générée,
+ *                                        --mode=legacy pour le pathtracer manuel)
  *   --gpu=true|false              false = rendu logiciel SwiftShader (défaut: true)
  *   --scene=standard-shader-ball|glavenus|terrain|bearded-man
  *   --smooth_normals=true|false   Lissage des normales (défaut: true)
@@ -63,6 +65,7 @@
 import { chromium }    from 'playwright-core';
 import { spawn, execSync } from 'child_process';
 import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { basename } from 'path';
 import { setTimeout as sleep } from 'timers/promises';
 import sharp from 'sharp';
 
@@ -154,7 +157,18 @@ function defaultOutputPath() {
 }
 const screenshotPath = options.output ?? options.screenshot ?? defaultOutputPath();
 const waitSamples   = parseInt(options['spp'] ?? options['wait-samples'] ?? '16', 10);
-const mode          = options.mode           ?? 'Pathtracer';
+// Normalize friendly mode aliases to canonical renderer_mode strings.
+const MODE_ALIASES = {
+    'mtlx':              'Pathtracer MTLX',
+    'pathtracer-mtlx':   'Pathtracer MTLX',
+    'pathtracer_mtlx':   'Pathtracer MTLX',
+    'pathtracer mtlx':   'Pathtracer MTLX',
+    'legacy':            'Pathtracer legacy',
+    'pathtracer-legacy': 'Pathtracer legacy',
+    'pathtracer_legacy': 'Pathtracer legacy'
+};
+const rawMode       = options.mode ?? 'Pathtracer';
+const mode          = MODE_ALIASES[rawMode.toLowerCase()] ?? rawMode;
 const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').map(Number);
 
 const mtlxPath      = options.mtlx    ?? null;
@@ -184,6 +198,13 @@ if (mtlxPath) {
     writeFileSync(destPath, readFileSync(mtlxPath));
     mtlxPublicUrl = `/${tmpName}`;
     console.log(`MTLX      : ${mtlxPath} → servi via ${mtlxPublicUrl}`);
+
+    // Preserve the source material-id (filename stem) so the MTLX route/contract
+    // resolves the matching generated dispatch artifact, even though the file is
+    // served as tmp_material.mtlx.
+    if (!options.material_id) {
+        options.material_id = basename(mtlxPath).replace(/\.mtlx$/i, '');
+    }
 
     // En mode legacy, injecter aussi les params comme query string pour alimenter les uniforms.
     if (options.renderer_mode === 'Pathtracer legacy') {
@@ -280,7 +301,7 @@ console.log(`Mode      : ${headless ? 'headless' : 'fenêtré'}`);
 console.log(`Renderer  : ${options.renderer_mode}`);
 console.log(`URL       : ${url}`);
 console.log(`Size      : ${renderW}x${renderH}`);
-const isPathtracing = options.renderer_mode === 'Pathtracer' || options.renderer_mode === 'Pathtracer legacy';
+const isPathtracing = options.renderer_mode === 'Pathtracer' || options.renderer_mode === 'Pathtracer MTLX' || options.renderer_mode === 'Pathtracer legacy';
 console.log(`Output    : ${screenshotPath}${isPathtracing ? ` (${waitSamples} spp)` : ''}`);
 console.log('');
 

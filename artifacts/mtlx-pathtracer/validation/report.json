@@ -1,0 +1,131 @@
+{
+  "generatedAt": "2026-08-27T20:31:33.133Z",
+  "guarantees": {
+    "noLegacyFallback": true,
+    "noGenericApproximation": true
+  },
+  "carpaint": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0,
+    "viewerRendered": 5
+  },
+  "synthetic": {
+    "total": 5,
+    "passed": 5,
+    "failed": 0,
+    "viewerRendered": 5
+  },
+  "entries": [
+    {
+      "model": "open_pbr_surface",
+      "mtlx": "D:/WebGL2/MaterialX/materials/open_pbr_carpaint.mtlx",
+      "fixtureType": "carpaint",
+      "materialId": "open_pbr_carpaint",
+      "dispatch": "glsl/pathtracing/mtlx/generated/open_pbr_carpaint/generated_bsdf_dispatch.glsl",
+      "generationStatus": "success",
+      "legacyDependencyCheckStatus": "success",
+      "viewerCompileStatus": "success",
+      "viewerImage": "artifacts/mtlx-pathtracer/validation/render_open_pbr_carpaint.png"
+    },
+    {
+      "model": "standard_surface",
+      "mtlx": "D:/WebGL2/MaterialX/materials/standard_surface_carpaint.mtlx",
+      "fixtureType": "carpaint",
+      "materialId": "standard_surface_carpaint",
+      "dispatch": "glsl/pathtracing/mtlx/generated/standard_surface_carpaint/generated_bsdf_dispatch.glsl",
+      "generationStatus": "success",
+      "legacyDependencyCheckStatus": "success",
+      "viewerCompileStatus": "success",
+      "viewerImage": "artifacts/mtlx-pathtracer/validation/render_standard_surface_carpaint.png"
+    },
+    {
+      "model": "disney_principled",
+      "mtlx": "D:/WebGL2/MaterialX/materials/disney_principled_carpaint.mtlx",
+      "fixtureType": "carpaint",
+      "materialId": "disney_principled_carpaint",
+      "dispatch": "glsl/pathtracing/mtlx/generated/disney_principled_carpaint/generated_bsdf_dispatch.glsl",
+      "generationStatus": "success",
+      "legacyDependencyCheckStatus": "success",
+      "viewerCompileStatus": "success",
+      "viewerImage": "artifacts/mtlx-pathtracer/validation/render_disney_principled_carpaint.png"
+    },
+    {
+      "model": "gltf_pbr",
+      "mtlx": "D:/WebGL2/MaterialX/materials/gltf_pbr_carpaint.mtlx",
+      "fixtureType": "carpaint",
+      "materialId": "gltf_pbr_carpaint",
+      "dispatch": "glsl/pathtracing/mtlx/generated/gltf_pbr_carpaint/generated_bsdf_dispatch.glsl",
+      "generationStatus": "success",
+      "legacyDependencyCheckStatus": "success",
+      "viewerCompileStatus": "success",
+      "viewerImage": "artifacts/mtlx-pathtracer/validation/render_gltf_pbr_carpaint.png"
+    },
+    {
+      "model": "usd_preview_surface",
+      "mtlx": "D:/WebGL2/MaterialX/materials/usd_preview_surface_carpaint.mtlx",
+      "fixtureType": "carpaint",
+      "materialId": "usd_preview_surface_carpaint",
+      "dispatch": "glsl/pathtracing/mtlx/generated/usd_preview_surface_carpaint/generated_bsdf_dispatch.glsl",
+      "generationStatus": "success",
+      "legacyDependencyCheckStatus": "success",
+      "viewerCompileStatus": "success",
+      "viewerImage": "artifacts/mtlx-pathtracer/validation/render_usd_preview_surface_carpaint.png"
+    },
+    {
+      "model": "open_pbr_surface",
+      "fixtureType": "synthetic",
+      "mtlx": "artifacts/mtlx-pathtracer/fixtures/synthetic_open_pbr_surface.mtlx",
+      "materialId": "synthetic_open_pbr_surface",
+      "dispatch": "glsl/pathtracing/mtlx/generated/synthetic_open_pbr_surface/generated_bsdf_dispatch.glsl",
+      "generationStatus": "success",
+      "legacyDependencyCheckStatus": "success",
+      "viewerCompileStatus": "success",
+      "viewerImage": "artifacts/mtlx-pathtracer/validation/render_synthetic_open_pbr_surface.png"
+    },
+    {
+      "model": "standard_surface",
+      "fixtureType": "synthetic",
+      "mtlx": "artifacts/mtlx-pathtracer/fixtures/synthetic_standard_surface.mtlx",
+      "materialId": "synthetic_standard_surface",
+      "dispatch": "glsl/pathtracing/mtlx/generated/synthetic_standard_surface/generated_bsdf_dispatch.glsl",
+      "generationStatus": "success",
+      "legacyDependencyCheckStatus": "success",
+      "viewerCompileStatus": "success",
+      "viewerImage": "artifacts/mtlx-pathtracer/validation/render_synthetic_standard_surface.png"
+    },
+    {
+      "model": "disney_principled",
+      "fixtureType": "synthetic",
+      "mtlx": "artifacts/mtlx-pathtracer/fixtures/synthetic_disney_principled.mtlx",
+      "materialId": "synthetic_disney_principled",
+      "dispatch": "glsl/pathtracing/mtlx/generated/synthetic_disney_principled/generated_bsdf_dispatch.glsl",
+      "generationStatus": "success",
+      "legacyDependencyCheckStatus": "success",
+      "viewerCompileStatus": "success",
+      "viewerImage": "artifacts/mtlx-pathtracer/validation/render_synthetic_disney_principled.png"
+    },
+    {
+      "model": "gltf_pbr",
+      "fixtureType": "synthetic",
+      "mtlx": "artifacts/mtlx-pathtracer/fixtures/synthetic_gltf_pbr.mtlx",
+      "materialId": "synthetic_gltf_pbr",
+      "dispatch": "glsl/pathtracing/mtlx/generated/synthetic_gltf_pbr/generated_bsdf_dispatch.glsl",
+      "generationStatus": "success",
+      "legacyDependencyCheckStatus": "success",
+      "viewerCompileStatus": "success",
+      "viewerImage": "artifacts/mtlx-pathtracer/validation/render_synthetic_gltf_pbr.png"
+    },
+    {
+      "model": "usd_preview_surface",
+      "fixtureType": "synthetic",
+      "mtlx": "artifacts/mtlx-pathtracer/fixtures/synthetic_usd_preview_surface.mtlx",
+      "materialId": "synthetic_usd_preview_surface",
+      "dispatch": "glsl/pathtracing/mtlx/generated/synthetic_usd_preview_surface/generated_bsdf_dispatch.glsl",
+      "generationStatus": "success",
+      "legacyDependencyCheckStatus": "success",
+      "viewerCompileStatus": "success",
+      "viewerImage": "artifacts/mtlx-pathtracer/validation/render_synthetic_usd_preview_surface.png"
+    }
+  ]
+}

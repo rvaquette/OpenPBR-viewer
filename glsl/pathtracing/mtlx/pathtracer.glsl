@@ -379,7 +379,9 @@ float LiPDF(in vec3 shadowW, in Basis basis)
 
 vec3 evaluateEdf(in vec3 pW, in Basis basis, in vec3 winputL)
 {
-    return emission_luminance * emission_color;
+    // Emission is provided by the material-layer hook so the route stays
+    // model-agnostic (the generated dispatch folds per-model emission params).
+    return mtlx_openpbr_emission();
 }
 
 

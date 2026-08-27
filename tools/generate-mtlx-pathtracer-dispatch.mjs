@@ -9,7 +9,7 @@
 // If --out is omitted, the deterministic path is used:
 //   glsl/pathtracing/mtlx/generated/<material-id>/generated_bsdf_dispatch.glsl
 
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -24,10 +24,10 @@ function argValue(name) {
   return arg ? arg.slice(name.length + 3) : "";
 }
 
-// Placeholder host-generator invocation.
-// The real dispatch body is emitted by the C++ MtlxPathTracerHostShaderGenerator
-// (compiled to WASM). Until that generator is wired in (US2), this throws so the
-// workflow fails explicitly instead of emitting a legacy/approximation fallback.
+// Host-generator invocation. The dispatch body is emitted by the C++
+// MtlxPathTracerHostShaderGenerator (compiled to WASM). The generator fails
+// explicitly for unsupported/incomplete materials, so no legacy/approximation
+// fallback is ever produced here.
 async function generateDispatchGlsl(mtlxPath) {
   const wasmJs = resolve(process.cwd(), "public/mtlx/JsMaterialXGenShader.js");
   if (!existsSync(wasmJs)) {
@@ -41,8 +41,22 @@ async function generateDispatchGlsl(mtlxPath) {
       "Build and expose the new C++ generator (US2) before generating dispatch."
     );
   }
-  // Wiring of the concrete generation call is completed in US2 tasks.
-  throw new Error("[mtlx-dispatch] Generator invocation not yet implemented (US2).");
+  const gen = mx.MtlxPathTracerHostShaderGenerator.create();
+  const ctx = new mx.GenContext(gen);
+  const stdlib = mx.loadStandardLibraries(ctx);
+  const doc = mx.createDocument();
+  doc.importLibrary(stdlib);
+  const mtlxText = readFileSync(mtlxPath, "utf8");
+  await mx.readFromXmlString(doc, mtlxText, "");
+  const elem = mx.findRenderableElement(doc);
+  if (!elem) {
+    throw new Error(`[mtlx-dispatch] no renderable element in ${mtlxPath}`);
+  }
+  const glsl = gen.generate(elem.getNamePath(), elem, ctx).getSourceCode("pixel");
+  if (!glsl || !glsl.trim()) {
+    throw new Error(`[mtlx-dispatch] empty pixel source generated for ${mtlxPath}`);
+  }
+  return glsl;
 }
 
 async function main() {

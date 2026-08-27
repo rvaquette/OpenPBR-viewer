@@ -13,12 +13,17 @@ Define the C++ generator contract for emitting per-material pathtracer host disp
 `PathTracerGlslShaderGenerator` must not be used as the implementation generator for this chantier. Limited copied/adapted helper concepts are allowed only when moved into the new generator and documented.
 
 ## Required Material Models
-The first delivery must support:
+The first delivery must support the following authoritative MaterialX node
+categories (as read from the `.mtlx` surface node):
 - `open_pbr_surface`
 - `standard_surface`
 - `disney_principled`
 - `gltf_pbr`
-- `usd_preview_surface`
+- `UsdPreviewSurface`
+
+Note: the spec identifier `usd_preview_surface` maps to the authoritative
+MaterialX node category `UsdPreviewSurface` (CamelCase). The generator resolves
+the model from the node category, so the CamelCase form is canonical in code.
 
 ## Required Generated Artifact
 For each selected `.mtlx` material, the generator must emit one deterministic dispatch artifact:

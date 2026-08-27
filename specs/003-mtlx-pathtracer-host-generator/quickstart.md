@@ -52,28 +52,71 @@ Expected: the new class is separate from `PathTracerGlslShaderGenerator` and fol
 
 ## 5. Generate per-material dispatch artifacts
 
-Example for one fixture:
+The generator wrapper drives `MtlxPathTracerHostShaderGenerator` (compiled to WASM in
+`public/mtlx/`) and writes to the deterministic path
+`glsl/pathtracing/mtlx/generated/<material-id>/generated_bsdf_dispatch.glsl`.
+
+Carpaint fixtures (MaterialX-rva examples) + synthetic fixtures:
 
 ```powershell
-node tools/generate-mtlx-pathtracer-dispatch.mjs --mtlx="D:\WebGL2\MaterialX\materials\open_pbr_carpaint.mtlx" --out=glsl/pathtracing/mtlx/generated/open_pbr_carpaint/generated_bsdf_dispatch.glsl
+$base = "D:\WebGL2\MaterialX\MaterialX-rva\resources\Materials\Examples"
+$carpaint = @(
+	"OpenPbr\open_pbr_carpaint.mtlx",
+	"StandardSurface\standard_surface_carpaint.mtlx",
+	"DisneyPrincipled\disney_principled_carpaint.mtlx",
+	"GltfPbr\gltf_pbr_carpaint.mtlx",
+	"UsdPreviewSurface\usd_preview_surface_carpaint.mtlx"
+)
+foreach ($f in $carpaint) { node tools/generate-mtlx-pathtracer-dispatch.mjs --mtlx="$(Join-Path $base $f)" }
+
+$synthetic = @("open_pbr_surface","standard_surface","disney_principled","gltf_pbr","usd_preview_surface")
+foreach ($m in $synthetic) { node tools/generate-mtlx-pathtracer-dispatch.mjs --mtlx="$PWD\artifacts\mtlx-pathtracer\fixtures\synthetic_$m.mtlx" }
 ```
 
-Repeat for all carpaint and synthetic fixtures.
-
-Expected output contains:
+Each invocation prints `{ "materialId": ..., "out": ..., "ok": true }` and the output contains:
 
 ```glsl
 vec3 evaluateBsdf(...)
 vec3 sampleBsdf(...)
 ```
 
-## 6. Check forbidden dependencies
+## 6. Validate the corpus (text checks + no forbidden dependencies)
 
 ```powershell
-Select-String -Path glsl/pathtracing/mtlx/**/*.glsl -Pattern "legacy/|_brdf|_btdf|openpbr_bsdf_evaluate|openpbr_bsdf_sample|PathTracerGlslShaderGenerator"
+node tools/validate-mtlx-pathtracer-corpus.mjs
 ```
 
-Expected: no implementation matches, except comments explicitly documenting forbidden references.
+Expected: `ok: true`, `carpaint` and `synthetic` each `total 5 / passed 5 / failed 0`.
+The report at `artifacts/mtlx-pathtracer/validation/report.json` records, per fixture,
+`generationStatus`, `legacyDependencyCheckStatus`, and `viewerCompileStatus`, plus a
+top-level `guarantees` object (`noLegacyFallback`, `noGenericApproximation`).
+
+### 6a. Forbidden `PathTracerGlslShaderGenerator` dependency check
+
+The MTLX route and generated artifacts must never depend on
+`PathTracerGlslShaderGenerator`.
+
+```powershell
+# Generated dispatch artifacts (code only; comments documenting the ban are OK):
+Select-String -Path glsl/pathtracing/mtlx/generated/**/*.glsl -Pattern "PathTracerGlslShaderGenerator"
+# Runtime route assembly:
+Select-String -Path main.js -Pattern "PathTracerGlslShaderGenerator"
+```
+
+Expected: no matches in generated artifacts; in `main.js` the only match is inside
+`generateMtlxGlsl` (the separate substitution path), never in `generateMtlxRouteDispatch`
+or `assemble_mtlx_route_dispatch`.
+
+### 6b. Forbidden legacy `_brdf` / `_btdf` dependency check
+
+```powershell
+Select-String -Path glsl/pathtracing/mtlx/generated/**/*.glsl `
+	-Pattern "pathtracing/legacy/|\b(coat|diffuse|fuzz|metal|specular)_brdf\b|\b(diffuse|specular)_btdf\b|\bopenpbr_bsdf_(evaluate|sample)\b"
+```
+
+Expected: no matches (the generated dispatch uses only MaterialX `mx_*` closures).
+The authoritative gate is `node tools/validate-mtlx-pathtracer-corpus.mjs`
+(`legacyDependencyCheckStatus = success` for all 10 fixtures).
 
 ## 7. Build viewer
 
@@ -81,14 +124,36 @@ Expected: no implementation matches, except comments explicitly documenting forb
 npm run build
 ```
 
-Expected: Vite build succeeds.
+Expected: Vite build succeeds (`built in ...`).
 
-## 8. Compile/render validation corpus
+## 8. Compile/render validation corpus (MTLX route)
 
-Run one headless compile/render validation per fixture after route integration:
+The `--mode=mtlx` alias selects the `Pathtracer MTLX` route, which assembles the
+generated per-material dispatch (renamed `mtlxGen*`) behind the integrator's
+`mtlx_openpbr_*` hooks. A successful run writes `render_<material-id>.png`.
 
 ```powershell
-node launch_render.mjs --headless --browser=edge --mode=Pathtracer --mtlx="D:\WebGL2\MaterialX\materials\open_pbr_carpaint.mtlx" --spp=2 --size=128x128 --output=artifacts/mtlx-pathtracer/validation/open_pbr_carpaint.png
+# One carpaint example (SwiftShader, deterministic):
+node launch_render.mjs --headless --start-server --mode=mtlx --gpu=false `
+	--mtlx="D:\WebGL2\MaterialX\MaterialX-rva\resources\Materials\Examples\OpenPbr\open_pbr_carpaint.mtlx" `
+	--spp=4 --size=128x128 --output=artifacts/mtlx-pathtracer/validation/render_open_pbr_carpaint.png
 ```
 
-Expected: every fixture compiles/renders or fails explicitly with diagnostics; no legacy fallback and no generic approximation path occurs.
+Loop over all carpaint + synthetic fixtures with the same command shape (use absolute
+`--mtlx` paths). Expected: each fixture reaches `spp atteints` and writes its PNG, or
+fails explicitly with a GLSL diagnostic; there is no legacy fallback and no generic
+approximation path.
+
+## 9. Validated outcomes
+
+- Generator: all five models generate a self-contained `evaluateBsdf`/`sampleBsdf`
+  dispatch (params folded as literals; dielectric transmission lobe with GGX refraction
+  + Beer-Lambert extinction).
+- Corpus text checks: 5 carpaint + 5 synthetic, `passed 10 / failed 0`, no forbidden
+  legacy or `PathTracerGlslShaderGenerator` references.
+- Viewer route: 10/10 fixtures compile and render through the generated-dispatch MTLX
+  route (`viewerRendered 5/5` carpaint and synthetic).
+- Guarantees: `noLegacyFallback = true`, `noGenericApproximation = true` — the route
+  throws if the generated dispatch is missing, and the generator throws on unsupported
+  or incomplete materials.
+

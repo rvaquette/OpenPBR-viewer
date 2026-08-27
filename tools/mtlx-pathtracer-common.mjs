@@ -11,12 +11,17 @@ const REQUIRED_MODELS = [
 ];
 
 // Forbidden implementation dependencies for the MTLX route and generated artifacts.
+// Targets legacy lobe files/entrypoints specifically, so allowed host primitives
+// like neutral_brdf_* / ground_brdf_* are not false-flagged.
 const FORBIDDEN_PATTERNS = [
-  /(^|[^\w])legacy\//,
-  /_brdf\b/,
-  /_btdf\b/,
-  /openpbr_bsdf_evaluate/,
-  /openpbr_bsdf_sample/,
+  /pathtracing\/legacy\//,
+  /\b(?:coat|diffuse|fuzz|metal|specular)_brdf\b/,
+  /\b(?:diffuse|specular)_btdf\b/,
+  /\bopenpbr_bsdf_evaluate\b/,
+  /\bopenpbr_bsdf_sample\b/,
+  /\bopenpbr_prepare\b/,
+  /\bopenpbr_is_opaque\b/,
+  /\bopenpbr_is_thinwalled\b/,
   /PathTracerGlslShaderGenerator/
 ];
 

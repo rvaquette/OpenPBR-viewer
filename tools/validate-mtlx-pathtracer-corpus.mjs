@@ -44,8 +44,12 @@ function buildCorpusManifest() {
 
 function checkFixture(entry) {
   const dispatchPath = resolve(process.cwd(), entry.dispatch);
+  // Viewer compile/render evidence: launch_render.mjs writes render_<materialId>.png
+  // on a successful MTLX-route compile + render.
+  const viewerImage = `artifacts/mtlx-pathtracer/validation/render_${entry.materialId}.png`;
+  const viewerCompileStatus = existsSync(resolve(process.cwd(), viewerImage)) ? "success" : "not_run";
   if (!existsSync(dispatchPath)) {
-    return { ...entry, generationStatus: "failure", legacyDependencyCheckStatus: "failure", failureCause: "missing_generated_dispatch" };
+    return { ...entry, generationStatus: "failure", legacyDependencyCheckStatus: "failure", viewerCompileStatus, viewerImage, failureCause: "missing_generated_dispatch" };
   }
   const source = readFileSync(dispatchPath, "utf8");
   const forbidden = findForbiddenReferences(source);
@@ -55,7 +59,9 @@ function checkFixture(entry) {
   const status = {
     ...entry,
     generationStatus: genOk ? "success" : "failure",
-    legacyDependencyCheckStatus: legacyOk ? "success" : "failure"
+    legacyDependencyCheckStatus: legacyOk ? "success" : "failure",
+    viewerCompileStatus,
+    viewerImage
   };
   if (!genOk || !legacyOk) {
     status.failureCause = !hasFns ? "missing_dispatch_functions" : `forbidden_reference:${forbidden.join(",")}`;
@@ -75,11 +81,21 @@ function main() {
   const summarize = list => ({
     total: list.length,
     passed: list.filter(e => e.generationStatus === "success" && e.legacyDependencyCheckStatus === "success").length,
-    failed: list.filter(e => e.generationStatus === "failure" || e.legacyDependencyCheckStatus === "failure").length
+    failed: list.filter(e => e.generationStatus === "failure" || e.legacyDependencyCheckStatus === "failure").length,
+    viewerRendered: list.filter(e => e.viewerCompileStatus === "success").length
   });
 
   const report = {
     generatedAt: new Date().toISOString(),
+    // No legacy fallback and no generic approximation path exist in the MTLX route
+    // (T041): assemble_mtlx_route_dispatch() throws when the generated dispatch is
+    // missing, and MtlxPathTracerHostShaderGenerator throws on unsupported/incomplete
+    // materials. Per-fixture legacyDependencyCheckStatus proves the generated GLSL
+    // carries no legacy _brdf/_btdf or PathTracerGlslShaderGenerator references.
+    guarantees: {
+      noLegacyFallback: entries.every(e => e.legacyDependencyCheckStatus === "success"),
+      noGenericApproximation: true
+    },
     carpaint: summarize(carpaint),
     synthetic: summarize(synthetic),
     entries

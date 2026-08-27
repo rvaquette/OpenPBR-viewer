@@ -30,6 +30,10 @@ import glsl_pathtracing_mtlx_host       from './glsl/pathtracing/mtlx_host.glsl?
 import glsl_pathtracing_mtlx_adapters   from './glsl/pathtracing/mtlx_adapters.glsl?raw'
 import glsl_pathtracing_pathtracer      from './glsl/pathtracing/pathtracer.glsl?raw'
 
+// MTLX pathtracer host route (feature 003): copied integrator; the per-material
+// dispatch (mtlxGen*) is generated at runtime and wired via an inline bridge.
+import glsl_mtlx_route_pathtracer       from './glsl/pathtracing/mtlx/pathtracer.glsl?raw'
+
 import glsl_legacy_main            from './glsl/pathtracing/legacy/main.glsl?raw'
 import glsl_legacy_fuzz_brdf       from './glsl/pathtracing/legacy/fuzz_brdf.glsl?raw'
 import glsl_legacy_coat_brdf       from './glsl/pathtracing/legacy/coat_brdf.glsl?raw'
@@ -196,6 +200,7 @@ var materialDefines = {
 
 // Generated GLSL from MaterialX WASM (set before create_materials() is called).
 var mtlxGeneratedGlsl = '';
+var mtlxRouteDispatchGlsl = '';
 
 const LEGACY_COMPARISON_ENABLED_BY_DEFAULT = false;
 const legacyComparisonEnabled = (() => {
@@ -300,9 +305,45 @@ async function validateGeneratedShadingContract(generatedGlsl, search)
 
 function getRendererModes()
 {
-    return legacyComparisonEnabled
-        ? ['Rasterizer', 'Pathtracer', 'Pathtracer legacy']
-        : ['Rasterizer', 'Pathtracer'];
+    const modes = ['Rasterizer', 'Pathtracer', 'Pathtracer MTLX'];
+    if (legacyComparisonEnabled) modes.push('Pathtracer legacy');
+    return modes;
+}
+
+// MTLX route selection (feature 003). Enabled explicitly; the generated dispatch
+// artifact is injected by the assembler and its absence is a hard failure.
+function is_mtlx_route() { return params.renderer_mode === 'Pathtracer MTLX'; }
+
+// Assemble the MTLX route fragment: the generated per-material dispatch
+// (MtlxPathTracerHostShaderGenerator output, renamed to mtlxGen*), a thin bridge
+// mapping the integrator's mtlx_openpbr_* hooks onto it, then the copied
+// integrator. Fails explicitly if the generated dispatch is missing, per the MTLX
+// viewer route contract (no legacy fallback).
+function assemble_mtlx_route_dispatch()
+{
+    const dispatch = (mtlxRouteDispatchGlsl || '').trim();
+    const hasEval = /\bvec3\s+mtlxGenEvaluateBsdf\s*\(/.test(dispatch);
+    const hasSample = /\bvec3\s+mtlxGenSampleBsdf\s*\(/.test(dispatch);
+    if (!dispatch || !hasEval || !hasSample)
+    {
+        substitutionRuntimeState.contractStatus = 'invalid';
+        substitutionRuntimeState.contractValidationStep = 'mtlx-route-dispatch-assembly';
+        substitutionRuntimeState.failureCause = 'missing_generated_dispatch';
+        throw new Error('[mtlx-route] generated BSDF dispatch missing; refusing legacy fallback');
+    }
+    const bridge = `
+vec3 mtlx_openpbr_bsdf_evaluate(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL, inout float pdf_woutputL) {
+    return mtlxGenEvaluateBsdf(pW, basis, winputL, woutputL, MATERIAL_OPENPBR, pdf_woutputL);
+}
+vec3 mtlx_openpbr_bsdf_sample(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed, out vec3 woutputL, out float pdf_woutputL, out Volume internal_medium) {
+    return mtlxGenSampleBsdf(pW, basis, winputL, rndSeed, MATERIAL_OPENPBR, woutputL, pdf_woutputL, internal_medium);
+}
+void mtlx_openpbr_prepare(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed) {}
+bool mtlx_openpbr_is_opaque() { return true; }
+bool mtlx_openpbr_is_thinwalled() { return false; }
+vec3 mtlx_openpbr_emission() { return vec3(0.0); }
+`;
+    return mtlxRouteDispatchGlsl + bridge + glsl_mtlx_route_pathtracer;
 }
 
 // Minimal default OpenPBR material used when no .mtlx file is supplied.
@@ -389,6 +430,87 @@ async function generateMtlxGlsl(mtlxText) {
     };
 
     // Clean up embind handles.
+    try { shader.delete?.(); } catch {}
+    try { elem.delete?.();   } catch {}
+    try { stdlib.delete?.(); } catch {}
+    try { ctx.delete?.();    } catch {}
+    try { gen.delete?.();    } catch {}
+    try { doc.delete?.();    } catch {}
+    return { glsl, mtlxParams };
+}
+// MtlxPathTracerHostShaderGenerator (feature 003). Unlike generateMtlxGlsl (which
+// uses the forbidden PathTracerGlslShaderGenerator for the substitution path),
+// this emits a model-agnostic evaluateBsdf/sampleBsdf with all params folded as
+// literals. The functions are renamed to mtlxGen* so the route integrator's own
+// evaluateBsdf/sampleBsdf dispatchers can call them via the mtlx_openpbr_* hooks.
+async function generateMtlxRouteDispatch(mtlxText) {
+    const mx = await loadMtlxModule();
+    if (typeof mx.MtlxPathTracerHostShaderGenerator === 'undefined') {
+        throw new Error('[mtlx-route] MtlxPathTracerHostShaderGenerator not exposed by WASM build');
+    }
+    const gen = mx.MtlxPathTracerHostShaderGenerator.create();
+    const ctx = new mx.GenContext(gen);
+    const stdlib = mx.loadStandardLibraries(ctx);
+    const doc = mx.createDocument();
+    doc.importLibrary(stdlib);
+    await mx.readFromXmlString(doc, mtlxText, '');
+    const elem = mx.findRenderableElement(doc);
+    if (!elem) throw new Error('[mtlx-route] No renderable element found in .mtlx');
+    const shader = gen.generate(elem.getNamePath(), elem, ctx);
+    let glsl = shader.getSourceCode('pixel');
+
+    // Strip #version / precision (route provides its own) and the MaterialX
+    // `#define material surfaceshader` alias, which would clobber the integrator's
+    // `int material` dispatch parameter.
+    glsl = glsl
+        .replace(/^[ \t]*#version[^\n]*\n/gm, '')
+        .replace(/^[ \t]*precision[^\n]*\n/gm, '')
+        .replace(/^[ \t]*#define[ \t]+material[ \t]+surfaceshader[ \t]*\r?\n/gm, '');
+    // Remap MaterialX env-map uniforms to the viewer's symbols (as in generateMtlxGlsl).
+    glsl = glsl
+        .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envRadiance[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envIrradiance[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envLightIntensity[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envMatrix[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envRadianceMips[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envRadianceSamples[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+bool[ \t]+u_refractionTwoSided[ \t]*;[ \t]*\r?\n/gm, '');
+    const envPreamble =
+        'uniform sampler2D envMapLatLong;\n' +
+        'mat4 mtlxEnvMatrix() {\n' +
+        '    float a = 1.57079632679;\n' +
+        '    float c = cos(a), s = sin(a);\n' +
+        '    return mat4(c,0.,-s,0., 0.,1.,0.,0., s,0.,c,0., 0.,0.,0.,1.);\n' +
+        '}\n' +
+        '#define u_envMatrix    mtlxEnvMatrix()\n' +
+        '#define u_envRadiance  envMapLatLong\n' +
+        '#define u_envIrradiance envMapLatLong\n' +
+        '#define u_envLightIntensity skyPower\n' +
+        '#define u_envRadianceMips   1\n' +
+        '#define u_envRadianceSamples 1\n' +
+        '#define u_refractionTwoSided false\n';
+    glsl = envPreamble + glsl;
+
+    // Rename the generated entry points so they don't collide with the route
+    // integrator's own evaluateBsdf/sampleBsdf dispatchers.
+    glsl = glsl
+        .replace(/\bevaluateBsdf\b/g, 'mtlxGenEvaluateBsdf')
+        .replace(/\bsampleBsdf\b/g, 'mtlxGenSampleBsdf');
+
+    const extractParam = (name, fallback) => {
+        const m = glsl.match(new RegExp(`\\b(?:float|bool)\\s+${name}\\s*=\\s*([^;]+);`));
+        if (!m) return fallback;
+        const v = m[1].trim();
+        return v === 'true' ? true : v === 'false' ? false : parseFloat(v);
+    };
+    const mtlxParams = {
+        transmissionWeight:   extractParam('transmission_weight',   0),
+        transmissionDepth:    extractParam('transmission_depth',    0),
+        dispersionScale:      extractParam('transmission_dispersion_scale', 0),
+        thinFilmWeight:       extractParam('thin_film_weight',      0),
+        geometry_thin_walled: extractParam('geometry_thin_walled', false),
+    };
+
     try { shader.delete?.(); } catch {}
     try { elem.delete?.();   } catch {}
     try { stdlib.delete?.(); } catch {}
@@ -497,25 +619,37 @@ var scene_names = {
         }
     }
     try {
-        const result = await generateMtlxGlsl(mtlxText);
-        mtlxGeneratedGlsl = result.glsl;
-        const p = result.mtlxParams;
+        if (is_mtlx_route()) {
+            // MTLX route: use the MtlxPathTracerHostShaderGenerator dispatch (feature 003).
+            const result = await generateMtlxRouteDispatch(mtlxText);
+            mtlxRouteDispatchGlsl = result.glsl;
+            const p = result.mtlxParams;
+            const hasTransmission = p.transmissionWeight > 0;
+            materialDefines.VOLUME_ENABLED       = hasTransmission && p.transmissionDepth > 0 && !p.geometry_thin_walled;
+            materialDefines.TRANSMISSION_ENABLED = hasTransmission && p.dispersionScale > 0;
+            materialDefines.THIN_FILM_ENABLED    = p.thinFilmWeight > 0;
+            console.log('[mtlx-route] generated', mtlxRouteDispatchGlsl.split('\n').length, 'lines of dispatch GLSL');
+        } else {
+            const result = await generateMtlxGlsl(mtlxText);
+            mtlxGeneratedGlsl = result.glsl;
+            const p = result.mtlxParams;
 
-        // Set shader defines based on the material's actual parameter values.
-        const hasTransmission = p.transmissionWeight > 0;
-        const hasVolume       = hasTransmission && p.transmissionDepth > 0 && !p.geometry_thin_walled;
-        const hasDispersion   = hasTransmission && p.dispersionScale > 0;
-        const hasThinFilm     = p.thinFilmWeight > 0;
+            // Set shader defines based on the material's actual parameter values.
+            const hasTransmission = p.transmissionWeight > 0;
+            const hasVolume       = hasTransmission && p.transmissionDepth > 0 && !p.geometry_thin_walled;
+            const hasDispersion   = hasTransmission && p.dispersionScale > 0;
+            const hasThinFilm     = p.thinFilmWeight > 0;
 
-        materialDefines.VOLUME_ENABLED       = hasVolume;
-        materialDefines.TRANSMISSION_ENABLED = hasDispersion;
-        materialDefines.THIN_FILM_ENABLED    = hasThinFilm;
+            materialDefines.VOLUME_ENABLED       = hasVolume;
+            materialDefines.TRANSMISSION_ENABLED = hasDispersion;
+            materialDefines.THIN_FILM_ENABLED    = hasThinFilm;
 
-        console.log('[mtlx] generated', mtlxGeneratedGlsl.split('\n').length, 'lines of GLSL',
-            '| volume:', hasVolume, '| dispersion:', hasDispersion, '| thin-film:', hasThinFilm);
+            console.log('[mtlx] generated', mtlxGeneratedGlsl.split('\n').length, 'lines of GLSL',
+                '| volume:', hasVolume, '| dispersion:', hasDispersion, '| thin-film:', hasThinFilm);
 
-        await validateGeneratedShadingContract(mtlxGeneratedGlsl, search);
-        console.log('[substitution] contract=valid generatorVersion=', substitutionRuntimeState.generatorVersion);
+            await validateGeneratedShadingContract(mtlxGeneratedGlsl, search);
+            console.log('[substitution] contract=valid generatorVersion=', substitutionRuntimeState.generatorVersion);
+        }
     } catch (e) {
         substitutionRuntimeState.contractStatus = 'invalid';
         substitutionRuntimeState.contractValidationStep = substitutionRuntimeState.contractValidationStep || 'glsl-generation';
@@ -783,11 +917,13 @@ function create_materials()
                             ${ shaderStructs }
                             ${ shaderIntersectFunction }
                         `
-                        + glsl_pathtracing_main
-                        + glsl_pathtracing_mtlx_host
-                        + mtlxGeneratedGlsl
-                        + glsl_pathtracing_mtlx_adapters
-                        + glsl_pathtracing_pathtracer
+                        + glsl_pathtracing_main + '\n'
+                        + (is_mtlx_route()
+                            ? assemble_mtlx_route_dispatch()
+                            : (glsl_pathtracing_mtlx_host + '\n'
+                               + mtlxGeneratedGlsl + '\n'
+                               + glsl_pathtracing_mtlx_adapters + '\n'
+                               + glsl_pathtracing_pathtracer))
 
         } );
 
@@ -1012,7 +1148,7 @@ function init()
 
     document.body.appendChild( renderer.domElement );
 
-    PATHTRACING = (params.renderer_mode === 'Pathtracer' || params.renderer_mode === 'Pathtracer legacy');
+    PATHTRACING = (params.renderer_mode === 'Pathtracer' || params.renderer_mode === 'Pathtracer MTLX' || params.renderer_mode === 'Pathtracer legacy');
 
     // stats setup
     stats = new Stats();
@@ -1196,7 +1332,7 @@ function load_scene(scene_name)
     console.log('Loading scene: ', scene_name);
     LOADED = false;
 
-    PATHTRACING = (params.renderer_mode === 'Pathtracer' || params.renderer_mode === 'Pathtracer legacy');
+    PATHTRACING = (params.renderer_mode === 'Pathtracer' || params.renderer_mode === 'Pathtracer MTLX' || params.renderer_mode === 'Pathtracer legacy');
 
     create_materials()
 
