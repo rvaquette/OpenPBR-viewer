@@ -662,7 +662,8 @@ void main()
             vec3 woutputL; // points *towards* the outgoing ray direction (opposite to photon)
             vec3 f = sampleBsdf(pW, basis, winputL, rndSeed, material, woutputL, bsdfPdf_continuation, internal_medium);
             vec3 woutputW = localToWorld(woutputL, basis);
-            surface_throughput = f / max(PDF_EPSILON, bsdfPdf_continuation) * abs(dot(woutputW, basis.nW));
+            float cos_out = (material == MATERIAL_OPENPBR) ? 1.0 : abs(dot(woutputW, basis.nW));
+            surface_throughput = f / max(PDF_EPSILON, bsdfPdf_continuation) * cos_out;
             // Clamp to prevent fireflies from extreme BSDF values (e.g. grazing microfacets on flat normals)
             float maxComp = maxComponent(surface_throughput);
             if (maxComp > firefly_clamp) surface_throughput *= firefly_clamp / maxComp;
@@ -709,7 +710,8 @@ void main()
                 float bsdfPdf_shadow = PDF_EPSILON;
                 vec3 fshadow = evaluateBsdf(pW, basis, winputL, shadowL, material, bsdfPdf_shadow);
                 float misWeightLight = powerHeuristic(lightPdf, bsdfPdf_shadow);
-                vec3 Ld = misWeightLight * fshadow * abs(dot(shadowW, basis.nW)) * Li / max(PDF_EPSILON, lightPdf);
+                float cos_shadow = (material == MATERIAL_OPENPBR) ? 1.0 : abs(dot(shadowW, basis.nW));
+                vec3 Ld = misWeightLight * fshadow * cos_shadow * Li / max(PDF_EPSILON, lightPdf);
                 vec3 Lcontrib = throughput * Ld;
                 float maxLcontrib = maxComponent(Lcontrib);
                 if (maxLcontrib > firefly_clamp) Lcontrib *= firefly_clamp / maxLcontrib;

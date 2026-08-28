@@ -208,6 +208,7 @@ if (mtlxPath) {
 
     // En mode legacy, injecter aussi les params comme query string pour alimenter les uniforms.
     if (options.renderer_mode === 'Pathtracer legacy') {
+        options.legacy_comparison = 'true';
         try {
             const mtlxParams = parseMtlx(mtlxPath);
             // CLI args take priority over mtlx values

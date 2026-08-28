@@ -50,7 +50,7 @@ if (ENVIRONMENT_IS_NODE) {
 
 // --pre-jses are emitted after the Module integration code, so that they can
 // refer to Module (if they choose; they can also define Module)
-// include: C:\Users\RGISVA~1\AppData\Local\Temp\tmp4rrxto8y.js
+// include: C:\Users\RGISVA~1\AppData\Local\Temp\tmphh9dgn__.js
 Module["expectedDataFileDownloads"] ??= 0;
 
 Module["expectedDataFileDownloads"]++;
@@ -1448,15 +1448,15 @@ Module["expectedDataFileDownloads"]++;
   });
 })();
 
-// end include: C:\Users\RGISVA~1\AppData\Local\Temp\tmp4rrxto8y.js
-// include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpx49cv5sq.js
+// end include: C:\Users\RGISVA~1\AppData\Local\Temp\tmphh9dgn__.js
+// include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpr5vn28o9.js
 // All the pre-js content up to here must remain later on, we need to run
 // it.
 if (Module["$ww"] || (typeof ENVIRONMENT_IS_PTHREAD != "undefined" && ENVIRONMENT_IS_PTHREAD) || (typeof ENVIRONMENT_IS_AUDIO_WORKLET != "undefined" && ENVIRONMENT_IS_AUDIO_WORKLET)) Module["preRun"] = [];
 
 var necessaryPreJSTasks = Module["preRun"].slice();
 
-// end include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpx49cv5sq.js
+// end include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpr5vn28o9.js
 // include: D:/WebGL2/MaterialX/MaterialX-rva/source/JsMaterialX/pre.js
 // Copyright Contributors to the MaterialX Project
 // SPDX-License-Identifier: Apache-2.0
@@ -1538,14 +1538,14 @@ Module.onRuntimeInitialized = function() {
 };
 
 // end include: D:/WebGL2/MaterialX/MaterialX-rva/source/JsMaterialX/pre.js
-// include: C:\Users\RGISVA~1\AppData\Local\Temp\tmptba9ypmk.js
+// include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpuplxt0vn.js
 if (!Module["preRun"]) throw "Module.preRun should exist because file support used it; did a pre-js delete it?";
 
 necessaryPreJSTasks.forEach(task => {
   if (Module["preRun"].indexOf(task) < 0) throw "All preRun tasks that exist before user pre-js code should remain after; did you replace Module or modify Module.preRun?";
 });
 
-// end include: C:\Users\RGISVA~1\AppData\Local\Temp\tmptba9ypmk.js
+// end include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpuplxt0vn.js
 var arguments_ = [];
 
 var thisProgram = "./this.program";
@@ -8244,17 +8244,17 @@ function checkIncomingModuleAPI() {
 }
 
 var ASM_CONSTS = {
-  285048: () => {
+  285400: () => {
     Module["TreeIterator"]["prototype"][Symbol.iterator] = function() {
       return this;
     };
   },
-  285132: () => {
+  285484: () => {
     Module["GraphIterator"]["prototype"][Symbol.iterator] = function() {
       return this;
     };
   },
-  285217: () => {
+  285569: () => {
     Module["InheritanceIterator"]["prototype"][Symbol.iterator] = function() {
       return this;
     };

@@ -306,6 +306,15 @@ function getRendererModes()
     return modes;
 }
 
+function is_mtlx_route() { return params.renderer_mode === 'Pathtracer MTLX'; }
+
+function is_pathtracing_route()
+{
+    return params.renderer_mode === 'Pathtracer' ||
+           params.renderer_mode === 'Pathtracer MTLX' ||
+           params.renderer_mode === 'Pathtracer legacy';
+}
+
 // Assemble the MTLX route fragment: the generated per-material dispatch
 // (MtlxPathTracerHostShaderGenerator output, renamed to mtlxGen*), a thin bridge
 // mapping the integrator's mtlx_openpbr_* hooks onto it, then the copied
@@ -611,7 +620,7 @@ var scene_names = {
         }
     }
     try {
-        if (is_mtlx_route()) {
+        if (is_pathtracing_route()) {
             // MTLX route: use the MtlxPathTracerHostShaderGenerator dispatch (feature 003).
             const result = await generateMtlxRouteDispatch(mtlxText);
             mtlxRouteDispatchGlsl = result.glsl;

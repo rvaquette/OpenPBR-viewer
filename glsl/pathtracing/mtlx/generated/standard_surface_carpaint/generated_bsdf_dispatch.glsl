@@ -1884,6 +1884,7 @@ vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
     internal_medium.anisotropy = 0.0;
     float m_metal = clamp(metalness, 0.0, 1.0);
     float m_rough = clamp(specular_roughness, 0.0, 1.0);
+    float m_aniso = clamp(specular_anisotropy, 0.0, 0.99);
     vec3  m_base  = (base_color) * (base);
     vec3  m_specC = specular_color;
     float m_specW = specular;
@@ -1893,6 +1894,8 @@ vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
     if (V.z < 0.0) V = -V;
     float NdotV = max(V.z, 1e-4);
     float alpha = clamp(m_rough * m_rough, 1e-4, 1.0);
+    float anisoAspect = max(1e-4, 1.0 - m_aniso);
+    vec2 sampleAlpha = clamp(vec2(alpha * sqrt(2.0 / (anisoAspect * anisoAspect + 1.0)), alpha * anisoAspect * sqrt(2.0 / (anisoAspect * anisoAspect + 1.0))), vec2(1e-4), vec2(1.0));
     float F0d = pow((m_ior - 1.0) / (m_ior + 1.0), 2.0);
     vec3 F0 = mix(vec3(F0d) * max(m_specC, vec3(0.0)) * m_specW, m_base, m_metal);
     float F0lum = max(F0.x, max(F0.y, F0.z));
@@ -1905,7 +1908,7 @@ vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
     if (rand(rndSeed) < pTrans)
     {
         float etaRatio = 1.0 / m_ior;
-        vec3 Ht = ggx_ndf_sample(V, alpha, alpha, rndSeed);
+        vec3 Ht = ggx_ndf_sample(V, sampleAlpha.x, sampleAlpha.y, rndSeed);
         vec3 wT = refract(-V, Ht, etaRatio);
         if (dot(wT, wT) < 1e-8)
         {
@@ -1928,7 +1931,7 @@ vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
         float LoH = dot(woutputL, Hr);
         float denomT = VoH + m_ior * LoH;
         float jacT = (m_ior * m_ior) * abs(LoH) / max(denomT * denomT, 1e-8);
-        float DvT = ggx_G1(V, alpha, alpha) * max(0.0, VoH) * ggx_ndf_eval(Hr, alpha, alpha) / max(V.z, 1e-4);
+        float DvT = ggx_G1(V, sampleAlpha.x, sampleAlpha.y) * max(0.0, VoH) * ggx_ndf_eval(Hr, sampleAlpha.x, sampleAlpha.y) / max(V.z, 1e-4);
         pdf_woutputL = max(pTrans * DvT * jacT, PDF_EPSILON);
         g_ptP = pW;
         g_ptN = basis.nW;
@@ -1946,7 +1949,7 @@ vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
 
     if (rand(rndSeed) < pSpec)
     {
-        vec3 H = ggx_ndf_sample(V, alpha, alpha, rndSeed);
+        vec3 H = ggx_ndf_sample(V, sampleAlpha.x, sampleAlpha.y, rndSeed);
         woutputL = reflect(-V, H);
     }
     else
@@ -1961,7 +1964,7 @@ vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
         return vec3(0.0);
     }
     vec3 Hh = normalize(V + woutputL);
-    float pdfSpec = ggx_G1(V, alpha, alpha) * ggx_ndf_eval(Hh, alpha, alpha) / (4.0 * NdotV);
+    float pdfSpec = ggx_G1(V, sampleAlpha.x, sampleAlpha.y) * ggx_ndf_eval(Hh, sampleAlpha.x, sampleAlpha.y) / (4.0 * NdotV);
     float pdfDiff = pdfHemisphereCosineWeighted(woutputL);
     pdf_woutputL = max((1.0 - pTrans) * (pSpec * pdfSpec + (1.0 - pSpec) * pdfDiff), PDF_EPSILON);
 
