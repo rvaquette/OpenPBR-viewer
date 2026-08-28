@@ -518,14 +518,6 @@ void main()
 #endif
     bool in_dielectric = false;
 
-#ifdef THIN_FILM_ENABLED
-    // Thin-film requires spectral rendering: only activate when the material actually uses it
-    if (thin_film_weight > 0.0) {
-        wavelength_nm = 360.0 + (700.0 - 360.0)*rand(rndSeed);
-        throughput *= xyzToRgb(xyzFit_1931(wavelength_nm)) * SPECTRAL_NORM;
-    }
-#endif
-
     for (int vertex=0; vertex <= bounces; vertex++)
     {
         // Generate next surface hit, given current vertex pW and current propagation direction dW
@@ -662,7 +654,8 @@ void main()
             vec3 woutputL; // points *towards* the outgoing ray direction (opposite to photon)
             vec3 f = sampleBsdf(pW, basis, winputL, rndSeed, material, woutputL, bsdfPdf_continuation, internal_medium);
             vec3 woutputW = localToWorld(woutputL, basis);
-            float cos_out = (material == MATERIAL_OPENPBR) ? 1.0 : abs(dot(woutputW, basis.nW));
+            bool transmitted_sample = (material == MATERIAL_OPENPBR) && (winputL.z * woutputL.z < 0.0);
+            float cos_out = (material == MATERIAL_OPENPBR && !transmitted_sample) ? 1.0 : abs(dot(woutputW, basis.nW));
             surface_throughput = f / max(PDF_EPSILON, bsdfPdf_continuation) * cos_out;
             // Clamp to prevent fireflies from extreme BSDF values (e.g. grazing microfacets on flat normals)
             float maxComp = maxComponent(surface_throughput);

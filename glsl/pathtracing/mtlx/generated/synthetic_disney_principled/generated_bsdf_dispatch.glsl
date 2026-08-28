@@ -1720,6 +1720,10 @@ vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
     vec3  m_specC = vec3(1.0);
     float m_specW = specular;
     float m_ior   = max(ior, 1.0 + 1e-3);
+    float m_coatW = clamp(clearcoat, 0.0, 1.0);
+    float m_coatRough = clamp(1.0 - clearcoatGloss, 0.0, 1.0);
+    float m_coatAniso = clamp(0.0, 0.0, 0.99);
+    float m_coatIor = max(1.5, 1.0 + 1e-3);
 
     vec3 V = winputL;
     if (V.z < 0.0) V = -V;
@@ -1727,15 +1731,38 @@ vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
     float alpha = clamp(m_rough * m_rough, 1e-4, 1.0);
     float anisoAspect = max(1e-4, 1.0 - m_aniso);
     vec2 sampleAlpha = clamp(vec2(alpha * sqrt(2.0 / (anisoAspect * anisoAspect + 1.0)), alpha * anisoAspect * sqrt(2.0 / (anisoAspect * anisoAspect + 1.0))), vec2(1e-4), vec2(1.0));
+    float coatAlpha = clamp(m_coatRough * m_coatRough, 1e-4, 1.0);
+    float coatAnisoAspect = max(1e-4, 1.0 - m_coatAniso);
+    vec2 coatSampleAlpha = clamp(vec2(coatAlpha * sqrt(2.0 / (coatAnisoAspect * coatAnisoAspect + 1.0)), coatAlpha * coatAnisoAspect * sqrt(2.0 / (coatAnisoAspect * coatAnisoAspect + 1.0))), vec2(1e-4), vec2(1.0));
     float F0d = pow((m_ior - 1.0) / (m_ior + 1.0), 2.0);
     vec3 F0 = mix(vec3(F0d) * max(m_specC, vec3(0.0)) * m_specW, m_base, m_metal);
     float F0lum = max(F0.x, max(F0.y, F0.z));
     float Fv = F0lum + (1.0 - F0lum) * pow(1.0 - NdotV, 5.0);
+    float coatFv = FresnelDielectricReflectance(NdotV, m_coatIor);
+    float pCoat = clamp(m_coatW * coatFv, 0.0, 0.75);
     float pTrans = 0.0;
     float m_transW = clamp(specTrans, 0.0, 1.0);
     vec3  m_transC = vec3(1.0);
     float m_transD = 0.0;
     pTrans = clamp(m_transW * (1.0 - Fv), 0.0, 0.95);
+    if (rand(rndSeed) < pCoat)
+    {
+        vec3 Hc = ggx_ndf_sample(V, coatSampleAlpha.x, coatSampleAlpha.y, rndSeed);
+        woutputL = reflect(-V, Hc);
+        if (woutputL.z <= 1e-4)
+        {
+            pdf_woutputL = 0.0;
+            return vec3(0.0);
+        }
+        float pdfCoat = ggx_G1(V, coatSampleAlpha.x, coatSampleAlpha.y) * ggx_ndf_eval(normalize(V + woutputL), coatSampleAlpha.x, coatSampleAlpha.y) / (4.0 * NdotV);
+        float pdfBaseSpec = ggx_G1(V, sampleAlpha.x, sampleAlpha.y) * ggx_ndf_eval(normalize(V + woutputL), sampleAlpha.x, sampleAlpha.y) / (4.0 * NdotV);
+        float pdfBaseDiff = pdfHemisphereCosineWeighted(woutputL);
+        float diffLumCoat = (1.0 - m_metal) * dot(m_base, vec3(0.2126, 0.7152, 0.0722));
+        float pSpecCoat = clamp(Fv / (Fv + (1.0 - Fv) * diffLumCoat + 1e-3), 0.05, 0.95);
+        pdf_woutputL = max(pCoat * pdfCoat + (1.0 - pCoat) * (1.0 - pTrans) * (pSpecCoat * pdfBaseSpec + (1.0 - pSpecCoat) * pdfBaseDiff), PDF_EPSILON);
+        float ignorePdfCoat;
+        return evaluateBsdf(pW, basis, winputL, woutputL, material, ignorePdfCoat);
+    }
     if (rand(rndSeed) < pTrans)
     {
         float etaRatio = 1.0 / m_ior;
@@ -1763,7 +1790,7 @@ vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
         float denomT = VoH + m_ior * LoH;
         float jacT = (m_ior * m_ior) * abs(LoH) / max(denomT * denomT, 1e-8);
         float DvT = ggx_G1(V, sampleAlpha.x, sampleAlpha.y) * max(0.0, VoH) * ggx_ndf_eval(Hr, sampleAlpha.x, sampleAlpha.y) / max(V.z, 1e-4);
-        pdf_woutputL = max(pTrans * DvT * jacT, PDF_EPSILON);
+        pdf_woutputL = max((1.0 - pCoat) * pTrans * DvT * jacT, PDF_EPSILON);
         g_ptP = pW;
         g_ptN = basis.nW;
         g_ptTangent = basis.tW;
@@ -1797,7 +1824,8 @@ vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
     vec3 Hh = normalize(V + woutputL);
     float pdfSpec = ggx_G1(V, sampleAlpha.x, sampleAlpha.y) * ggx_ndf_eval(Hh, sampleAlpha.x, sampleAlpha.y) / (4.0 * NdotV);
     float pdfDiff = pdfHemisphereCosineWeighted(woutputL);
-    pdf_woutputL = max((1.0 - pTrans) * (pSpec * pdfSpec + (1.0 - pSpec) * pdfDiff), PDF_EPSILON);
+    float pdfCoat = ggx_G1(V, coatSampleAlpha.x, coatSampleAlpha.y) * ggx_ndf_eval(Hh, coatSampleAlpha.x, coatSampleAlpha.y) / (4.0 * NdotV);
+    pdf_woutputL = max(pCoat * pdfCoat + (1.0 - pCoat) * (1.0 - pTrans) * (pSpec * pdfSpec + (1.0 - pSpec) * pdfDiff), PDF_EPSILON);
 
     float ignorePdf;
     return evaluateBsdf(pW, basis, winputL, woutputL, material, ignorePdf);

@@ -197,6 +197,11 @@ var materialDefines = {
 // Generated GLSL from MaterialX WASM (set before create_materials() is called).
 var mtlxGeneratedGlsl = '';
 var mtlxRouteDispatchGlsl = '';
+var mtlxRouteMaterialSummary = {
+    opaque: true,
+    thinWalled: false,
+    emission: [0.0, 0.0, 0.0]
+};
 
 const LEGACY_COMPARISON_ENABLED_BY_DEFAULT = false;
 const legacyComparisonEnabled = (() => {
@@ -332,6 +337,9 @@ function assemble_mtlx_route_dispatch()
         substitutionRuntimeState.failureCause = 'missing_generated_dispatch';
         throw new Error('[mtlx-route] generated BSDF dispatch missing; refusing legacy fallback');
     }
+    const opaque = mtlxRouteMaterialSummary.opaque ? 'true' : 'false';
+    const thinWalled = mtlxRouteMaterialSummary.thinWalled ? 'true' : 'false';
+    const emission = mtlxRouteMaterialSummary.emission;
     const bridge = `
 vec3 mtlx_openpbr_bsdf_evaluate(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL, inout float pdf_woutputL) {
     return mtlxGenEvaluateBsdf(pW, basis, winputL, woutputL, MATERIAL_OPENPBR, pdf_woutputL);
@@ -340,9 +348,9 @@ vec3 mtlx_openpbr_bsdf_sample(in vec3 pW, in Basis basis, in vec3 winputL, inout
     return mtlxGenSampleBsdf(pW, basis, winputL, rndSeed, MATERIAL_OPENPBR, woutputL, pdf_woutputL, internal_medium);
 }
 void mtlx_openpbr_prepare(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed) {}
-bool mtlx_openpbr_is_opaque() { return true; }
-bool mtlx_openpbr_is_thinwalled() { return false; }
-vec3 mtlx_openpbr_emission() { return vec3(0.0); }
+bool mtlx_openpbr_is_opaque() { return ${opaque}; }
+bool mtlx_openpbr_is_thinwalled() { return ${thinWalled}; }
+vec3 mtlx_openpbr_emission() { return vec3(${emission[0].toFixed(8)}, ${emission[1].toFixed(8)}, ${emission[2].toFixed(8)}); }
 `;
     return mtlxRouteDispatchGlsl + bridge + glsl_mtlx_route_pathtracer;
 }
@@ -498,18 +506,40 @@ async function generateMtlxRouteDispatch(mtlxText) {
         .replace(/\bevaluateBsdf\b/g, 'mtlxGenEvaluateBsdf')
         .replace(/\bsampleBsdf\b/g, 'mtlxGenSampleBsdf');
 
+    glsl = glsl.replace(
+        `    float F0d = pow((m_ior - 1.0) / (m_ior + 1.0), 2.0);
+    vec3 F0 = mix(vec3(F0d) * max(m_specC, vec3(0.0)) * m_specW, m_base, m_metal);
+    float F0lum = max(F0.x, max(F0.y, F0.z));
+    float Fv = F0lum + (1.0 - F0lum) * pow(1.0 - NdotV, 5.0);`,
+        `    float F0d = pow((m_ior - 1.0) / (m_ior + 1.0), 2.0);
+    vec3 F0NoFilm = mix(vec3(F0d) * max(m_specC, vec3(0.0)) * m_specW, m_base, m_metal);
+    vec3 FFilm = mx_compute_fresnel(NdotV, mx_init_fresnel_dielectric(m_ior, thin_film_thickness * 1000.0, thin_film_ior));
+    vec3 F0Film = mix(FFilm * max(m_specC, vec3(0.0)) * m_specW, m_base, m_metal);
+    vec3 F0 = mix(F0NoFilm, F0Film, clamp(thin_film_weight, 0.0, 1.0));
+    float Fv = clamp(max(F0.x, max(F0.y, F0.z)), 0.0, 1.0);`
+    );
+
     const extractParam = (name, fallback) => {
         const m = glsl.match(new RegExp(`\\b(?:float|bool)\\s+${name}\\s*=\\s*([^;]+);`));
         if (!m) return fallback;
         const v = m[1].trim();
         return v === 'true' ? true : v === 'false' ? false : parseFloat(v);
     };
+    const extractVec3Param = (name, fallback) => {
+        const m = glsl.match(new RegExp(`\\bvec3\\s+${name}\\s*=\\s*vec3\\(([^)]+)\\);`));
+        if (!m) return fallback;
+        const values = m[1].split(',').map(v => parseFloat(v.trim()));
+        return values.length === 3 && values.every(Number.isFinite) ? values : fallback;
+    };
+    const emissionColor = extractVec3Param('emission_color', [1, 1, 1]);
+    const emissionScale = extractParam('emission_luminance', extractParam('emission', 0));
     const mtlxParams = {
         transmissionWeight:   extractParam('transmission_weight',   0),
         transmissionDepth:    extractParam('transmission_depth',    0),
         dispersionScale:      extractParam('transmission_dispersion_scale', 0),
         thinFilmWeight:       extractParam('thin_film_weight',      0),
         geometry_thin_walled: extractParam('geometry_thin_walled', false),
+        emission:             emissionColor.map(v => v * emissionScale),
     };
 
     try { shader.delete?.(); } catch {}
@@ -626,6 +656,11 @@ var scene_names = {
             mtlxRouteDispatchGlsl = result.glsl;
             const p = result.mtlxParams;
             const hasTransmission = p.transmissionWeight > 0;
+            mtlxRouteMaterialSummary = {
+                opaque: !hasTransmission && p.geometry_thin_walled !== true,
+                thinWalled: p.geometry_thin_walled === true,
+                emission: p.emission
+            };
             materialDefines.VOLUME_ENABLED       = hasTransmission && p.transmissionDepth > 0 && !p.geometry_thin_walled;
             materialDefines.TRANSMISSION_ENABLED = hasTransmission && p.dispersionScale > 0;
             materialDefines.THIN_FILM_ENABLED    = p.thinFilmWeight > 0;

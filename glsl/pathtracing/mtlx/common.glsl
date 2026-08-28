@@ -436,22 +436,6 @@ vec3 samplePhaseFunction(in vec3 dW, float anisotropy, inout uint rndSeed)
 
 float wavelength_nm;
 
-#ifdef TRANSMISSION_ENABLED
-// Wavelength-dependent IOR according to Cauchy formula
-float specular_ior_dispersive()
-{
-    const float lambda_C = 656.3;
-    const float lambda_d = 587.6;
-    const float lambda_F = 486.1;
-    const float lambda_FC2 = 1.0 / (1.0/(lambda_F*lambda_F) - 1.0/(lambda_C*lambda_C));
-    float Vd = transmission_dispersion_abbe_number / max(DENOM_TOLERANCE, transmission_dispersion_scale);
-    float nd = specular_ior;
-    float B = (nd - 1.0) * lambda_FC2 / max(DENOM_TOLERANCE, Vd);
-    float A = nd - B/sqr(lambda_d);
-    return A + B/sqr(wavelength_nm);
-}
-#endif // TRANSMISSION_ENABLED
-
 
 /////////////////////////////////////////////////////////////////////////
 // Color utils
