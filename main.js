@@ -25,13 +25,9 @@ shaderStructs, shaderIntersectFunction, SAH, StaticGeometryGenerator
 
 import { GUI } from 'lil-gui';
 
-import glsl_pathtracing_main            from './glsl/pathtracing/main.glsl?raw'
-import glsl_pathtracing_mtlx_host       from './glsl/pathtracing/mtlx_host.glsl?raw'
-import glsl_pathtracing_mtlx_adapters   from './glsl/pathtracing/mtlx_adapters.glsl?raw'
-import glsl_pathtracing_pathtracer      from './glsl/pathtracing/pathtracer.glsl?raw'
-
 // MTLX pathtracer host route (feature 003): copied integrator; the per-material
 // dispatch (mtlxGen*) is generated at runtime and wired via an inline bridge.
+import glsl_mtlx_route_common           from './glsl/pathtracing/mtlx/common.glsl?raw'
 import glsl_mtlx_route_pathtracer       from './glsl/pathtracing/mtlx/pathtracer.glsl?raw'
 
 import glsl_legacy_main            from './glsl/pathtracing/legacy/main.glsl?raw'
@@ -309,10 +305,6 @@ function getRendererModes()
     if (legacyComparisonEnabled) modes.push('Pathtracer legacy');
     return modes;
 }
-
-// MTLX route selection (feature 003). Enabled explicitly; the generated dispatch
-// artifact is injected by the assembler and its absence is a hard failure.
-function is_mtlx_route() { return params.renderer_mode === 'Pathtracer MTLX'; }
 
 // Assemble the MTLX route fragment: the generated per-material dispatch
 // (MtlxPathTracerHostShaderGenerator output, renamed to mtlxGen*), a thin bridge
@@ -917,13 +909,8 @@ function create_materials()
                             ${ shaderStructs }
                             ${ shaderIntersectFunction }
                         `
-                        + glsl_pathtracing_main + '\n'
-                        + (is_mtlx_route()
-                            ? assemble_mtlx_route_dispatch()
-                            : (glsl_pathtracing_mtlx_host + '\n'
-                               + mtlxGeneratedGlsl + '\n'
-                               + glsl_pathtracing_mtlx_adapters + '\n'
-                               + glsl_pathtracing_pathtracer))
+                        + glsl_mtlx_route_common + '\n'
+                        + assemble_mtlx_route_dispatch()
 
         } );
 
