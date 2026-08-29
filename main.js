@@ -14,6 +14,7 @@ import { Scene,
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import Stats from 'stats.js';
@@ -126,6 +127,9 @@ var params =
 
     skyPower:                            1.0,
     skyColor:                            [1.0, 1.0, 1.0],
+    env_map_path:                        'textures/envmaps/etzwihl_16k.jpg',
+    env_map_provided:                    false,
+    env_irradiance_path:                 '',
     sunPower:                            0.25,
     sunAngularSize:                      5.0,
     sunLatitude:                         40.0,
@@ -191,13 +195,15 @@ var params =
 };
 
 var materialDefines = {
-    VOLUME_ENABLED: true   // always on; MaterialX handles feature presence internally
+    VOLUME_ENABLED: true,  // always on; MaterialX handles feature presence internally
+    MAX_MTLX_LIGHTS: 1
 };
 
 // Generated GLSL from MaterialX WASM (set before create_materials() is called).
 var mtlxGeneratedGlsl = '';
 var mtlxRouteDispatchGlsl = '';
 var mtlxRouteTextureBindings = [];
+var mtlxRouteLights = [];
 var mtlxRouteMaterialSummary = {
     opaque: true,
     thinWalled: false,
@@ -301,6 +307,112 @@ function createMtlxRouteTextureUniforms()
         uniforms[binding.sampler] = { value: texture };
     }
     return uniforms;
+}
+
+function parseNumberList(value, fallback, expectedLength)
+{
+    if (!value) return fallback;
+    const parsed = value.split(',').map(v => parseFloat(v.trim()));
+    if (parsed.length !== expectedLength || parsed.some(v => !Number.isFinite(v))) return fallback;
+    return parsed;
+}
+
+function parseLightInputMap(innerXml)
+{
+    const inputs = new Map();
+    const inputRe = /<input\b([^>]*)\/>/g;
+    let inputMatch;
+    while ((inputMatch = inputRe.exec(innerXml || '')) !== null) {
+        const attrs = inputMatch[1];
+        const name = readXmlAttr(attrs, 'name');
+        const value = readXmlAttr(attrs, 'value');
+        if (name && value !== '') inputs.set(name, value);
+    }
+    return inputs;
+}
+
+function angleInputToCos(value, fallback)
+{
+    const parsed = parseFloat(value);
+    if (!Number.isFinite(parsed)) return fallback;
+    if (parsed >= -1.0 && parsed <= 1.0) return parsed;
+    return Math.cos(parsed * Math.PI / 180.0);
+}
+
+function normalizeVec3(values, fallback)
+{
+    const length = Math.hypot(values[0], values[1], values[2]);
+    if (length <= 1.0e-8) return fallback;
+    return values.map(v => v / length);
+}
+
+function extractMtlxLights(mtlxText)
+{
+    const lights = [];
+    const lightRe = /<(point_light|directional_light|spot_light)\b([^>]*)>([\s\S]*?)<\/\1>|<(point_light|directional_light|spot_light)\b([^>]*)\/>/g;
+    let lightMatch;
+    while ((lightMatch = lightRe.exec(mtlxText || '')) !== null) {
+        const kind = lightMatch[1] || lightMatch[4];
+        const attrs = lightMatch[2] || lightMatch[5] || '';
+        const inner = lightMatch[3] || '';
+        const inputs = parseLightInputMap(inner);
+        const type = kind === 'directional_light' ? 1 : kind === 'spot_light' ? 2 : 0;
+        lights.push({
+            name: readXmlAttr(attrs, 'name') || kind,
+            type,
+            position: parseNumberList(inputs.get('position'), [0, 5, 0], 3),
+            direction: normalizeVec3(parseNumberList(inputs.get('direction'), [0, -1, 0], 3), [0, -1, 0]),
+            color: parseNumberList(inputs.get('color'), [1, 1, 1], 3),
+            intensity: Number.parseFloat(inputs.get('intensity') ?? '1') || 0,
+            decayRate: Number.parseFloat(inputs.get('decay_rate') ?? '2') || 0,
+            innerCone: angleInputToCos(inputs.get('inner_angle'), Math.cos(20.0 * Math.PI / 180.0)),
+            outerCone: angleInputToCos(inputs.get('outer_angle'), Math.cos(30.0 * Math.PI / 180.0)),
+        });
+    }
+    return lights;
+}
+
+function extractMtlxLightOverrides(search)
+{
+    if (!search.has('mtlx_lights_json')) return [];
+    try {
+        const raw = JSON.parse(search.get('mtlx_lights_json'));
+        if (!Array.isArray(raw)) return [];
+        return raw.map(light => ({
+            name: String(light.name || 'cli_light'),
+            type: light.type === 'directional' || light.type === 1 ? 1 : light.type === 'spot' || light.type === 2 ? 2 : 0,
+            position: Array.isArray(light.position) ? parseNumberList(light.position.join(','), [0, 5, 0], 3) : [0, 5, 0],
+            direction: normalizeVec3(Array.isArray(light.direction) ? parseNumberList(light.direction.join(','), [0, -1, 0], 3) : [0, -1, 0], [0, -1, 0]),
+            color: Array.isArray(light.color) ? parseNumberList(light.color.join(','), [1, 1, 1], 3) : [1, 1, 1],
+            intensity: Number.parseFloat(light.intensity ?? '1') || 0,
+            decayRate: Number.parseFloat(light.decay_rate ?? light.decayRate ?? '2') || 0,
+            innerCone: angleInputToCos(String(light.inner_angle ?? light.innerCone ?? ''), Math.cos(20.0 * Math.PI / 180.0)),
+            outerCone: angleInputToCos(String(light.outer_angle ?? light.outerCone ?? ''), Math.cos(30.0 * Math.PI / 180.0)),
+        }));
+    } catch (e) {
+        console.warn('[mtlx-route] invalid mtlx_lights_json:', e?.message || e);
+        return [];
+    }
+}
+
+function createMtlxLightUniforms()
+{
+    const maxLights = Math.max(1, Number(materialDefines.MAX_MTLX_LIGHTS) || 1);
+    const padded = [...mtlxRouteLights];
+    while (padded.length < maxLights) {
+        padded.push({ type: 0, position: [0, 0, 0], direction: [0, -1, 0], color: [0, 0, 0], intensity: 0, decayRate: 2, innerCone: 1, outerCone: 1 });
+    }
+    return {
+        mtlxLightCount:      { value: Math.min(mtlxRouteLights.length, maxLights) },
+        mtlxLightType:       { value: padded.slice(0, maxLights).map(l => l.type) },
+        mtlxLightPosition:   { value: padded.slice(0, maxLights).map(l => array_to_vector3(l.position)) },
+        mtlxLightDirection:  { value: padded.slice(0, maxLights).map(l => array_to_vector3(l.direction)) },
+        mtlxLightColor:      { value: padded.slice(0, maxLights).map(l => array_to_vector3(l.color)) },
+        mtlxLightIntensity:  { value: padded.slice(0, maxLights).map(l => l.intensity) },
+        mtlxLightDecayRate:  { value: padded.slice(0, maxLights).map(l => l.decayRate) },
+        mtlxLightInnerCone:  { value: padded.slice(0, maxLights).map(l => l.innerCone) },
+        mtlxLightOuterCone:  { value: padded.slice(0, maxLights).map(l => l.outerCone) },
+    };
 }
 
 async function loadGeneratedRegistryModule()
@@ -500,7 +612,7 @@ async function generateMtlxGlsl(mtlxText) {
         '}\n' +
         '#define u_envMatrix    mtlxEnvMatrix()\n' +
         '#define u_envRadiance  envMapLatLong\n' +
-        '#define u_envIrradiance envMapLatLong\n' +
+        '#define u_envIrradiance envMapIrradiance\n' +
         '#define u_envLightIntensity skyPower\n' +
         '#define u_envRadianceMips   1\n' +
         '#define u_envRadianceSamples 1\n' +
@@ -571,6 +683,7 @@ async function generateMtlxRouteDispatch(mtlxText) {
     glsl = glsl.replace(/^[ \t]*sampler2D[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*;[ \t]*\r?\n/gm, 'uniform sampler2D $1;\n');
     const envPreamble =
         'uniform sampler2D envMapLatLong;\n' +
+        'uniform sampler2D envMapIrradiance;\n' +
         'mat4 mtlxEnvMatrix() {\n' +
         '    float a = 1.57079632679;\n' +
         '    float c = cos(a), s = sin(a);\n' +
@@ -578,7 +691,7 @@ async function generateMtlxRouteDispatch(mtlxText) {
         '}\n' +
         '#define u_envMatrix    mtlxEnvMatrix()\n' +
         '#define u_envRadiance  envMapLatLong\n' +
-        '#define u_envIrradiance envMapLatLong\n' +
+        '#define u_envIrradiance envMapIrradiance\n' +
         '#define u_envLightIntensity skyPower\n' +
         '#define u_envRadianceMips   1\n' +
         '#define u_envRadianceSamples 1\n' +
@@ -640,6 +753,7 @@ var neutralMaterial = null;
 var directionalLight, ambientLight;
 var camera_initialized = false;
 var env_map_texture = null;
+var env_irradiance_texture = null;
 
 var MESH_SURFACE;
 var MESH_PROPS;
@@ -738,6 +852,11 @@ var scene_names = {
             mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
             if (mtlxRouteTextureBindings.length > 0) {
                 console.log('[mtlx-route] textures', mtlxRouteTextureBindings.map(t => `${t.sampler}=${t.source}`).join(', '));
+            }
+            mtlxRouteLights = [...extractMtlxLights(mtlxText), ...extractMtlxLightOverrides(search)];
+            materialDefines.MAX_MTLX_LIGHTS = Math.max(1, mtlxRouteLights.length);
+            if (mtlxRouteLights.length > 0) {
+                console.log('[mtlx-route] lights', mtlxRouteLights.map(l => `${l.name}:type=${l.type},intensity=${l.intensity}`).join(', '));
             }
             const p = result.mtlxParams;
             const hasTransmission = p.transmissionWeight > 0;
@@ -1021,9 +1140,12 @@ function create_materials()
                 sunAngularSize:                      { value: params.sunAngularSize, },
                 sunColor:                            { value: array_to_vector3(params.sunColor) },
                 sunDir:                              { value: array_to_vector3([0,0,0]) },
+                mtlxDisableSun:                      { value: params.env_map_provided === true },
+                ...createMtlxLightUniforms(),
 
                 // Raw equirectangular env map for MaterialX IBL (sampler2D, not samplerCube).
                 envMapLatLong:                       { value: null },
+                envMapIrradiance:                    { value: null },
                 ...createMtlxRouteTextureUniforms(),
 
                 // Material params are now folded as globals by the MaterialX WASM generator.
@@ -1319,6 +1441,7 @@ function load_geometry(scene_name)
         pathtracedMaterial.envMap                = env_map_texture;
         pathtracedMaterial.uniforms.envMap.value = env_map_texture;
         pathtracedMaterial.uniforms.envMapLatLong.value = env_map_texture;
+        pathtracedMaterial.uniforms.envMapIrradiance.value = env_irradiance_texture || env_map_texture;
         pathtracedMaterial_legacy.envMap                = env_map_texture;
         pathtracedMaterial_legacy.uniforms.envMap.value = env_map_texture;
     }
@@ -1486,15 +1609,45 @@ function load_scene(scene_name)
     // Load env map
     if (!env_map_texture)
     {
-        const textureLoader = new TextureLoader();
-        let env_map_path = 'textures/envmaps/etzwihl_16k.jpg';
-        let textureEquirec = textureLoader.load(env_map_path,
-            function (texture) {
-                console.log('-> loaded env map: ', env_map_path);
-                    env_map_texture = texture;
+        const failStartup = (message) => {
+            console.error(message);
+            window.__openpbrShaderError = message;
+            window.__openpbrReady = true;
+        };
+        const normalizeAssetPath = (path) => {
+            if (!path) return path;
+            if (/^(?:[a-z]+:)?\/\//i.test(path)) return path;
+            if (path.startsWith('/')) return import.meta.env.BASE_URL.replace(/\/$/, '') + path;
+            return path;
+        };
+        const loadEnvTexture = (path, onLoad) => {
+            const assetPath = normalizeAssetPath(path);
+            const loader = /\.hdr(?:$|[?#])/i.test(assetPath) ? new RGBELoader() : new TextureLoader();
+            return loader.load(assetPath, texture => {
+                texture.mapping = EquirectangularReflectionMapping;
+                if (!/\.hdr(?:$|[?#])/i.test(assetPath)) texture.colorSpace = SRGBColorSpace;
+                onLoad(texture);
+            }, undefined, err => {
+                failStartup(`[envmap] failed to load ${assetPath}: ${err?.message || err || 'unknown error'}`);
+            });
+        };
+        const env_map_path = params.env_map_path || 'textures/envmaps/etzwihl_16k.jpg';
+        loadEnvTexture(env_map_path, texture => {
+            console.log('-> loaded env map: ', env_map_path);
+            env_map_texture = texture;
+            const irradiancePath = params.env_irradiance_path || '';
+            if (irradiancePath) {
+                loadEnvTexture(irradiancePath, irradianceTexture => {
+                    console.log('-> loaded env irradiance map: ', irradiancePath);
+                    env_irradiance_texture = irradianceTexture;
                     load_geometry(scene_name);
-                }
-        );
+                });
+            }
+            else {
+                env_irradiance_texture = env_map_texture;
+                load_geometry(scene_name);
+            }
+        });
     }
     else
         load_geometry(scene_name);
@@ -1908,6 +2061,7 @@ function sync_shader_uniforms(uniforms)
     uniforms.sunColor.value.copy(get_vector3(               params.sunColor));
     updateSunDir();
     uniforms.sunDir.value.copy(get_vector3(                 params.sunDir));
+    if (uniforms.mtlxDisableSun) uniforms.mtlxDisableSun.value = params.env_map_provided === true;
 
     // Extra uniforms for the legacy pathtracer (material params as uniforms, not GLSL globals).
     if (uniforms.base_weight !== undefined) {
@@ -1945,7 +2099,10 @@ function render()
 {
     if (!LOADED)
     {
-        console.log('not LOADED')
+        if (!window.__openpbrLoggedNotLoaded) {
+            console.log('not LOADED');
+            window.__openpbrLoggedNotLoaded = true;
+        }
         requestAnimationFrame( render );
         return;
     }

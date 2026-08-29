@@ -167,6 +167,31 @@ function copyMtlxWithRelativeFiles(mtlxPath, materialId) {
     return `/mtlx-input/${materialId}/${basename(mtlxPath)}`;
 }
 
+function copyPublicInputFile(sourcePath, publicSubdir) {
+    if (!sourcePath || /^(?:[a-z]+:)?\/\//i.test(sourcePath) || sourcePath.startsWith('/')) return sourcePath;
+    const fullSource = resolve(process.cwd(), sourcePath);
+    if (!existsSync(fullSource)) return sourcePath;
+    const publicRoot = resolve(process.cwd(), 'public');
+    const targetDir = join(publicRoot, 'mtlx-input', publicSubdir);
+    mkdirSync(targetDir, { recursive: true });
+    const targetFile = join(targetDir, basename(fullSource));
+    copyFileSync(fullSource, targetFile);
+    return `/mtlx-input/${publicSubdir}/${basename(fullSource)}`;
+}
+
+function prepareEnvAsset(sourcePath, publicSubdir) {
+    if (!sourcePath) return '';
+    if (/^(?:[a-z]+:)?\/\//i.test(sourcePath) || sourcePath.startsWith('/')) return sourcePath;
+    if (!existsSync(sourcePath)) return sourcePath;
+    const publicRoot = resolve(process.cwd(), 'public');
+    const targetDir = join(publicRoot, 'mtlx-input', publicSubdir);
+    rmSync(targetDir, { recursive: true, force: true });
+    mkdirSync(targetDir, { recursive: true });
+    const targetFile = join(targetDir, basename(sourcePath));
+    copyFileSync(sourcePath, targetFile);
+    return `mtlx-input/${publicSubdir}/${basename(sourcePath)}`;
+}
+
 // ---------------------------------------------------------------------------
 // Parse des arguments CLI
 // ---------------------------------------------------------------------------
@@ -214,15 +239,23 @@ const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').
 const mtlxPath      = options.mtlx    ?? null;
 const denoiseEnabled = (options.denoise ?? 'true') !== 'false';
 const oidnPath       = options.oidn    ?? 'D:\\oidn-2.5.0\\bin\\oidnDenoise.exe';
+const DEFAULT_ENV_MAP = 'D:\\WebGL2\\MaterialX\\MaterialX-rva\\resources\\Lights\\san_giuseppe_bridge.hdr';
+const DEFAULT_ENV_IRRADIANCE = 'D:\\WebGL2\\MaterialX\\MaterialX-rva\\resources\\Lights\\irradiance\\san_giuseppe_bridge.hdr';
+const envMapInput = options.envmap ?? options.env_map_path ?? DEFAULT_ENV_MAP;
+const envIrradianceInput = options.env_irradiance_path ?? DEFAULT_ENV_IRRADIANCE;
 delete options.port; delete options.gpu; delete options.headless;
 delete options.browser; delete options['launch-timeout-ms'];
 delete options['start-server']; delete options.screenshot; delete options.output;
 delete options['wait-samples']; delete options['spp']; delete options.mode; delete options.size;
 delete options.mtlx; delete options.denoise; delete options.oidn;
+delete options.envmap; delete options.env_map_path; delete options.env_irradiance_path;
 
 if (!options.renderer_mode) options.renderer_mode = mode;
 if (options.strict_generated_contract === undefined) options.strict_generated_contract = 'true';
 if (options.legacy_comparison === undefined) options.legacy_comparison = 'false';
+options.env_map_path = prepareEnvAsset(envMapInput, '_env');
+options.env_irradiance_path = prepareEnvAsset(envIrradianceInput, '_env/irradiance');
+options.env_map_provided = 'true';
 // --scene is a shorthand alias for the scene_name param
 if (options.scene) { options.scene_name ??= options.scene; delete options.scene; }
 
@@ -428,7 +461,20 @@ if (isPathtracing && waitSamples > 0) {
     const deadline = Date.now() + 3000_000;
     let lastSpp = -1;
     while (true) {
-        const spp = await page.evaluate(() => window.__openpbrSamples ?? 0);
+        let spp = 0;
+        try {
+            spp = await page.evaluate(() => window.__openpbrSamples ?? 0);
+        } catch (err) {
+            const message = err?.message ?? String(err);
+            if (/Execution context was destroyed|Cannot find context|navigation/i.test(message)) {
+                process.stdout.write('\n  page reload detected; waiting for shaders again...\n');
+                await page.waitForLoadState('domcontentloaded', { timeout: 120_000 }).catch(() => {});
+                await page.waitForFunction(() => window.__openpbrReady === true, null, { timeout: 1200_000 });
+                lastSpp = -1;
+                continue;
+            }
+            throw err;
+        }
         if (spp !== lastSpp) {
             process.stdout.write(`\r  spp: ${spp} / ${waitSamples}`);
             lastSpp = spp;

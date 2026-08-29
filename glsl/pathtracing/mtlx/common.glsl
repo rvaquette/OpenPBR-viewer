@@ -62,6 +62,17 @@ uniform float sunPower;
 uniform float sunAngularSize;
 uniform vec3 sunColor;
 uniform vec3 sunDir;
+uniform bool mtlxDisableSun;
+
+uniform int mtlxLightCount;
+uniform int mtlxLightType[MAX_MTLX_LIGHTS];
+uniform vec3 mtlxLightPosition[MAX_MTLX_LIGHTS];
+uniform vec3 mtlxLightDirection[MAX_MTLX_LIGHTS];
+uniform vec3 mtlxLightColor[MAX_MTLX_LIGHTS];
+uniform float mtlxLightIntensity[MAX_MTLX_LIGHTS];
+uniform float mtlxLightDecayRate[MAX_MTLX_LIGHTS];
+uniform float mtlxLightInnerCone[MAX_MTLX_LIGHTS];
+uniform float mtlxLightOuterCone[MAX_MTLX_LIGHTS];
 
 //////////////////////////////////////////////////////
 // UVs

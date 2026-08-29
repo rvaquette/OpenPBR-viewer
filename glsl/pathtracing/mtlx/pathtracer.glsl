@@ -315,6 +315,55 @@ float sunPdf(in vec3 woutputL, in vec3 woutputW)
     return 1.0/solid_angle;
 }
 
+float mtlxLightTotalPower(int index)
+{
+    return length(mtlxLightColor[index] * mtlxLightIntensity[index]);
+}
+
+float mtlxLightsTotalPower()
+{
+    float power = 0.0;
+    for (int i = 0; i < MAX_MTLX_LIGHTS; ++i)
+    {
+        if (i >= mtlxLightCount) break;
+        power += mtlxLightTotalPower(i);
+    }
+    return power;
+}
+
+vec3 mtlxLightSample(int index, in vec3 pW, in Basis basis,
+                     out vec3 woutputL, out vec3 woutputW, out float maxDistance)
+{
+    int lightType = mtlxLightType[index];
+    vec3 intensity = mtlxLightColor[index] * mtlxLightIntensity[index];
+    maxDistance = HUGE_DIST;
+
+    if (lightType == 1)
+    {
+        woutputW = safe_normalize(-mtlxLightDirection[index]);
+    }
+    else
+    {
+        vec3 toLight = mtlxLightPosition[index] - pW;
+        float distanceToLight = max(length(toLight), DENOM_TOLERANCE);
+        woutputW = toLight / distanceToLight;
+        maxDistance = max(0.0, distanceToLight - 2.0 * RAY_OFFSET);
+        float attenuation = pow(distanceToLight + 1.0, mtlxLightDecayRate[index] + DENOM_TOLERANCE);
+        intensity /= max(attenuation, DENOM_TOLERANCE);
+
+        if (lightType == 2)
+        {
+            float cosDir = dot(woutputW, -safe_normalize(mtlxLightDirection[index]));
+            float low = min(mtlxLightInnerCone[index], mtlxLightOuterCone[index]);
+            float high = mtlxLightInnerCone[index];
+            intensity *= smoothstep(low, high, cosDir);
+        }
+    }
+
+    woutputL = worldToLocal(woutputW, basis);
+    return intensity;
+}
+
 vec3 skyRadiance(in vec3 woutputW)
 {
     vec4 env = textureLod(envMap, vec3(woutputW.x, woutputW.yz), 0.0);
@@ -346,26 +395,56 @@ vec3 LiDirect(in vec3 pW, in Basis basis,
               out float lightPdf,
               inout uint rndSeed)
 {
-    // Do 1-sample MIS between uniform sky and sun sampling
+    // Do 1-sample MIS between sky, sun, and MaterialX document lights.
     vec3 Li;
     {
-        float w_sun = sunTotalPower();
+        float w_mtlx = mtlxLightsTotalPower();
+        float w_sun = (mtlxDisableSun || mtlxLightCount > 0) ? 0.0 : sunTotalPower();
         float w_sky = skyTotalPower();
-        float P_sun = w_sun / (w_sun + w_sky);
-        float P_sky = max(0.0, 1.0 - P_sun);
+        float w_total = max(DENOM_TOLERANCE, w_sun + w_sky + w_mtlx);
+        float P_sun = w_sun / w_total;
+        float P_sky = w_sky / w_total;
+        float P_mtlx = w_mtlx / w_total;
         float pdf_sun, pdf_sky;
         float r = rand(rndSeed);
+        float maxDistance = HUGE_DIST;
         if (r < P_sun)
         {
             Li = sunSample(basis, shadowL, shadowW, pdf_sun, rndSeed);
             Li += skyRadiance(shadowW);
             pdf_sky = skyPdf(shadowL, shadowW);
         }
-        else
+        else if (r < P_sun + P_sky)
         {
             Li = skySample(basis, shadowL, shadowW, pdf_sky, rndSeed);
-            Li += sunRadiance(shadowW);
+            if (w_sun > 0.0) Li += sunRadiance(shadowW);
             pdf_sun = sunPdf(shadowL, shadowW);
+        }
+        else
+        {
+            float target = rand(rndSeed) * max(w_mtlx, DENOM_TOLERANCE);
+            float accum = 0.0;
+            int selected = 0;
+            for (int i = 0; i < MAX_MTLX_LIGHTS; ++i)
+            {
+                if (i >= mtlxLightCount) break;
+                accum += mtlxLightTotalPower(i);
+                if (target <= accum)
+                {
+                    selected = i;
+                    break;
+                }
+            }
+            float selectedPower = max(mtlxLightTotalPower(selected), DENOM_TOLERANCE);
+            Li = mtlxLightSample(selected, pW, basis, shadowL, shadowW, maxDistance);
+            pdf_sun = sunPdf(shadowL, shadowW);
+            pdf_sky = skyPdf(shadowL, shadowW);
+            lightPdf = P_mtlx * selectedPower / max(w_mtlx, DENOM_TOLERANCE);
+            if (shadowL.z < 0.0) return vec3(0.0);
+            if (maxComponent(Li) < RADIANCE_EPSILON) return vec3(0.0);
+            vec3 shadowOrigin = pW + basis.nW * sign(dot(shadowW, basis.nW)) * RAY_OFFSET;
+            float visibility = TraceShadow(shadowOrigin, shadowW, maxDistance);
+            return visibility * Li;
         }
         lightPdf = P_sun*pdf_sun + P_sky*pdf_sky; // Light PDF according to 1-sample MIS
     }
@@ -382,10 +461,11 @@ float LiPDF(in vec3 shadowW, in Basis basis)
     vec3 shadowL = worldToLocal(shadowW, basis);
     float pdf_sky = skyPdf(shadowL, shadowW);
     float pdf_sun = sunPdf(shadowL, shadowW);
-    float w_sun = sunTotalPower();
+    float w_sun = (mtlxDisableSun || mtlxLightCount > 0) ? 0.0 : sunTotalPower();
     float w_sky = skyTotalPower();
-    float P_sun = w_sun / (w_sun + w_sky);
-    float P_sky = max(0.0, 1.0 - P_sun);
+    float w_total = max(DENOM_TOLERANCE, w_sun + w_sky);
+    float P_sun = w_sun / w_total;
+    float P_sky = w_sky / w_total;
     float lightPdf = P_sun*pdf_sun + P_sky*pdf_sky; // Light PDF according to 1-sample MIS
     return lightPdf;
 }
