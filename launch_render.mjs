@@ -355,9 +355,22 @@ await page.goto(url, { waitUntil: 'domcontentloaded' });
 // Masquer l'UI (GUI, stats, overlays) pour un screenshot propre
 if (headless) {
     await page.addStyleTag({ content: `
-        #info, #samples, #output, #shader-error, #stats-panel, .lil-gui { display: none !important; }
-        body > div[style*="position:fixed"] { display: none !important; }
+        #info, #samples, #output, #progress_overlay, #shader-error, #stats-panel, .lil-gui { display: none !important; }
+        body > div:not(:has(canvas)), body > div[style*="position"] { display: none !important; }
     `});
+}
+
+async function hideUiForScreenshot() {
+    if (!headless) return;
+    await page.evaluate(() => {
+        for (const element of document.body.children) {
+            if (element.tagName.toLowerCase() === 'canvas') continue;
+            element.setAttribute('data-openpbr-headless-hidden', 'true');
+            element.style.setProperty('display', 'none', 'important');
+            element.style.setProperty('visibility', 'hidden', 'important');
+            element.style.setProperty('pointer-events', 'none', 'important');
+        }
+    });
 }
 
 // Attendre la fin de la compilation des shaders
@@ -394,6 +407,7 @@ if (isPathtracing && waitSamples > 0) {
 }
 try {
     await sleep(500); // let GPU compositor finish before screenshot
+    await hideUiForScreenshot();
     await page.screenshot({ path: screenshotPath, fullPage: false, timeout: 60_000 });
     console.log(`Image enregistrée : ${screenshotPath}`);
 

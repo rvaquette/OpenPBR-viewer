@@ -200,7 +200,13 @@ var mtlxRouteDispatchGlsl = '';
 var mtlxRouteMaterialSummary = {
     opaque: true,
     thinWalled: false,
-    emission: [0.0, 0.0, 0.0]
+    emission: [0.0, 0.0, 0.0],
+    thinFilmWeight: 0.0,
+    thinFilmThicknessNm: 0.0,
+    thinFilmIor: 1.5,
+    specularIor: 1.5,
+    specularRoughness: 0.3,
+    transmissionWeight: 0.0
 };
 
 const LEGACY_COMPARISON_ENABLED_BY_DEFAULT = false;
@@ -340,6 +346,12 @@ function assemble_mtlx_route_dispatch()
     const opaque = mtlxRouteMaterialSummary.opaque ? 'true' : 'false';
     const thinWalled = mtlxRouteMaterialSummary.thinWalled ? 'true' : 'false';
     const emission = mtlxRouteMaterialSummary.emission;
+    const thinFilmWeight = mtlxRouteMaterialSummary.thinFilmWeight;
+    const thinFilmThicknessNm = mtlxRouteMaterialSummary.thinFilmThicknessNm;
+    const thinFilmIor = mtlxRouteMaterialSummary.thinFilmIor;
+    const specularIor = mtlxRouteMaterialSummary.specularIor;
+    const specularRoughness = mtlxRouteMaterialSummary.specularRoughness;
+    const transmissionWeight = mtlxRouteMaterialSummary.transmissionWeight;
     const bridge = `
 vec3 mtlx_openpbr_bsdf_evaluate(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL, inout float pdf_woutputL) {
     return mtlxGenEvaluateBsdf(pW, basis, winputL, woutputL, MATERIAL_OPENPBR, pdf_woutputL);
@@ -351,6 +363,12 @@ void mtlx_openpbr_prepare(in vec3 pW, in Basis basis, in vec3 winputL, inout uin
 bool mtlx_openpbr_is_opaque() { return ${opaque}; }
 bool mtlx_openpbr_is_thinwalled() { return ${thinWalled}; }
 vec3 mtlx_openpbr_emission() { return vec3(${emission[0].toFixed(8)}, ${emission[1].toFixed(8)}, ${emission[2].toFixed(8)}); }
+float mtlx_openpbr_thin_film_weight() { return ${thinFilmWeight.toFixed(8)}; }
+float mtlx_openpbr_thin_film_thickness_nm() { return ${thinFilmThicknessNm.toFixed(8)}; }
+float mtlx_openpbr_thin_film_ior() { return ${thinFilmIor.toFixed(8)}; }
+float mtlx_openpbr_specular_ior() { return ${specularIor.toFixed(8)}; }
+float mtlx_openpbr_specular_roughness() { return ${specularRoughness.toFixed(8)}; }
+float mtlx_openpbr_transmission_weight() { return ${transmissionWeight.toFixed(8)}; }
 `;
     return mtlxRouteDispatchGlsl + bridge + glsl_mtlx_route_pathtracer;
 }
@@ -533,12 +551,18 @@ async function generateMtlxRouteDispatch(mtlxText) {
     };
     const emissionColor = extractVec3Param('emission_color', [1, 1, 1]);
     const emissionScale = extractParam('emission_luminance', extractParam('emission', 0));
+    const thinFilmThickness = extractParam('thin_film_thickness', 0);
+    const thinFilmIor = extractParam('thin_film_ior', extractParam('thin_film_IOR', 1.5));
     const mtlxParams = {
-        transmissionWeight:   extractParam('transmission_weight',   0),
+        transmissionWeight:   extractParam('transmission_weight', extractParam('transmission', 0)),
         transmissionDepth:    extractParam('transmission_depth',    0),
         dispersionScale:      extractParam('transmission_dispersion_scale', 0),
         thinFilmWeight:       extractParam('thin_film_weight',      0),
-        geometry_thin_walled: extractParam('geometry_thin_walled', false),
+        thinFilmThicknessNm:  thinFilmThickness * 1000.0,
+        thinFilmIor:          thinFilmIor,
+        specularIor:          extractParam('specular_ior', extractParam('specular_IOR', 1.5)),
+        specularRoughness:    extractParam('specular_roughness', 0.3),
+        geometry_thin_walled: extractParam('geometry_thin_walled', extractParam('thin_walled', false)),
         emission:             emissionColor.map(v => v * emissionScale),
     };
 
@@ -659,7 +683,13 @@ var scene_names = {
             mtlxRouteMaterialSummary = {
                 opaque: !hasTransmission && p.geometry_thin_walled !== true,
                 thinWalled: p.geometry_thin_walled === true,
-                emission: p.emission
+                emission: p.emission,
+                thinFilmWeight: p.thinFilmWeight,
+                thinFilmThicknessNm: p.thinFilmThicknessNm,
+                thinFilmIor: p.thinFilmIor,
+                specularIor: p.specularIor,
+                specularRoughness: p.specularRoughness,
+                transmissionWeight: p.transmissionWeight
             };
             materialDefines.VOLUME_ENABLED       = hasTransmission && p.transmissionDepth > 0 && !p.geometry_thin_walled;
             materialDefines.TRANSMISSION_ENABLED = hasTransmission && p.dispersionScale > 0;

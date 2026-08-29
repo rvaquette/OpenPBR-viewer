@@ -180,6 +180,8 @@ float TraceShadow(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance)
     vec3 pW, nsW, ngW, TsW, baryCoord;
     bool hit = trace(rayOrigin, rayDir, maxDistance,
                      pW, nsW, ngW, TsW, baryCoord, material);
+    if (hit && material == MATERIAL_OPENPBR && !mtlx_openpbr_is_opaque() && mtlx_openpbr_is_thinwalled())
+        return 1.0;
     return hit ? 0.0 : 1.0;
 }
 
@@ -359,7 +361,8 @@ vec3 LiDirect(in vec3 pW, in Basis basis,
     }
     if (shadowL.z < 0.0) return vec3(0.0);
     if (maxComponent(Li) < RADIANCE_EPSILON) return vec3(0.0);
-    float visibility = TraceShadow(pW, shadowW, HUGE_DIST);
+    vec3 shadowOrigin = pW + basis.nW * sign(dot(shadowW, basis.nW)) * RAY_OFFSET;
+    float visibility = TraceShadow(shadowOrigin, shadowW, HUGE_DIST);
     return visibility * Li;
 }
 
@@ -382,6 +385,28 @@ vec3 evaluateEdf(in vec3 pW, in Basis basis, in vec3 winputL)
     // Emission is provided by the material-layer hook so the route stays
     // model-agnostic (the generated dispatch folds per-model emission params).
     return mtlx_openpbr_emission();
+}
+
+vec3 evaluateThinFilmEnvironmentReflection(in Basis basis, in vec3 winputL)
+{
+    if (!mtlx_openpbr_is_thinwalled()) return vec3(0.0);
+    if (mtlx_openpbr_transmission_weight() <= 0.0) return vec3(0.0);
+    if (mtlx_openpbr_thin_film_weight() <= 0.0) return vec3(0.0);
+    if (mtlx_openpbr_specular_roughness() > 0.02) return vec3(0.0);
+
+    float cosI = clamp(abs(winputL.z), 1.0e-4, 1.0);
+    FresnelData fd = mx_init_fresnel_dielectric(
+        max(mtlx_openpbr_specular_ior(), 1.0 + 1.0e-3),
+        mtlx_openpbr_thin_film_thickness_nm(),
+        mtlx_openpbr_thin_film_ior());
+    vec3 F = mtlx_openpbr_thin_film_weight() * mx_compute_fresnel(cosI, fd);
+
+    vec3 reflectedL = reflect(-winputL, vec3(0.0, 0.0, 1.0));
+    if (reflectedL.z <= 0.0) return vec3(0.0);
+    vec3 reflectedW = localToWorld(reflectedL, basis);
+    vec3 envRadiance = sunRadiance(reflectedW) + skyRadiance(reflectedW);
+    envRadiance = max(envRadiance, 0.25 * skyPower * skyColor);
+    return F * envRadiance;
 }
 
 
@@ -647,6 +672,14 @@ void main()
             thin_walled = mtlx_openpbr_is_thinwalled();
         }
 
+        if (material == MATERIAL_OPENPBR)
+        {
+            vec3 Ltf = throughput * evaluateThinFilmEnvironmentReflection(basis, winputL);
+            float maxLtf = maxComponent(Ltf);
+            if (maxLtf > firefly_clamp) Ltf *= firefly_clamp / maxLtf;
+            L += Ltf;
+        }
+
         // Sample BSDF for the continuation ray direction
         Volume internal_medium;
         vec3 surface_throughput;
@@ -671,9 +704,6 @@ void main()
             if (maxLe > firefly_clamp) Le *= firefly_clamp / maxLe;
             L += Le;
         }
-
-        // Prepare for tracing the direct lighting and continuation rays
-        pW += NgW * sign(dot(dW, NgW)) * RAY_OFFSET; // perturb vertex into geometric half-space of scattered ray
 
         // Check if a transmission between dielectric media has occurred,
         // and update the current_medium and dispersion state accordingly.
@@ -711,6 +741,9 @@ void main()
                 L += Lcontrib;
             }
         } // direct lighting
+
+        // Prepare for tracing the continuation ray.
+        pW += NgW * sign(dot(dW, NgW)) * RAY_OFFSET; // perturb vertex into geometric half-space of scattered ray
 
         // Update path continuation throughput
         throughput *= surface_throughput;
