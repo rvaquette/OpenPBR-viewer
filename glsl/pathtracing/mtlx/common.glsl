@@ -23,6 +23,7 @@ uniform sampler2D tangentAttribute_surface;
 uniform sampler2D tangentAttribute_props;
 uniform sampler2D uvAttribute_surface;
 uniform sampler2D uvAttribute_props;
+uniform sampler2D materialSlotAttribute_surface;
 uniform bool has_normals_surface;
 uniform bool has_tangents_surface;
 uniform bool has_uvs_surface;
@@ -39,6 +40,7 @@ uniform sampler2D ground_texture;
 uniform float accumulation_weight;
 uniform float samples;
 uniform bool wireframe;
+uniform bool debug_material_slots;
 uniform vec3 neutral_color;
 uniform bool smooth_normals;
 uniform int bounces;
@@ -159,6 +161,7 @@ struct Basis
     vec3 bW; // aligned with the y-axis in local space
     vec3 baryCoord;
     vec2 texCoord;
+    int materialSlot;
 };
 
 vec3 normalToTangent(in vec3 N)
@@ -180,10 +183,11 @@ Basis makeBasis(in vec3 nW)
     basis.bW = cross(basis.nW, basis.tW);
     basis.baryCoord = vec3(0.0);
     basis.texCoord = vec2(0.0);
+    basis.materialSlot = 0;
     return basis;
 }
 
-Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 baryCoord, in vec2 texCoord)
+Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 baryCoord, in vec2 texCoord, in int materialSlot)
 {
     Basis basis;
     basis.nW = safe_normalize(nW);
@@ -191,6 +195,7 @@ Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 baryCoord, in vec2 texCoord)
     basis.bW = cross(basis.nW, basis.tW);
     basis.baryCoord = baryCoord;
     basis.texCoord = texCoord;
+    basis.materialSlot = materialSlot;
     return basis;
 }
 

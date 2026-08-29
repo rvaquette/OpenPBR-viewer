@@ -3,6 +3,7 @@
 import { Scene,
     Vector2, Vector3, Matrix4, Box3, Color,
     Mesh, MeshBasicMaterial, MeshStandardMaterial, MeshLambertMaterial, ShaderMaterial,
+    Float32BufferAttribute,
     PlaneGeometry,
     PerspectiveCamera, OrthographicCamera,
     DirectionalLight, AmbientLight, DoubleSide,
@@ -64,13 +65,14 @@ class MeshLoader
         this.result = null;
     }
 
-    async load(path)
+    async load(path, options = {})
     {
         if (this.result) Promise.resolve(this.result);
 
         let gltf = await this.loader.loadAsync(path);
         let S = Array.isArray( gltf.scene ) ? gltf.scene : [ gltf.scene ];
         const meshes = [];
+        const slotByObject = options.materialSlotByObject || new Map();
 
         for ( let i = 0, l = S.length; i < l; i++ )
         {
@@ -78,6 +80,11 @@ class MeshLoader
                 {
                     if (c.isMesh)
                     {
+                        const slot = slotByObject.get(c.name) ?? slotByObject.get(c.material?.name) ?? 0;
+                        if (options.assignMaterialSlots) {
+                            const count = c.geometry.attributes.position.count;
+                            c.geometry.setAttribute('mtlxMaterialSlot', new Float32BufferAttribute(new Float32Array(count).fill(slot), 1));
+                        }
                         meshes.push(c);
                     }
                 }
@@ -87,9 +94,11 @@ class MeshLoader
         if (meshes.length > 0)
         {
             const generator = new StaticGeometryGenerator(meshes);
-            generator.attributes = [ 'position', 'color', 'normal', 'tangent', 'uv', 'uv2' ];
+            generator.attributes = [ 'position', 'color', 'normal', 'tangent', 'uv', 'uv2', 'mtlxMaterialSlot' ];
             generator.applyWorldTransforms = false;
-            let merged_mesh = new Mesh(generator.generate(), new MeshStandardMaterial());
+            const mergedGeometry = generator.generate();
+            mergedGeometry.clearGroups();
+            let merged_mesh = new Mesh(mergedGeometry, new MeshStandardMaterial());
 
             let bvh = new MeshBVH( merged_mesh.geometry, { strategy: SAH, maxLeafTris: 1 } );
             this.result = {scene:gltf.scene, bvh:bvh, mesh:merged_mesh};
@@ -119,6 +128,7 @@ var params =
     max_volume_steps:                   64,
     firefly_clamp:                      10.0,
     wireframe:                          false,
+    debug_material_slots:               false,
     neutral_color:                      [0.99, 0.99, 0.99],
 
     //////////////////////////////////////////////////////
@@ -202,8 +212,11 @@ var materialDefines = {
 // Generated GLSL from MaterialX WASM (set before create_materials() is called).
 var mtlxGeneratedGlsl = '';
 var mtlxRouteDispatchGlsl = '';
+var mtlxRouteDispatches = [];
 var mtlxRouteTextureBindings = [];
 var mtlxRouteLights = [];
+var mtlxRouteMaterialSlotByObject = new Map();
+var mtlxRouteScene = null;
 var mtlxRouteMaterialSummary = {
     opaque: true,
     thinWalled: false,
@@ -215,6 +228,7 @@ var mtlxRouteMaterialSummary = {
     specularRoughness: 0.3,
     transmissionWeight: 0.0
 };
+var mtlxRouteMaterialSummaries = [mtlxRouteMaterialSummary];
 
 const LEGACY_COMPARISON_ENABLED_BY_DEFAULT = false;
 const legacyComparisonEnabled = (() => {
@@ -415,6 +429,159 @@ function createMtlxLightUniforms()
     };
 }
 
+function escapeRegExp(text)
+{
+    return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function replaceIdentifiers(source, replacements)
+{
+    let result = source;
+    for (const [from, to] of replacements) {
+        result = result.replace(new RegExp(`\\b${escapeRegExp(from)}\\b`, 'g'), to);
+    }
+    return result;
+}
+
+function findMatchingBrace(source, openIndex)
+{
+    let depth = 0;
+    for (let i = openIndex; i < source.length; ++i) {
+        const ch = source[i];
+        if (ch === '{') depth++;
+        else if (ch === '}') {
+            depth--;
+            if (depth === 0) return i;
+        }
+    }
+    return -1;
+}
+
+function extractFunctionBlocks(source)
+{
+    const blocks = [];
+    const re = /(^|\n)([A-Za-z_][A-Za-z0-9_<>]*\s+(?:[A-Za-z_][A-Za-z0-9_<>]*\s+)*)([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*\{/g;
+    let match;
+    while ((match = re.exec(source)) !== null) {
+        const name = match[3];
+        const start = match.index + match[1].length;
+        const open = source.indexOf('{', re.lastIndex - 1);
+        const close = findMatchingBrace(source, open);
+        if (close < 0) continue;
+        const end = close + 1;
+        blocks.push({ name, start, end, text: source.slice(start, end) });
+        re.lastIndex = end;
+    }
+    return blocks;
+}
+
+function removeFunctionBlocks(source, removeBlocks)
+{
+    let result = source;
+    for (const block of [...removeBlocks].sort((a, b) => b.start - a.start)) {
+        result = result.slice(0, block.start) + result.slice(block.end);
+    }
+    return result;
+}
+
+function generatedParamNames(glsl)
+{
+    const match = glsl.match(/\/\/ __MTLX_PARAMS_BEGIN__([\s\S]*?)\/\/ __MTLX_PARAMS_END__/);
+    if (!match) return [];
+    const names = [];
+    const re = /\b(?:float|bool|int|vec[234]|sampler2D)\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
+    let param;
+    while ((param = re.exec(match[1])) !== null) names.push(param[1]);
+    return names;
+}
+
+function generatedMaterialLocalNames(glsl)
+{
+    const start = glsl.indexOf('int g_ptEmitEmission = 1;');
+    const end = glsl.indexOf('// __MTLX_PARAMS_BEGIN__');
+    if (start < 0 || end < 0 || end <= start) return [];
+    const locals = glsl.slice(start + 'int g_ptEmitEmission = 1;'.length, end);
+    const names = [];
+    const re = /\b(?:float|bool|int|vec[234]|sampler2D)\s+([A-Za-z_][A-Za-z0-9_]*)\b/g;
+    let local;
+    while ((local = re.exec(locals)) !== null) names.push(local[1]);
+    return names;
+}
+
+function generatedInstanceSource(glsl)
+{
+    const start = glsl.indexOf('int g_ptEmitEmission = 1;');
+    if (start < 0) return glsl;
+    const afterHostSharedGlobals = glsl.indexOf('\n', start);
+    return afterHostSharedGlobals >= 0 ? glsl.slice(afterHostSharedGlobals + 1) : glsl.slice(start);
+}
+
+function stripSecondarySharedDeclarations(source)
+{
+    return source
+        .replace(/\nstruct ClosureData\s*\{[\s\S]*?\};\r?\n/g, '\n')
+        .replace(/^const float FUJII_CONSTANT_[12]\s*=\s*[^;]+;\r?\n/gm, '');
+}
+
+function prefixGeneratedMaterialSource(glsl, slot)
+{
+    if (slot === 0) return glsl;
+    const prefix = `mtlxMat${slot}_`;
+    const replacements = new Map();
+    for (const name of generatedMaterialLocalNames(glsl)) replacements.set(name, prefix + name);
+    for (const name of generatedParamNames(glsl)) replacements.set(name, prefix + name);
+    for (const name of ['mtlxHostEvalSurface', 'mtlxGenEvaluateBsdf', 'mtlxGenSampleBsdf']) {
+        replacements.set(name, prefix + name);
+    }
+    const graphFunctionNames = extractFunctionBlocks(glsl)
+        .map(block => block.name)
+        .filter(name => name.startsWith('NG_') || name.endsWith('_surfaceshader') || name.endsWith('_surface'));
+    for (const name of graphFunctionNames) replacements.set(name, prefix + name);
+    return replaceIdentifiers(generatedInstanceSource(glsl), replacements);
+}
+
+function composeMtlxRouteDispatches(dispatches)
+{
+    if (dispatches.length <= 1) return dispatches[0]?.glsl || '';
+
+    let composed = dispatches[0].glsl;
+    const knownFunctions = new Map(extractFunctionBlocks(composed).map(block => [block.name, block.text]));
+    for (let slot = 1; slot < dispatches.length; ++slot) {
+        let source = prefixGeneratedMaterialSource(dispatches[slot].glsl, slot);
+        source = source
+            .replace(/^uniform sampler2D envMapLatLong;\r?\n/gm, '')
+            .replace(/^uniform sampler2D envMapIrradiance;\r?\n/gm, '')
+            .replace(/^mat4 mtlxEnvMatrix\(\)[\s\S]*?#define u_refractionTwoSided false\r?\n/, '');
+        source = stripSecondarySharedDeclarations(source);
+        const duplicateBlocks = [];
+        for (const block of extractFunctionBlocks(source)) {
+            if (knownFunctions.get(block.name) === block.text) {
+                duplicateBlocks.push(block);
+            }
+        }
+        source = removeFunctionBlocks(source, duplicateBlocks);
+
+        const collisionRenames = new Map();
+        for (const block of extractFunctionBlocks(source)) {
+            if (knownFunctions.has(block.name) && knownFunctions.get(block.name) !== block.text) {
+                collisionRenames.set(block.name, `mtlxMat${slot}_${block.name}`);
+            }
+        }
+        if (collisionRenames.size > 0) {
+            source = replaceIdentifiers(source, collisionRenames);
+        }
+
+        for (const block of extractFunctionBlocks(source)) {
+            if (knownFunctions.has(block.name) && knownFunctions.get(block.name) !== block.text) {
+                throw new Error(`[mtlx-scene] function collision after material prefixing: ${block.name}`);
+            }
+            knownFunctions.set(block.name, block.text);
+        }
+        composed += '\n\n// __MTLX_MATERIAL_SLOT_' + slot + '__\n' + source;
+    }
+    return composed;
+}
+
 async function loadGeneratedRegistryModule()
 {
     if (_generatedRegistryModulePromise) return _generatedRegistryModulePromise;
@@ -503,6 +670,63 @@ function is_pathtracing_route()
            params.renderer_mode === 'Pathtracer legacy';
 }
 
+function summarizeMtlxRouteMaterialParams(p)
+{
+    const hasTransmission = p.transmissionWeight > 0;
+    return {
+        opaque: !hasTransmission && p.geometry_thin_walled !== true,
+        thinWalled: p.geometry_thin_walled === true,
+        emission: p.emission,
+        thinFilmWeight: p.thinFilmWeight,
+        thinFilmThicknessNm: p.thinFilmThicknessNm,
+        thinFilmIor: p.thinFilmIor,
+        specularIor: p.specularIor,
+        specularRoughness: p.specularRoughness,
+        transmissionWeight: p.transmissionWeight
+    };
+}
+
+function emitMtlxSlotScalarFunction(name, key, defaultValue)
+{
+    const lines = [`float ${name}(int materialSlot) {`];
+    for (let slot = 1; slot < mtlxRouteMaterialSummaries.length; ++slot) {
+        const value = Number(mtlxRouteMaterialSummaries[slot]?.[key] ?? defaultValue);
+        lines.push(`    if (materialSlot == ${slot}) return ${value.toFixed(8)};`);
+    }
+    const fallback = Number(mtlxRouteMaterialSummaries[0]?.[key] ?? defaultValue);
+    lines.push(`    return ${fallback.toFixed(8)};`);
+    lines.push('}');
+    return lines.join('\n');
+}
+
+function emitMtlxSlotBoolFunction(name, key, defaultValue)
+{
+    const lines = [`bool ${name}(int materialSlot) {`];
+    for (let slot = 1; slot < mtlxRouteMaterialSummaries.length; ++slot) {
+        const value = (mtlxRouteMaterialSummaries[slot]?.[key] ?? defaultValue) ? 'true' : 'false';
+        lines.push(`    if (materialSlot == ${slot}) return ${value};`);
+    }
+    const fallback = (mtlxRouteMaterialSummaries[0]?.[key] ?? defaultValue) ? 'true' : 'false';
+    lines.push(`    return ${fallback};`);
+    lines.push('}');
+    return lines.join('\n');
+}
+
+function emitMtlxSlotVec3Function(name, key, defaultValue)
+{
+    const vec = value => {
+        const v = Array.isArray(value) ? value : defaultValue;
+        return `vec3(${Number(v[0]).toFixed(8)}, ${Number(v[1]).toFixed(8)}, ${Number(v[2]).toFixed(8)})`;
+    };
+    const lines = [`vec3 ${name}(int materialSlot) {`];
+    for (let slot = 1; slot < mtlxRouteMaterialSummaries.length; ++slot) {
+        lines.push(`    if (materialSlot == ${slot}) return ${vec(mtlxRouteMaterialSummaries[slot]?.[key])};`);
+    }
+    lines.push(`    return ${vec(mtlxRouteMaterialSummaries[0]?.[key])};`);
+    lines.push('}');
+    return lines.join('\n');
+}
+
 // Assemble the MTLX route fragment: the generated per-material dispatch
 // (MtlxPathTracerHostShaderGenerator output, renamed to mtlxGen*), a thin bridge
 // mapping the integrator's mtlx_openpbr_* hooks onto it, then the copied
@@ -520,32 +744,31 @@ function assemble_mtlx_route_dispatch()
         substitutionRuntimeState.failureCause = 'missing_generated_dispatch';
         throw new Error('[mtlx-route] generated BSDF dispatch missing; refusing legacy fallback');
     }
-    const opaque = mtlxRouteMaterialSummary.opaque ? 'true' : 'false';
-    const thinWalled = mtlxRouteMaterialSummary.thinWalled ? 'true' : 'false';
-    const emission = mtlxRouteMaterialSummary.emission;
-    const thinFilmWeight = mtlxRouteMaterialSummary.thinFilmWeight;
-    const thinFilmThicknessNm = mtlxRouteMaterialSummary.thinFilmThicknessNm;
-    const thinFilmIor = mtlxRouteMaterialSummary.thinFilmIor;
-    const specularIor = mtlxRouteMaterialSummary.specularIor;
-    const specularRoughness = mtlxRouteMaterialSummary.specularRoughness;
-    const transmissionWeight = mtlxRouteMaterialSummary.transmissionWeight;
+    const evalRoutes = [];
+    const sampleRoutes = [];
+    for (let slot = 1; slot < mtlxRouteDispatches.length; ++slot) {
+        evalRoutes.push(`    if (basis.materialSlot == ${slot}) return mtlxMat${slot}_mtlxGenEvaluateBsdf(pW, basis, winputL, woutputL, MATERIAL_OPENPBR, pdf_woutputL);`);
+        sampleRoutes.push(`    if (basis.materialSlot == ${slot}) return mtlxMat${slot}_mtlxGenSampleBsdf(pW, basis, winputL, rndSeed, MATERIAL_OPENPBR, woutputL, pdf_woutputL, internal_medium);`);
+    }
     const bridge = `
 vec3 mtlx_openpbr_bsdf_evaluate(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL, inout float pdf_woutputL) {
+${evalRoutes.join('\n')}
     return mtlxGenEvaluateBsdf(pW, basis, winputL, woutputL, MATERIAL_OPENPBR, pdf_woutputL);
 }
 vec3 mtlx_openpbr_bsdf_sample(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed, out vec3 woutputL, out float pdf_woutputL, out Volume internal_medium) {
+${sampleRoutes.join('\n')}
     return mtlxGenSampleBsdf(pW, basis, winputL, rndSeed, MATERIAL_OPENPBR, woutputL, pdf_woutputL, internal_medium);
 }
 void mtlx_openpbr_prepare(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed) {}
-bool mtlx_openpbr_is_opaque() { return ${opaque}; }
-bool mtlx_openpbr_is_thinwalled() { return ${thinWalled}; }
-vec3 mtlx_openpbr_emission() { return vec3(${emission[0].toFixed(8)}, ${emission[1].toFixed(8)}, ${emission[2].toFixed(8)}); }
-float mtlx_openpbr_thin_film_weight() { return ${thinFilmWeight.toFixed(8)}; }
-float mtlx_openpbr_thin_film_thickness_nm() { return ${thinFilmThicknessNm.toFixed(8)}; }
-float mtlx_openpbr_thin_film_ior() { return ${thinFilmIor.toFixed(8)}; }
-float mtlx_openpbr_specular_ior() { return ${specularIor.toFixed(8)}; }
-float mtlx_openpbr_specular_roughness() { return ${specularRoughness.toFixed(8)}; }
-float mtlx_openpbr_transmission_weight() { return ${transmissionWeight.toFixed(8)}; }
+${emitMtlxSlotBoolFunction('mtlx_openpbr_is_opaque', 'opaque', true)}
+${emitMtlxSlotBoolFunction('mtlx_openpbr_is_thinwalled', 'thinWalled', false)}
+${emitMtlxSlotVec3Function('mtlx_openpbr_emission', 'emission', [0, 0, 0])}
+${emitMtlxSlotScalarFunction('mtlx_openpbr_thin_film_weight', 'thinFilmWeight', 0)}
+${emitMtlxSlotScalarFunction('mtlx_openpbr_thin_film_thickness_nm', 'thinFilmThicknessNm', 0)}
+${emitMtlxSlotScalarFunction('mtlx_openpbr_thin_film_ior', 'thinFilmIor', 1.5)}
+${emitMtlxSlotScalarFunction('mtlx_openpbr_specular_ior', 'specularIor', 1.5)}
+${emitMtlxSlotScalarFunction('mtlx_openpbr_specular_roughness', 'specularRoughness', 0.3)}
+${emitMtlxSlotScalarFunction('mtlx_openpbr_transmission_weight', 'transmissionWeight', 0)}
 `;
     return mtlxRouteDispatchGlsl + bridge + glsl_mtlx_route_pathtracer;
 }
@@ -829,6 +1052,14 @@ var scene_names = {
     // Generate GLSL from .mtlx before building the first shader.
     let mtlxText = DEFAULT_MTLX;
     let mtlxMaterialBaseUrl = getPublicAssetUrl('');
+    mtlxRouteScene = await loadMtlxScene(search);
+    if (mtlxRouteScene) {
+        const firstMaterial = mtlxRouteScene.materials[0];
+        if (!search.has('material_id')) {
+            search.set('material_id', firstMaterial.materialId || firstMaterial.id || 'mtlx_scene_material_0');
+        }
+        search.set('mtlx_url', firstMaterial.mtlx_url);
+    }
     if (search.has('mtlx_url')) {
         try {
             let mtlxUrl = search.get('mtlx_url');
@@ -847,30 +1078,56 @@ var scene_names = {
     try {
         if (is_pathtracing_route()) {
             // MTLX route: use the MtlxPathTracerHostShaderGenerator dispatch (feature 003).
-            const result = await generateMtlxRouteDispatch(mtlxText);
-            mtlxRouteDispatchGlsl = result.glsl;
-            mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
+            const materialInputs = mtlxRouteScene
+                ? mtlxRouteScene.materials.map((material, slot) => ({ slot, url: material.mtlx_url, materialId: material.materialId || material.id }))
+                : [{ slot: 0, url: search.get('mtlx_url') || '', materialId: search.get('material_id') || 'default-material' }];
+
+            mtlxRouteDispatches = [];
+            mtlxRouteTextureBindings = [];
+            mtlxRouteLights = [];
+            mtlxRouteMaterialSummaries = [];
+            let firstParams = null;
+
+            for (const input of materialInputs) {
+                let materialText = mtlxText;
+                let materialBaseUrl = mtlxMaterialBaseUrl;
+                if (input.slot > 0 || mtlxRouteScene) {
+                    let materialUrl = input.url;
+                    if (materialUrl.startsWith('/') && !materialUrl.startsWith('//')) {
+                        materialUrl = import.meta.env.BASE_URL.replace(/\/$/, '') + materialUrl;
+                    }
+                    materialBaseUrl = new URL(materialUrl, window.location.origin).toString().replace(/[^/]*$/, '');
+                    const resp = await fetch(materialUrl);
+                    if (!resp.ok) throw new Error(`[mtlx-scene] material fetch failed: ${resp.status} ${materialUrl}`);
+                    materialText = await resp.text();
+                }
+                const result = await generateMtlxRouteDispatch(materialText);
+                mtlxRouteDispatches.push({ slot: input.slot, glsl: result.glsl, mtlxParams: result.mtlxParams });
+                mtlxRouteMaterialSummaries[input.slot] = summarizeMtlxRouteMaterialParams(result.mtlxParams);
+                if (!firstParams) firstParams = result.mtlxParams;
+
+                const prefix = input.slot === 0 ? '' : `mtlxMat${input.slot}_`;
+                mtlxRouteTextureBindings.push(...extractMtlxTextureBindings(materialText, materialBaseUrl).map(binding => ({
+                    ...binding,
+                    sampler: prefix + binding.sampler,
+                    materialSlot: input.slot
+                })));
+                mtlxRouteLights.push(...extractMtlxLights(materialText));
+            }
+
+            mtlxRouteLights.push(...extractMtlxLightOverrides(search));
+            mtlxRouteDispatchGlsl = composeMtlxRouteDispatches(mtlxRouteDispatches);
             if (mtlxRouteTextureBindings.length > 0) {
                 console.log('[mtlx-route] textures', mtlxRouteTextureBindings.map(t => `${t.sampler}=${t.source}`).join(', '));
             }
-            mtlxRouteLights = [...extractMtlxLights(mtlxText), ...extractMtlxLightOverrides(search)];
             materialDefines.MAX_MTLX_LIGHTS = Math.max(1, mtlxRouteLights.length);
             if (mtlxRouteLights.length > 0) {
                 console.log('[mtlx-route] lights', mtlxRouteLights.map(l => `${l.name}:type=${l.type},intensity=${l.intensity}`).join(', '));
             }
-            const p = result.mtlxParams;
+            const p = firstParams || { transmissionWeight: 0, transmissionDepth: 0, dispersionScale: 0, thinFilmWeight: 0, geometry_thin_walled: false, emission: [0, 0, 0], thinFilmThicknessNm: 0, thinFilmIor: 1.5, specularIor: 1.5, specularRoughness: 0.3 };
             const hasTransmission = p.transmissionWeight > 0;
-            mtlxRouteMaterialSummary = {
-                opaque: !hasTransmission && p.geometry_thin_walled !== true,
-                thinWalled: p.geometry_thin_walled === true,
-                emission: p.emission,
-                thinFilmWeight: p.thinFilmWeight,
-                thinFilmThicknessNm: p.thinFilmThicknessNm,
-                thinFilmIor: p.thinFilmIor,
-                specularIor: p.specularIor,
-                specularRoughness: p.specularRoughness,
-                transmissionWeight: p.transmissionWeight
-            };
+            mtlxRouteMaterialSummary = summarizeMtlxRouteMaterialParams(p);
+            if (mtlxRouteMaterialSummaries.length === 0) mtlxRouteMaterialSummaries = [mtlxRouteMaterialSummary];
             materialDefines.VOLUME_ENABLED       = hasTransmission && p.transmissionDepth > 0 && !p.geometry_thin_walled;
             materialDefines.TRANSMISSION_ENABLED = hasTransmission && p.dispersionScale > 0;
             materialDefines.THIN_FILM_ENABLED    = p.thinFilmWeight > 0;
@@ -1093,6 +1350,7 @@ function create_materials()
                 normalAttribute_surface: { value: new FloatVertexAttributeTexture() },
                 tangentAttribute_surface:{ value: new FloatVertexAttributeTexture() },
                 uvAttribute_surface:     { value: new FloatVertexAttributeTexture() },
+                materialSlotAttribute_surface: { value: new FloatVertexAttributeTexture() },
                 has_normals_surface:     { value: 1 },
                 has_tangents_surface:    { value: 0 },
                 has_uvs_surface:         { value: 0 },
@@ -1125,6 +1383,7 @@ function create_materials()
                 bounces:                             { value: params.bounces },
                 max_volume_steps:                    { value: params.max_volume_steps },
                 firefly_clamp:                       { value: params.firefly_clamp },
+                debug_material_slots:                { value: params.debug_material_slots },
                 strict_failure_enabled:              { value: substitutionRuntimeState.strictFailureEnabled },
                 generated_contract_valid:            { value: substitutionRuntimeState.contractStatus === 'valid' },
                 generated_contract_failure_code:     { value: substitutionRuntimeState.contractStatus === 'valid' ? 0 : 1 },
@@ -1500,7 +1759,10 @@ function load_geometry(scene_name)
         mesh_loader.reset();
 
         // Load OpenPBR-shaded objects
-        mesh_loader.load(scene_name + '/openpbr_objects.glb').then( () => {
+        mesh_loader.load(scene_name + '/openpbr_objects.glb', {
+            assignMaterialSlots: true,
+            materialSlotByObject: mtlxRouteMaterialSlotByObject
+        }).then( () => {
 
             if (!PATHTRACING)
             {
@@ -1542,6 +1804,10 @@ function load_geometry(scene_name)
                     {
                         pm.uniforms.uvAttribute_surface.value.updateFrom( MESH_SURFACE.geometry.attributes.uv );
                         pm.uniforms.has_uvs_surface.value = true;
+                    }
+                    if (pm.uniforms.materialSlotAttribute_surface && MESH_SURFACE.geometry.attributes.mtlxMaterialSlot)
+                    {
+                        pm.uniforms.materialSlotAttribute_surface.value.updateFrom( MESH_SURFACE.geometry.attributes.mtlxMaterialSlot );
                     }
                 }
                 console.log("  has_normals_surface:  ", pathtracedMaterial.uniforms.has_normals_surface);
@@ -1671,6 +1937,13 @@ function reset_camera(scene_name)
                         -0.2203032561704394, 0.7649214009184319, -0.6052782217606094, 0,
                         0.26161852717499334, 0.6441236297613865,  0.7187909959242699, 0,
                         6.531538924716362,               19.5,  17.948521838355774, 1 );
+    }
+    else if (scene_name == 'multi-material-smoke')
+    {
+        matrixWorld.set( 1, 0, 0, 0,
+                         0, 0.9659258263, -0.2588190451, 0,
+                         0, 0.2588190451,  0.9659258263, 0,
+                         0, 3.0, 9.0, 1 );
     }
     else if (scene_name == 'glavenus')
     {
@@ -2042,6 +2315,7 @@ function sync_shader_uniforms(uniforms)
     uniforms.samples.value                                = samples;
 
     uniforms.wireframe.value                              = params.wireframe;
+    if (uniforms.debug_material_slots) uniforms.debug_material_slots.value = params.debug_material_slots;
     uniforms.neutral_color.value.copy(get_vector3(          params.neutral_color));
     uniforms.smooth_normals.value                         = params.smooth_normals;
     if (uniforms.bounces)           uniforms.bounces.value           = params.bounces;
@@ -2353,4 +2627,37 @@ document.onkeydown = function (event)
             break;
         }
     }
+}
+
+async function loadMtlxScene(search)
+{
+    if (!search.has('mtlx_scene_url')) return null;
+    let sceneUrl = search.get('mtlx_scene_url');
+    if (sceneUrl.startsWith('/') && !sceneUrl.startsWith('//')) {
+        sceneUrl = import.meta.env.BASE_URL.replace(/\/$/, '') + sceneUrl;
+    }
+    const resp = await fetch(sceneUrl);
+    if (!resp.ok) throw new Error(`[mtlx-scene] fetch failed: ${resp.status} ${sceneUrl}`);
+    const scene = await resp.json();
+    if (!Array.isArray(scene.materials) || scene.materials.length === 0) {
+        throw new Error('[mtlx-scene] manifest requires a non-empty materials array');
+    }
+    mtlxRouteMaterialSlotByObject = new Map();
+    for (const material of scene.materials) {
+        const slot = Number(material.slot ?? 0);
+        for (const objectName of material.objects || []) {
+            mtlxRouteMaterialSlotByObject.set(String(objectName), slot);
+        }
+    }
+    console.log('[mtlx-scene] materials', scene.materials.map(m => `${m.slot}:${m.id}`).join(', '));
+    if (mtlxRouteMaterialSlotByObject.size > 0) {
+        console.log('[mtlx-scene] object slots', [...mtlxRouteMaterialSlotByObject.entries()].map(([name, slot]) => `${name}=${slot}`).join(', '));
+    }
+    if (scene.materials.length > 1) {
+        console.warn('[mtlx-scene] multi-material dispatch is not active yet; material slot 0 is used for shading while slot attributes are prepared.');
+    }
+    if (scene.scene_name) {
+        params.scene_name = scene.scene_name;
+    }
+    return scene;
 }

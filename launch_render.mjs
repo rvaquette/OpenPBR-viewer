@@ -167,6 +167,50 @@ function copyMtlxWithRelativeFiles(mtlxPath, materialId) {
     return `/mtlx-input/${materialId}/${basename(mtlxPath)}`;
 }
 
+function normalizeSceneMaterial(raw, index, sceneDir) {
+    const mtlx = raw.mtlx ?? raw.file ?? raw.path;
+    if (!mtlx) throw new Error(`[mtlx-scene] materials[${index}] missing mtlx/file/path`);
+    const id = raw.id ?? raw.materialId ?? basename(mtlx).replace(/\.mtlx$/i, '') ?? `material_${index}`;
+    const objects = Array.isArray(raw.objects) ? raw.objects : Array.isArray(raw.meshes) ? raw.meshes : [];
+    const source = isAbsolute(mtlx) ? mtlx : resolve(sceneDir, mtlx);
+    return { id, source, objects };
+}
+
+function copyMtlxSceneManifest(scenePath) {
+    const fullScenePath = resolve(process.cwd(), scenePath);
+    if (!existsSync(fullScenePath)) throw new Error(`[mtlx-scene] manifest not found: ${fullScenePath}`);
+    const sceneDir = dirname(fullScenePath);
+    const scene = JSON.parse(readFileSync(fullScenePath, 'utf8'));
+    const rawMaterials = Array.isArray(scene.materials) ? scene.materials : [];
+    if (rawMaterials.length === 0) throw new Error('[mtlx-scene] manifest requires a non-empty materials array');
+
+    const sceneId = basename(fullScenePath).replace(/\.json$/i, '') || 'scene';
+    const normalizedMaterials = rawMaterials.map((raw, index) => {
+        const material = normalizeSceneMaterial(raw, index, sceneDir);
+        const materialId = `${sceneId}_${index}_${material.id}`.replace(/[^A-Za-z0-9_-]/g, '_');
+        const mtlxUrl = copyMtlxWithRelativeFiles(material.source, materialId);
+        console.log(`MTLX scene material[${index}] ${material.id}: ${material.source} → ${mtlxUrl}`);
+        return {
+            slot: index,
+            id: material.id,
+            materialId,
+            mtlx_url: mtlxUrl,
+            objects: material.objects
+        };
+    });
+
+    const publicRoot = resolve(process.cwd(), 'public');
+    const targetDir = join(publicRoot, 'mtlx-input', '_scenes');
+    mkdirSync(targetDir, { recursive: true });
+    const targetFile = join(targetDir, `${sceneId}.json`);
+    writeFileSync(targetFile, JSON.stringify({
+        version: 1,
+        scene_name: scene.scene_name ?? scene.sceneName ?? null,
+        materials: normalizedMaterials
+    }, null, 2), 'utf8');
+    return `/mtlx-input/_scenes/${sceneId}.json`;
+}
+
 function copyPublicInputFile(sourcePath, publicSubdir) {
     if (!sourcePath || /^(?:[a-z]+:)?\/\//i.test(sourcePath) || sourcePath.startsWith('/')) return sourcePath;
     const fullSource = resolve(process.cwd(), sourcePath);
@@ -237,6 +281,7 @@ const mode          = MODE_ALIASES[rawMode.toLowerCase()] ?? rawMode;
 const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').map(Number);
 
 const mtlxPath      = options.mtlx    ?? null;
+const mtlxScenePath = options.mtlx_scene ?? null;
 const denoiseEnabled = (options.denoise ?? 'true') !== 'false';
 const oidnPath       = options.oidn    ?? 'D:\\oidn-2.5.0\\bin\\oidnDenoise.exe';
 const DEFAULT_ENV_MAP = 'D:\\WebGL2\\MaterialX\\MaterialX-rva\\resources\\Lights\\san_giuseppe_bridge.hdr';
@@ -247,7 +292,7 @@ delete options.port; delete options.gpu; delete options.headless;
 delete options.browser; delete options['launch-timeout-ms'];
 delete options['start-server']; delete options.screenshot; delete options.output;
 delete options['wait-samples']; delete options['spp']; delete options.mode; delete options.size;
-delete options.mtlx; delete options.denoise; delete options.oidn;
+delete options.mtlx; delete options.mtlx_scene; delete options.denoise; delete options.oidn;
 delete options.envmap; delete options.env_map_path; delete options.env_irradiance_path;
 
 if (!options.renderer_mode) options.renderer_mode = mode;
@@ -263,7 +308,12 @@ if (options.scene) { options.scene_name ??= options.scene; delete options.scene;
 // Le .mtlx est copié dans public/ pour que Vite le serve ; le browser le fetchera via ?mtlx_url=.
 // En mode legacy, les params sont en plus extraits via parseMtlx() et injectés dans l'URL.
 let mtlxPublicUrl = null;
-if (mtlxPath) {
+let mtlxScenePublicUrl = null;
+if (mtlxScenePath) {
+    mtlxScenePublicUrl = copyMtlxSceneManifest(mtlxScenePath);
+    console.log(`MTLX scene: ${mtlxScenePath} → servi via ${mtlxScenePublicUrl}`);
+}
+else if (mtlxPath) {
     if (!existsSync(mtlxPath)) throw new Error(`Fichier .mtlx introuvable : ${mtlxPath}`);
     // Preserve the source material-id (filename stem) so the MTLX route/contract
     // resolves the matching generated dispatch artifact, even though the file is
@@ -320,6 +370,7 @@ if (startServer) {
 // ---------------------------------------------------------------------------
 const BASE_URL = `http://localhost:${port}/OpenPBR-viewer/`;
 if (mtlxPublicUrl) options.mtlx_url = mtlxPublicUrl;
+if (mtlxScenePublicUrl) options.mtlx_scene_url = mtlxScenePublicUrl;
 const query = Object.entries(options)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join('&');
