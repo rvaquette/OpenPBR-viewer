@@ -197,6 +197,7 @@ var materialDefines = {
 // Generated GLSL from MaterialX WASM (set before create_materials() is called).
 var mtlxGeneratedGlsl = '';
 var mtlxRouteDispatchGlsl = '';
+var mtlxRouteTextureBindings = [];
 var mtlxRouteMaterialSummary = {
     opaque: true,
     thinWalled: false,
@@ -236,6 +237,70 @@ function getPublicAssetUrl(relPath)
     const origin = window.location.origin;
     const base = import.meta.env.BASE_URL;
     return origin + base + relPath.replace(/^\/+/, '');
+}
+
+function readXmlAttr(attrs, name)
+{
+    const m = String(attrs || '').match(new RegExp(`\\b${name}="([^"]*)"`));
+    return m ? m[1] : '';
+}
+
+function resolveMtlxTextureUrl(fileValue, materialBaseUrl)
+{
+    if (/^(?:[a-z]+:)?\/\//i.test(fileValue)) return fileValue;
+    if (fileValue.startsWith('/')) return getPublicAssetUrl(fileValue);
+    return new URL(fileValue, materialBaseUrl || getPublicAssetUrl('')).toString();
+}
+
+function extractMtlxTextureBindings(mtlxText, materialBaseUrl)
+{
+    const bindings = [];
+    const nodeRe = /<(tiledimage|image)\b([^>]*)>([\s\S]*?)<\/\1>|<(tiledimage|image)\b([^>]*)\/>/g;
+    let nodeMatch;
+    while ((nodeMatch = nodeRe.exec(mtlxText)) !== null) {
+        const attrs = nodeMatch[2] || nodeMatch[5] || '';
+        const inner = nodeMatch[3] || '';
+        const nodeName = readXmlAttr(attrs, 'name');
+        const nodeType = readXmlAttr(attrs, 'type');
+        if (!nodeName) continue;
+        const inputRe = /<input\b([^>]*)\/>/g;
+        let inputMatch;
+        while ((inputMatch = inputRe.exec(inner)) !== null) {
+            const inputAttrs = inputMatch[1];
+            if (readXmlAttr(inputAttrs, 'name') !== 'file') continue;
+            const fileValue = readXmlAttr(inputAttrs, 'value');
+            if (!fileValue) continue;
+            bindings.push({
+                sampler: `${nodeName}_file`,
+                url: resolveMtlxTextureUrl(fileValue, materialBaseUrl),
+                source: fileValue,
+                type: nodeType
+            });
+        }
+    }
+    return bindings;
+}
+
+function isMtlxColorTexture(binding)
+{
+    if (binding.type !== 'color3' && binding.type !== 'color4') return false;
+    const text = `${binding.sampler} ${binding.source}`.toLowerCase();
+    return !/(normal|rough|metal|mask|height|bump|ao|occlusion|opacity|alpha|dirt|variation)/.test(text);
+}
+
+function createMtlxRouteTextureUniforms()
+{
+    const uniforms = {};
+    if (mtlxRouteTextureBindings.length === 0) return uniforms;
+    const loader = new TextureLoader();
+    for (const binding of mtlxRouteTextureBindings) {
+        const texture = loader.load(binding.url);
+        texture.wrapS = RepeatWrapping;
+        texture.wrapT = RepeatWrapping;
+        if (isMtlxColorTexture(binding)) texture.colorSpace = SRGBColorSpace;
+        uniforms[binding.sampler] = { value: texture };
+    }
+    return uniforms;
 }
 
 async function loadGeneratedRegistryModule()
@@ -426,6 +491,7 @@ async function generateMtlxGlsl(mtlxText) {
         .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envRadianceMips[ \t]*;[ \t]*\r?\n/gm, '')
         .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envRadianceSamples[ \t]*;[ \t]*\r?\n/gm, '')
         .replace(/^[ \t]*uniform[ \t]+bool[ \t]+u_refractionTwoSided[ \t]*;[ \t]*\r?\n/gm, '');
+    glsl = glsl.replace(/^[ \t]*sampler2D[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*;[ \t]*\r?\n/gm, 'uniform sampler2D $1;\n');
     const envPreamble =
         'mat4 mtlxEnvMatrix() {\n' +
         '    float a = 1.57079632679;\n' +   // fixed +90° to match the viewer convention
@@ -502,6 +568,7 @@ async function generateMtlxRouteDispatch(mtlxText) {
         .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envRadianceMips[ \t]*;[ \t]*\r?\n/gm, '')
         .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envRadianceSamples[ \t]*;[ \t]*\r?\n/gm, '')
         .replace(/^[ \t]*uniform[ \t]+bool[ \t]+u_refractionTwoSided[ \t]*;[ \t]*\r?\n/gm, '');
+    glsl = glsl.replace(/^[ \t]*sampler2D[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*;[ \t]*\r?\n/gm, 'uniform sampler2D $1;\n');
     const envPreamble =
         'uniform sampler2D envMapLatLong;\n' +
         'mat4 mtlxEnvMatrix() {\n' +
@@ -523,19 +590,7 @@ async function generateMtlxRouteDispatch(mtlxText) {
     glsl = glsl
         .replace(/\bevaluateBsdf\b/g, 'mtlxGenEvaluateBsdf')
         .replace(/\bsampleBsdf\b/g, 'mtlxGenSampleBsdf');
-
-    glsl = glsl.replace(
-        `    float F0d = pow((m_ior - 1.0) / (m_ior + 1.0), 2.0);
-    vec3 F0 = mix(vec3(F0d) * max(m_specC, vec3(0.0)) * m_specW, m_base, m_metal);
-    float F0lum = max(F0.x, max(F0.y, F0.z));
-    float Fv = F0lum + (1.0 - F0lum) * pow(1.0 - NdotV, 5.0);`,
-        `    float F0d = pow((m_ior - 1.0) / (m_ior + 1.0), 2.0);
-    vec3 F0NoFilm = mix(vec3(F0d) * max(m_specC, vec3(0.0)) * m_specW, m_base, m_metal);
-    vec3 FFilm = mx_compute_fresnel(NdotV, mx_init_fresnel_dielectric(m_ior, thin_film_thickness * 1000.0, thin_film_ior));
-    vec3 F0Film = mix(FFilm * max(m_specC, vec3(0.0)) * m_specW, m_base, m_metal);
-    vec3 F0 = mix(F0NoFilm, F0Film, clamp(thin_film_weight, 0.0, 1.0));
-    float Fv = clamp(max(F0.x, max(F0.y, F0.z)), 0.0, 1.0);`
-    );
+    glsl = glsl.replace(/(g_ptBitangent[ \t]*=[ \t]*basis\.bW;\r?\n)/g, '$1    g_ptTexcoord = basis.texCoord;\n');
 
     const extractParam = (name, fallback) => {
         const m = glsl.match(new RegExp(`\\b(?:float|bool)\\s+${name}\\s*=\\s*([^;]+);`));
@@ -659,6 +714,7 @@ var scene_names = {
 
     // Generate GLSL from .mtlx before building the first shader.
     let mtlxText = DEFAULT_MTLX;
+    let mtlxMaterialBaseUrl = getPublicAssetUrl('');
     if (search.has('mtlx_url')) {
         try {
             let mtlxUrl = search.get('mtlx_url');
@@ -666,6 +722,7 @@ var scene_names = {
             if (mtlxUrl.startsWith('/') && !mtlxUrl.startsWith('//')) {
                 mtlxUrl = import.meta.env.BASE_URL.replace(/\/$/, '') + mtlxUrl;
             }
+            mtlxMaterialBaseUrl = new URL(mtlxUrl, window.location.origin).toString().replace(/[^/]*$/, '');
             const resp = await fetch(mtlxUrl);
             if (resp.ok) mtlxText = await resp.text();
             else console.warn('[mtlx] fetch failed:', resp.status, mtlxUrl);
@@ -678,6 +735,10 @@ var scene_names = {
             // MTLX route: use the MtlxPathTracerHostShaderGenerator dispatch (feature 003).
             const result = await generateMtlxRouteDispatch(mtlxText);
             mtlxRouteDispatchGlsl = result.glsl;
+            mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
+            if (mtlxRouteTextureBindings.length > 0) {
+                console.log('[mtlx-route] textures', mtlxRouteTextureBindings.map(t => `${t.sampler}=${t.source}`).join(', '));
+            }
             const p = result.mtlxParams;
             const hasTransmission = p.transmissionWeight > 0;
             mtlxRouteMaterialSummary = {
@@ -912,14 +973,18 @@ function create_materials()
                 bvh_surface:             { value: new MeshBVHUniformStruct() },
                 normalAttribute_surface: { value: new FloatVertexAttributeTexture() },
                 tangentAttribute_surface:{ value: new FloatVertexAttributeTexture() },
+                uvAttribute_surface:     { value: new FloatVertexAttributeTexture() },
                 has_normals_surface:     { value: 1 },
                 has_tangents_surface:    { value: 0 },
+                has_uvs_surface:         { value: 0 },
 
                 bvh_props:             { value: new MeshBVHUniformStruct() },
                 normalAttribute_props: { value: new FloatVertexAttributeTexture() },
                 tangentAttribute_props:{ value: new FloatVertexAttributeTexture() },
+                uvAttribute_props:     { value: new FloatVertexAttributeTexture() },
                 has_normals_props:     { value: 1 },
                 has_tangents_props:    { value: 0 },
+                has_uvs_props:         { value: 0 },
 
                 ground_texture:        { value: null },
 
@@ -959,6 +1024,7 @@ function create_materials()
 
                 // Raw equirectangular env map for MaterialX IBL (sampler2D, not samplerCube).
                 envMapLatLong:                       { value: null },
+                ...createMtlxRouteTextureUniforms(),
 
                 // Material params are now folded as globals by the MaterialX WASM generator.
                 // No per-parameter uniforms needed.
@@ -1286,6 +1352,7 @@ function load_geometry(scene_name)
                 pm.uniforms.bvh_props.value.updateFrom( BVH_PROPS );
                 pm.uniforms.has_normals_props.value = false;
                 pm.uniforms.has_tangents_props.value = false;
+                if (pm.uniforms.has_uvs_props) pm.uniforms.has_uvs_props.value = false;
                 if (MESH_PROPS.geometry.attributes.normal)
                 {
                     pm.uniforms.normalAttribute_props.value.updateFrom( MESH_PROPS.geometry.attributes.normal );
@@ -1295,6 +1362,11 @@ function load_geometry(scene_name)
                 {
                     pm.uniforms.tangentAttribute_props.value.updateFrom( MESH_PROPS.geometry.attributes.tangent );
                     pm.uniforms.has_tangents_props.value = true;
+                }
+                if (pm.uniforms.uvAttribute_props && MESH_PROPS.geometry.attributes.uv)
+                {
+                    pm.uniforms.uvAttribute_props.value.updateFrom( MESH_PROPS.geometry.attributes.uv );
+                    pm.uniforms.has_uvs_props.value = true;
                 }
             }
             console.log("  has_normals_scene:  ", pathtracedMaterial.uniforms.has_normals_props);
@@ -1332,6 +1404,7 @@ function load_geometry(scene_name)
                     pm.uniforms.bvh_surface.value.updateFrom( BVH_SURFACE );
                     pm.uniforms.has_normals_surface.value = false;
                     pm.uniforms.has_tangents_surface.value = false;
+                    if (pm.uniforms.has_uvs_surface) pm.uniforms.has_uvs_surface.value = false;
                     if (MESH_SURFACE.geometry.attributes.normal)
                     {
                         pm.uniforms.normalAttribute_surface.value.updateFrom( MESH_SURFACE.geometry.attributes.normal );
@@ -1341,6 +1414,11 @@ function load_geometry(scene_name)
                     {
                         pm.uniforms.tangentAttribute_surface.value.updateFrom( MESH_SURFACE.geometry.attributes.tangent );
                         pm.uniforms.has_tangents_surface.value = true;
+                    }
+                    if (pm.uniforms.uvAttribute_surface && MESH_SURFACE.geometry.attributes.uv)
+                    {
+                        pm.uniforms.uvAttribute_surface.value.updateFrom( MESH_SURFACE.geometry.attributes.uv );
+                        pm.uniforms.has_uvs_surface.value = true;
                     }
                 }
                 console.log("  has_normals_surface:  ", pathtracedMaterial.uniforms.has_normals_surface);

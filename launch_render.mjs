@@ -64,8 +64,8 @@
 
 import { chromium }    from 'playwright-core';
 import { spawn, execSync } from 'child_process';
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
-import { basename } from 'path';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, unlinkSync } from 'fs';
+import { basename, dirname, isAbsolute, join, resolve } from 'path';
 import { setTimeout as sleep } from 'timers/promises';
 import sharp from 'sharp';
 
@@ -125,6 +125,46 @@ function killProcessTree(proc) {
     } catch (_) {
         proc.kill();
     }
+}
+
+function extractMtlxFilenameRefs(xml) {
+    const refs = new Set();
+    const inputRe = /<input\b([^>]*)\/>/g;
+    let match;
+    while ((match = inputRe.exec(xml)) !== null) {
+        const attrs = match[1];
+        const type = (attrs.match(/\btype="([^"]+)"/) ?? [])[1];
+        const value = (attrs.match(/\bvalue="([^"]+)"/) ?? [])[1];
+        if (type === 'filename' && value && !/^(?:[a-z]+:)?\/\//i.test(value) && !isAbsolute(value)) {
+            refs.add(value.replace(/\\/g, '/'));
+        }
+    }
+    return [...refs];
+}
+
+function copyMtlxWithRelativeFiles(mtlxPath, materialId) {
+    const sourceText = readFileSync(mtlxPath, 'utf8');
+    const sourceDir = dirname(mtlxPath);
+    const publicRoot = resolve(process.cwd(), 'public');
+    const targetDir = join(publicRoot, 'mtlx-input', materialId);
+    rmSync(targetDir, { recursive: true, force: true });
+    mkdirSync(targetDir, { recursive: true });
+
+    const targetMtlx = join(targetDir, basename(mtlxPath));
+    writeFileSync(targetMtlx, sourceText, 'utf8');
+
+    for (const ref of extractMtlxFilenameRefs(sourceText)) {
+        const sourceFile = resolve(sourceDir, ref);
+        if (!existsSync(sourceFile)) {
+            console.warn(`[mtlx] texture introuvable ignoree: ${sourceFile}`);
+            continue;
+        }
+        const targetFile = join(targetDir, ...ref.split('/'));
+        mkdirSync(dirname(targetFile), { recursive: true });
+        copyFileSync(sourceFile, targetFile);
+    }
+
+    return `/mtlx-input/${materialId}/${basename(mtlxPath)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,19 +232,14 @@ if (options.scene) { options.scene_name ??= options.scene; delete options.scene;
 let mtlxPublicUrl = null;
 if (mtlxPath) {
     if (!existsSync(mtlxPath)) throw new Error(`Fichier .mtlx introuvable : ${mtlxPath}`);
-    // Copier le .mtlx dans public/ pour qu'il soit servi par Vite.
-    const tmpName = 'tmp_material.mtlx';
-    const destPath = new URL(`./public/${tmpName}`, import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1');
-    writeFileSync(destPath, readFileSync(mtlxPath));
-    mtlxPublicUrl = `/${tmpName}`;
-    console.log(`MTLX      : ${mtlxPath} → servi via ${mtlxPublicUrl}`);
-
     // Preserve the source material-id (filename stem) so the MTLX route/contract
     // resolves the matching generated dispatch artifact, even though the file is
     // served as tmp_material.mtlx.
     if (!options.material_id) {
         options.material_id = basename(mtlxPath).replace(/\.mtlx$/i, '');
     }
+    mtlxPublicUrl = copyMtlxWithRelativeFiles(mtlxPath, options.material_id);
+    console.log(`MTLX      : ${mtlxPath} → servi via ${mtlxPublicUrl}`);
 
     // En mode legacy, injecter aussi les params comme query string pour alimenter les uniforms.
     if (options.renderer_mode === 'Pathtracer legacy') {
