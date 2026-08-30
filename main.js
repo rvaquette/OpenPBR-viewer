@@ -124,6 +124,7 @@ var params =
 
     scene_name:                         'standard-shader-ball',
     renderer_mode:                      'Rasterizer',
+    mtlx_material:                      '',
     smooth_normals:                     true,
     bounces:                            6,
     max_samples:                        512,
@@ -231,6 +232,7 @@ var mtlxRouteMaterialSummary = {
     transmissionWeight: 0.0
 };
 var mtlxRouteMaterialSummaries = [mtlxRouteMaterialSummary];
+var mtlxMaterialLibrary = [];
 
 const LEGACY_COMPARISON_ENABLED_BY_DEFAULT = false;
 const legacyComparisonEnabled = (() => {
@@ -259,6 +261,15 @@ function getPublicAssetUrl(relPath)
     const origin = window.location.origin;
     const base = import.meta.env.BASE_URL;
     return origin + base + relPath.replace(/^\/+/, '');
+}
+
+function resolveViewerAssetUrl(url)
+{
+    if (!url) return url;
+    if (/^(?:[a-z]+:)?\/\//i.test(url)) return url;
+    if (url.startsWith(import.meta.env.BASE_URL)) return url;
+    if (url.startsWith('/')) return import.meta.env.BASE_URL.replace(/\/$/, '') + url;
+    return url;
 }
 
 function readXmlAttr(attrs, name)
@@ -1172,6 +1183,103 @@ async function generateMtlxRouteDispatch(mtlxText) {
     return { glsl, mtlxParams };
 }
 
+async function loadMtlxMaterialLibrary()
+{
+    try {
+        const resp = await fetch(import.meta.env.BASE_URL + 'mtlx-library.json');
+        if (!resp.ok) {
+            console.warn('[mtlx-library] manifest fetch failed:', resp.status);
+            mtlxMaterialLibrary = [];
+            return;
+        }
+        const payload = await resp.json();
+        mtlxMaterialLibrary = Array.isArray(payload?.materials) ? payload.materials : [];
+        console.log('[mtlx-library] loaded', mtlxMaterialLibrary.length, 'materials');
+    } catch (e) {
+        console.warn('[mtlx-library] manifest fetch error:', e?.message || e);
+        mtlxMaterialLibrary = [];
+    }
+}
+
+function getMtlxMaterialOptions()
+{
+    const options = { 'Default MaterialX': '' };
+    for (const material of mtlxMaterialLibrary) {
+        options[material.name || material.file] = material.url;
+    }
+    return options;
+}
+
+function showMtlxLibraryError(error)
+{
+    const message = `[mtlx-library] ${error?.message || error}`;
+    console.error(message, error);
+    window.__openpbrShaderError = message;
+    window.__openpbrReady = true;
+    const overlay = document.getElementById('shader-error');
+    const content = document.getElementById('shader-error-content');
+    if (overlay && content) {
+        content.textContent = message;
+        overlay.style.display = 'block';
+    }
+}
+
+async function configureSingleMtlxMaterial(mtlxUrl, materialId)
+{
+    let mtlxText = DEFAULT_MTLX;
+    let mtlxMaterialBaseUrl = getPublicAssetUrl('');
+    if (mtlxUrl) {
+        const resolvedUrl = resolveViewerAssetUrl(mtlxUrl);
+        mtlxMaterialBaseUrl = new URL(resolvedUrl, window.location.origin).toString().replace(/[^/]*$/, '');
+        const resp = await fetch(resolvedUrl);
+        if (!resp.ok) throw new Error(`material fetch failed: ${resp.status} ${resolvedUrl}`);
+        mtlxText = await resp.text();
+    }
+
+    const result = is_mtlx_bvh_raster_route()
+        ? await generateMtlxRasterDispatch(mtlxText)
+        : await generateMtlxRouteDispatch(mtlxText);
+    const summary = summarizeMtlxRouteMaterialParams(result.mtlxParams);
+    const hasTransmission = result.mtlxParams.transmissionWeight > 0;
+
+    mtlxRouteScene = null;
+    mtlxRouteMaterialSlotByObject = new Map();
+    mtlxRouteDispatches = [{ slot: 0, glsl: result.glsl, mtlxParams: result.mtlxParams, materialId }];
+    mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
+    mtlxRouteLights = extractMtlxLights(mtlxText);
+    mtlxRouteMaterialSummary = summary;
+    mtlxRouteMaterialSummaries = [summary];
+    mtlxRouteDispatchGlsl = composeMtlxRouteDispatches(mtlxRouteDispatches);
+
+    materialDefines.MAX_MTLX_LIGHTS = Math.max(1, mtlxRouteLights.length);
+    materialDefines.VOLUME_ENABLED = hasTransmission && result.mtlxParams.transmissionDepth > 0 && !result.mtlxParams.geometry_thin_walled;
+    materialDefines.TRANSMISSION_ENABLED = hasTransmission && result.mtlxParams.dispersionScale > 0;
+    materialDefines.THIN_FILM_ENABLED = result.mtlxParams.thinFilmWeight > 0;
+    substitutionRuntimeState.contractStatus = 'valid';
+    substitutionRuntimeState.contractValidationStep = 'mtlx-library-material-generation';
+    substitutionRuntimeState.failureCause = '';
+
+    if (mtlxRouteTextureBindings.length > 0) {
+        console.log('[mtlx-library] textures', mtlxRouteTextureBindings.map(t => `${t.sampler}=${t.source}`).join(', '));
+    }
+    console.log('[mtlx-library] applied', materialId || 'default-material', '| dispatch lines:', mtlxRouteDispatchGlsl.split('\n').length);
+}
+
+async function applyMtlxMaterialFromLibrary(value)
+{
+    try {
+        const material = mtlxMaterialLibrary.find(item => item.url === value || item.file === value || item.name === value);
+        const url = material?.url || value || '';
+        const materialId = material?.name || 'default-material';
+        params.mtlx_material = url;
+        params.renderer_mode = 'Pathtracer MTLX';
+        await configureSingleMtlxMaterial(url, materialId);
+        load_scene(params.scene_name);
+    } catch (e) {
+        showMtlxLibraryError(e);
+    }
+}
+
 var mesh_loader;
 var renderer, camera, orbitControls, scene, gui, stats;
 var pathtracedQuad, pathtracedFinalQuad, pathtracingRenderTarget;
@@ -1371,6 +1479,7 @@ var scene_names = {
         console.error('[mtlx] strict generated shading init failed:', e);
     }
 
+    await loadMtlxMaterialLibrary();
     init();
     render();
 })();
@@ -1854,6 +1963,12 @@ function init()
     renderer.debug.onShaderError = function(gl, program, vertexShader, fragmentShader) {
         const vertLog = gl.getShaderInfoLog(vertexShader);
         const fragLog = gl.getShaderInfoLog(fragmentShader);
+        const hasError = /\bERROR\b/i.test(vertLog || '') || /\bERROR\b/i.test(fragLog || '');
+        if (!hasError) {
+            const warningLog = [vertLog, fragLog].filter(log => log && log.trim().length > 0).join('\n');
+            if (warningLog) console.warn('[GLSL shader warning]\n' + warningLog);
+            return;
+        }
         let msg = '';
         if (vertLog && vertLog.trim().length > 0) {
             console.error('[GLSL vertex shader error]\n' + vertLog);
@@ -2223,6 +2338,9 @@ function setup_gui()
 
     ///// Material folder /////////////////////////////////////
     const material_folder = gui.addFolder('Material');
+    const mtlx_library_folder = material_folder.addFolder('MaterialX Library');
+    mtlx_library_folder.add(params, 'mtlx_material', getMtlxMaterialOptions()).name('material').onChange( v => { applyMtlxMaterialFromLibrary(v); });
+    mtlx_library_folder.close();
 
     // Base folder
     const base_folder = material_folder.addFolder('Base');
