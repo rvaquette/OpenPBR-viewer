@@ -926,6 +926,9 @@ const DEFAULT_MTLX = `<?xml version="1.0"?>
 </materialx>`;
 
 // Load (and cache) the MaterialX WASM generator module.
+// Bump on every republish of the public/mtlx bundle so clients never mix a cached
+// .js offset table with a differently-versioned .data payload.
+const MTLX_RUNTIME_VERSION = '2026-08-23';
 let _mtlxModulePromise = null;
 async function loadMtlxModule() {
     if (_mtlxModulePromise) return _mtlxModulePromise;
@@ -934,10 +937,14 @@ async function loadMtlxModule() {
     // BASE_URL = '/OpenPBR-viewer/' — public files are served under the base in Vite 5.
     const origin = window.location.origin;
     const base   = import.meta.env.BASE_URL; // e.g. '/OpenPBR-viewer/'
-    const jsUrl  = origin + base + 'mtlx/JsMaterialXGenShader.js';
+    // Version tag so .js (byte-offset table), .data (bytes) and .wasm are always
+    // fetched as a matched set. A stale cached .js against a fresh .data mis-slices
+    // the embedded libraries and yields XML "Start-end tags mismatch" parse errors.
+    const v = `?v=${MTLX_RUNTIME_VERSION}`;
+    const jsUrl  = origin + base + 'mtlx/JsMaterialXGenShader.js' + v;
     _mtlxModulePromise = import(/* @vite-ignore */ jsUrl)
         .then(mod => mod.default({
-            locateFile: p => origin + base + 'mtlx/' + p
+            locateFile: p => origin + base + 'mtlx/' + p + v
         }));
     return _mtlxModulePromise;
 }
