@@ -272,6 +272,10 @@ const MODE_ALIASES = {
     'pathtracer-mtlx':   'Pathtracer MTLX',
     'pathtracer_mtlx':   'Pathtracer MTLX',
     'pathtracer mtlx':   'Pathtracer MTLX',
+    'raster-mtlx':       'Rasterizer MTLX',
+    'rasterizer-mtlx':   'Rasterizer MTLX',
+    'rasterizer_mtlx':   'Rasterizer MTLX',
+    'rasterizer mtlx':   'Rasterizer MTLX',
     'legacy':            'Pathtracer legacy',
     'pathtracer-legacy': 'Pathtracer legacy',
     'pathtracer_legacy': 'Pathtracer legacy'
@@ -421,7 +425,7 @@ console.log(`Mode      : ${headless ? 'headless' : 'fenêtré'}`);
 console.log(`Renderer  : ${options.renderer_mode}`);
 console.log(`URL       : ${url}`);
 console.log(`Size      : ${renderW}x${renderH}`);
-const isPathtracing = options.renderer_mode === 'Pathtracer' || options.renderer_mode === 'Pathtracer MTLX' || options.renderer_mode === 'Pathtracer legacy';
+const isPathtracing = options.renderer_mode === 'Pathtracer' || options.renderer_mode === 'Pathtracer MTLX' || options.renderer_mode === 'Rasterizer MTLX' || options.renderer_mode === 'Pathtracer legacy';
 console.log(`Output    : ${screenshotPath}${isPathtracing ? ` (${waitSamples} spp)` : ''}`);
 console.log('');
 

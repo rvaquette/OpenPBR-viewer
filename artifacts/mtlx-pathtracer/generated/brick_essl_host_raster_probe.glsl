@@ -12,13 +12,70 @@ struct displacementshader { vec3 offset; float scale; };
 struct lightshader { vec3 intensity; vec3 direction; };
 #define material surfaceshader
 
-uniform mat4 u_envMatrix;
-uniform sampler2D u_envRadiance;
-uniform float u_envLightIntensity;
-uniform int u_envRadianceMips;
-uniform int u_envRadianceSamples;
-uniform sampler2D u_envIrradiance;
-uniform bool u_refractionTwoSided;
+// __MTLX_PARAMS_BEGIN__
+float base = 1.000000;
+float diffuse_roughness = 0.000000;
+float metalness = 0.000000;
+float specular = 1.000000;
+vec3 specular_color = vec3(1.000000, 1.000000, 1.000000);
+float specular_IOR = 1.500000;
+float specular_anisotropy = 0.000000;
+float specular_rotation = 0.000000;
+float transmission = 0.000000;
+vec3 transmission_color = vec3(1.000000, 1.000000, 1.000000);
+float transmission_depth = 0.000000;
+vec3 transmission_scatter = vec3(0.000000, 0.000000, 0.000000);
+float transmission_scatter_anisotropy = 0.000000;
+float transmission_dispersion = 0.000000;
+float transmission_extra_roughness = 0.000000;
+float subsurface = 0.000000;
+vec3 subsurface_color = vec3(1.000000, 1.000000, 1.000000);
+vec3 subsurface_radius = vec3(1.000000, 1.000000, 1.000000);
+float subsurface_scale = 1.000000;
+float subsurface_anisotropy = 0.000000;
+float sheen = 0.000000;
+vec3 sheen_color = vec3(1.000000, 1.000000, 1.000000);
+float sheen_roughness = 0.300000;
+float coat = 0.000000;
+vec3 coat_color = vec3(1.000000, 1.000000, 1.000000);
+float coat_roughness = 0.100000;
+float coat_anisotropy = 0.000000;
+float coat_rotation = 0.000000;
+float coat_IOR = 1.500000;
+float coat_affect_color = 0.000000;
+float coat_affect_roughness = 0.000000;
+float thin_film_thickness = 0.000000;
+float thin_film_IOR = 1.500000;
+float emission = 0.000000;
+vec3 emission_color = vec3(1.000000, 1.000000, 1.000000);
+vec3 opacity = vec3(1.000000, 1.000000, 1.000000);
+bool thin_walled = false;
+sampler2D node_tiledimage_float_26_file;
+sampler2D node_tiledimage_float_7_file;
+sampler2D node_tiledimage_float_24_file;
+sampler2D node_tiledimage_float_10_file;
+sampler2D node_tiledimage_float_22_file;
+sampler2D node_tiledimage_vector3_27_file;
+// __MTLX_PARAMS_END__
+
+// ESSL host geometric streams (fed each hit by pt_MtlxBindGeom).
+vec2 texcoord_0;
+vec3 normalWorld;
+vec3 tangentWorld;
+vec3 bitangentWorld;
+vec3 positionWorld;
+
+void pt_MtlxBindGeom(vec3 ptN, vec3 ptT, vec3 ptB, vec3 ptP, vec2 ptUv)
+{
+    texcoord_0 = ptUv;
+    normalWorld = ptN;
+    tangentWorld = ptT;
+    bitangentWorld = ptB;
+    positionWorld = ptP;
+}
+
+// Pixel shader outputs
+out vec4 out1;
 
 #define M_FLOAT_EPS 1e-8
 #define M_PI 3.1415926535897932
@@ -69,8 +126,10 @@ vec3 mx_srgb_encode(vec3 color)
 }
 
 #define DIRECTIONAL_ALBEDO_METHOD 0
+
 #define AIRY_FRESNEL_ITERATIONS 2
 
+#define MAX_LIGHT_SOURCES 1
 #define M_PI 3.1415926535897932
 #define M_PI_INV (1.0 / M_PI)
 
@@ -825,72 +884,38 @@ vec3 mx_surface_transmission(vec3 N, vec3 V, vec3 X, vec2 alpha, int distributio
     return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint;
 }
 
+struct LightData
+{
+    int type;
+};
 
-// Host closure globals (set by evaluateBsdf / sampleBsdf).
-vec3 g_ptV;
-vec3 g_ptN;
-vec3 g_ptL;
-vec3 g_ptP;
-vec3 g_ptTangent;
-vec3 g_ptBitangent;
-vec2 g_ptTexcoord;
-int g_ptClosureType;
-float g_ptOcclusion = 1.0;
-int g_ptEmitEmission = 1;
-vec3 positionObject;
-vec3 normalWorld;
-vec3 tangentWorld;
+uniform LightData u_lightData[MAX_LIGHT_SOURCES];
 
-// __MTLX_PARAMS_BEGIN__
-float base = 1.000000;
-float diffuse_roughness = 0.000000;
-float metalness = 0.000000;
-float specular = 1.000000;
-vec3 specular_color = vec3(1.000000, 1.000000, 1.000000);
-float specular_roughness = 0.100000;
-float specular_IOR = 1.500000;
-float specular_anisotropy = 0.000000;
-float specular_rotation = 0.000000;
-float transmission = 0.000000;
-vec3 transmission_color = vec3(1.000000, 1.000000, 1.000000);
-float transmission_depth = 0.000000;
-vec3 transmission_scatter = vec3(0.000000, 0.000000, 0.000000);
-float transmission_scatter_anisotropy = 0.000000;
-float transmission_dispersion = 0.000000;
-float transmission_extra_roughness = 0.000000;
-float subsurface = 0.400000;
-vec3 subsurface_radius = vec3(1.000000, 1.000000, 1.000000);
-float subsurface_scale = 1.000000;
-float subsurface_anisotropy = 0.000000;
-float sheen = 0.000000;
-vec3 sheen_color = vec3(1.000000, 1.000000, 1.000000);
-float sheen_roughness = 0.300000;
-float coat = 0.000000;
-vec3 coat_color = vec3(1.000000, 1.000000, 1.000000);
-float coat_roughness = 0.100000;
-float coat_anisotropy = 0.000000;
-float coat_rotation = 0.000000;
-float coat_IOR = 1.500000;
-float coat_affect_color = 0.000000;
-float coat_affect_roughness = 0.000000;
-float thin_film_thickness = 0.000000;
-float thin_film_IOR = 1.500000;
-float emission = 0.000000;
-vec3 emission_color = vec3(1.000000, 1.000000, 1.000000);
-vec3 opacity = vec3(1.000000, 1.000000, 1.000000);
-bool thin_walled = false;
-// __MTLX_PARAMS_END__
+int numActiveLightSources()
+{
+    return min(u_numActiveLightSources, MAX_LIGHT_SOURCES) ;
+}
+
+void sampleLightSource(LightData light, vec3 position, out lightshader result)
+{
+    result.intensity = vec3(0.000000, 0.000000, 0.000000);
+    result.direction = vec3(0.000000, 0.000000, 0.000000);
+}
+
+void NG_convert_float_vector2(float in1, out vec2 out1)
+{
+    vec2 combine_out = vec2(in1,in1);
+    out1 = combine_out;
+}
 
 /*
-Noise Library.
+Color transform functions.
 
-This library is a modified version of the noise library found in
-Open Shading Language:
-github.com/imageworks/OpenShadingLanguage/blob/master/src/include/OSL/oslnoise.h
+These functions are modified versions of the color operators found in Open Shading Language:
+github.com/imageworks/OpenShadingLanguage/blob/master/src/liboslexec/opcolor.cpp
 
-It contains the subset of noise types needed to implement the MaterialX
-standard library. The modifications are mainly conversions from C++ to GLSL.
-Produced results should be identical to the OSL noise functions.
+It contains the subset of color operators needed to implement the MaterialX
+standard library. The modifications are for conversions from C++ to GLSL.
 
 Original copyright notice:
 ------------------------------------------------------------------------
@@ -922,729 +947,123 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ------------------------------------------------------------------------
 */
 
-float mx_select(bool b, float t, float f)
+vec3 mx_hsvtorgb(vec3 hsv)
 {
-    return b ? t : f;
-}
-
-float mx_negate_if(float val, bool b)
-{
-    return b ? -val : val;
-}
-
-int mx_floor(float x)
-{
-    return int(floor(x));
-}
-
-// return mx_floor as well as the fractional remainder
-float mx_floorfrac(float x, out int i)
-{
-    i = mx_floor(x);
-    return x - float(i);
-}
-
-float mx_bilerp(float v0, float v1, float v2, float v3, float s, float t)
-{
-    float s1 = 1.0 - s;
-    return (1.0 - t) * (v0*s1 + v1*s) + t * (v2*s1 + v3*s);
-}
-vec3 mx_bilerp(vec3 v0, vec3 v1, vec3 v2, vec3 v3, float s, float t)
-{
-    float s1 = 1.0 - s;
-    return (1.0 - t) * (v0*s1 + v1*s) + t * (v2*s1 + v3*s);
-}
-float mx_trilerp(float v0, float v1, float v2, float v3, float v4, float v5, float v6, float v7, float s, float t, float r)
-{
-    float s1 = 1.0 - s;
-    float t1 = 1.0 - t;
-    float r1 = 1.0 - r;
-    return (r1*(t1*(v0*s1 + v1*s) + t*(v2*s1 + v3*s)) +
-            r*(t1*(v4*s1 + v5*s) + t*(v6*s1 + v7*s)));
-}
-vec3 mx_trilerp(vec3 v0, vec3 v1, vec3 v2, vec3 v3, vec3 v4, vec3 v5, vec3 v6, vec3 v7, float s, float t, float r)
-{
-    float s1 = 1.0 - s;
-    float t1 = 1.0 - t;
-    float r1 = 1.0 - r;
-    return (r1*(t1*(v0*s1 + v1*s) + t*(v2*s1 + v3*s)) +
-            r*(t1*(v4*s1 + v5*s) + t*(v6*s1 + v7*s)));
-}
-
-// 2 and 3 dimensional gradient functions - perform a dot product against a
-// randomly chosen vector. Note that the gradient vector is not normalized, but
-// this only affects the overall "scale" of the result, so we simply account for
-// the scale by multiplying in the corresponding "perlin" function.
-float mx_gradient_float(uint hash, float x, float y)
-{
-    // 8 possible directions (+-1,+-2) and (+-2,+-1)
-    uint h = hash & 7u;
-    float u = mx_select(h<4u, x, y);
-    float v = 2.0 * mx_select(h<4u, y, x);
-    // compute the dot product with (x,y).
-    return mx_negate_if(u, bool(h&1u)) + mx_negate_if(v, bool(h&2u));
-}
-float mx_gradient_float(uint hash, float x, float y, float z)
-{
-    // use vectors pointing to the edges of the cube
-    uint h = hash & 15u;
-    float u = mx_select(h<8u, x, y);
-    float v = mx_select(h<4u, y, mx_select((h==12u)||(h==14u), x, z));
-    return mx_negate_if(u, bool(h&1u)) + mx_negate_if(v, bool(h&2u));
-}
-vec3 mx_gradient_vec3(uvec3 hash, float x, float y)
-{
-    return vec3(mx_gradient_float(hash.x, x, y), mx_gradient_float(hash.y, x, y), mx_gradient_float(hash.z, x, y));
-}
-vec3 mx_gradient_vec3(uvec3 hash, float x, float y, float z)
-{
-    return vec3(mx_gradient_float(hash.x, x, y, z), mx_gradient_float(hash.y, x, y, z), mx_gradient_float(hash.z, x, y, z));
-}
-// Scaling factors to normalize the result of gradients above.
-// These factors were experimentally calculated to be:
-//    2D:   0.6616
-//    3D:   0.9820
-float mx_gradient_scale2d(float v) { return 0.6616 * v; }
-float mx_gradient_scale3d(float v) { return 0.9820 * v; }
-vec3 mx_gradient_scale2d(vec3 v) { return 0.6616 * v; }
-vec3 mx_gradient_scale3d(vec3 v) { return 0.9820 * v; }
-
-/// Bitwise circular rotation left by k bits (for 32 bit unsigned integers)
-uint mx_rotl32(uint x, int k)
-{
-    return (x<<k) | (x>>(32-k));
-}
-
-void mx_bjmix(inout uint a, inout uint b, inout uint c)
-{
-    a -= c; a ^= mx_rotl32(c, 4); c += b;
-    b -= a; b ^= mx_rotl32(a, 6); a += c;
-    c -= b; c ^= mx_rotl32(b, 8); b += a;
-    a -= c; a ^= mx_rotl32(c,16); c += b;
-    b -= a; b ^= mx_rotl32(a,19); a += c;
-    c -= b; c ^= mx_rotl32(b, 4); b += a;
-}
-
-// Mix up and combine the bits of a, b, and c (doesn't change them, but
-// returns a hash of those three original values).
-uint mx_bjfinal(uint a, uint b, uint c)
-{
-    c ^= b; c -= mx_rotl32(b,14);
-    a ^= c; a -= mx_rotl32(c,11);
-    b ^= a; b -= mx_rotl32(a,25);
-    c ^= b; c -= mx_rotl32(b,16);
-    a ^= c; a -= mx_rotl32(c,4);
-    b ^= a; b -= mx_rotl32(a,14);
-    c ^= b; c -= mx_rotl32(b,24);
-    return c;
-}
-
-// Convert a 32 bit integer into a floating point number in [0,1]
-float mx_bits_to_01(uint bits)
-{
-    return float(bits) / float(uint(0xffffffff));
-}
-
-float mx_fade(float t)
-{
-   return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
-}
-
-uint mx_hash_int(int x)
-{
-    uint len = 1u;
-    uint seed = uint(0xdeadbeef) + (len << 2u) + 13u;
-    return mx_bjfinal(seed+uint(x), seed, seed);
-}
-
-uint mx_hash_int(int x, int y)
-{
-    uint len = 2u;
-    uint a, b, c;
-    a = b = c = uint(0xdeadbeef) + (len << 2u) + 13u;
-    a += uint(x);
-    b += uint(y);
-    return mx_bjfinal(a, b, c);
-}
-
-uint mx_hash_int(int x, int y, int z)
-{
-    uint len = 3u;
-    uint a, b, c;
-    a = b = c = uint(0xdeadbeef) + (len << 2u) + 13u;
-    a += uint(x);
-    b += uint(y);
-    c += uint(z);
-    return mx_bjfinal(a, b, c);
-}
-
-uint mx_hash_int(int x, int y, int z, int xx)
-{
-    uint len = 4u;
-    uint a, b, c;
-    a = b = c = uint(0xdeadbeef) + (len << 2u) + 13u;
-    a += uint(x);
-    b += uint(y);
-    c += uint(z);
-    mx_bjmix(a, b, c);
-    a += uint(xx);
-    return mx_bjfinal(a, b, c);
-}
-
-uint mx_hash_int(int x, int y, int z, int xx, int yy)
-{
-    uint len = 5u;
-    uint a, b, c;
-    a = b = c = uint(0xdeadbeef) + (len << 2u) + 13u;
-    a += uint(x);
-    b += uint(y);
-    c += uint(z);
-    mx_bjmix(a, b, c);
-    a += uint(xx);
-    b += uint(yy);
-    return mx_bjfinal(a, b, c);
-}
-
-uvec3 mx_hash_vec3(int x, int y)
-{
-    uint h = mx_hash_int(x, y);
-    // we only need the low-order bits to be random, so split out
-    // the 32 bit result into 3 parts for each channel
-    uvec3 result;
-    result.x = (h      ) & 0xFFu;
-    result.y = (h >> 8 ) & 0xFFu;
-    result.z = (h >> 16) & 0xFFu;
-    return result;
-}
-
-uvec3 mx_hash_vec3(int x, int y, int z)
-{
-    uint h = mx_hash_int(x, y, z);
-    // we only need the low-order bits to be random, so split out
-    // the 32 bit result into 3 parts for each channel
-    uvec3 result;
-    result.x = (h      ) & 0xFFu;
-    result.y = (h >> 8 ) & 0xFFu;
-    result.z = (h >> 16) & 0xFFu;
-    return result;
-}
-
-float mx_perlin_noise_float(vec2 p)
-{
-    int X, Y;
-    float fx = mx_floorfrac(p.x, X);
-    float fy = mx_floorfrac(p.y, Y);
-    float u = mx_fade(fx);
-    float v = mx_fade(fy);
-    float result = mx_bilerp(
-        mx_gradient_float(mx_hash_int(X  , Y  ), fx    , fy     ),
-        mx_gradient_float(mx_hash_int(X+1, Y  ), fx-1.0, fy     ),
-        mx_gradient_float(mx_hash_int(X  , Y+1), fx    , fy-1.0),
-        mx_gradient_float(mx_hash_int(X+1, Y+1), fx-1.0, fy-1.0),
-        u, v);
-    return mx_gradient_scale2d(result);
-}
-
-float mx_perlin_noise_float(vec3 p)
-{
-    int X, Y, Z;
-    float fx = mx_floorfrac(p.x, X);
-    float fy = mx_floorfrac(p.y, Y);
-    float fz = mx_floorfrac(p.z, Z);
-    float u = mx_fade(fx);
-    float v = mx_fade(fy);
-    float w = mx_fade(fz);
-    float result = mx_trilerp(
-        mx_gradient_float(mx_hash_int(X  , Y  , Z  ), fx    , fy    , fz     ),
-        mx_gradient_float(mx_hash_int(X+1, Y  , Z  ), fx-1.0, fy    , fz     ),
-        mx_gradient_float(mx_hash_int(X  , Y+1, Z  ), fx    , fy-1.0, fz     ),
-        mx_gradient_float(mx_hash_int(X+1, Y+1, Z  ), fx-1.0, fy-1.0, fz     ),
-        mx_gradient_float(mx_hash_int(X  , Y  , Z+1), fx    , fy    , fz-1.0),
-        mx_gradient_float(mx_hash_int(X+1, Y  , Z+1), fx-1.0, fy    , fz-1.0),
-        mx_gradient_float(mx_hash_int(X  , Y+1, Z+1), fx    , fy-1.0, fz-1.0),
-        mx_gradient_float(mx_hash_int(X+1, Y+1, Z+1), fx-1.0, fy-1.0, fz-1.0),
-        u, v, w);
-    return mx_gradient_scale3d(result);
-}
-
-vec3 mx_perlin_noise_vec3(vec2 p)
-{
-    int X, Y;
-    float fx = mx_floorfrac(p.x, X);
-    float fy = mx_floorfrac(p.y, Y);
-    float u = mx_fade(fx);
-    float v = mx_fade(fy);
-    vec3 result = mx_bilerp(
-        mx_gradient_vec3(mx_hash_vec3(X  , Y  ), fx    , fy     ),
-        mx_gradient_vec3(mx_hash_vec3(X+1, Y  ), fx-1.0, fy     ),
-        mx_gradient_vec3(mx_hash_vec3(X  , Y+1), fx    , fy-1.0),
-        mx_gradient_vec3(mx_hash_vec3(X+1, Y+1), fx-1.0, fy-1.0),
-        u, v);
-    return mx_gradient_scale2d(result);
-}
-
-vec3 mx_perlin_noise_vec3(vec3 p)
-{
-    int X, Y, Z;
-    float fx = mx_floorfrac(p.x, X);
-    float fy = mx_floorfrac(p.y, Y);
-    float fz = mx_floorfrac(p.z, Z);
-    float u = mx_fade(fx);
-    float v = mx_fade(fy);
-    float w = mx_fade(fz);
-    vec3 result = mx_trilerp(
-        mx_gradient_vec3(mx_hash_vec3(X  , Y  , Z  ), fx    , fy    , fz     ),
-        mx_gradient_vec3(mx_hash_vec3(X+1, Y  , Z  ), fx-1.0, fy    , fz     ),
-        mx_gradient_vec3(mx_hash_vec3(X  , Y+1, Z  ), fx    , fy-1.0, fz     ),
-        mx_gradient_vec3(mx_hash_vec3(X+1, Y+1, Z  ), fx-1.0, fy-1.0, fz     ),
-        mx_gradient_vec3(mx_hash_vec3(X  , Y  , Z+1), fx    , fy    , fz-1.0),
-        mx_gradient_vec3(mx_hash_vec3(X+1, Y  , Z+1), fx-1.0, fy    , fz-1.0),
-        mx_gradient_vec3(mx_hash_vec3(X  , Y+1, Z+1), fx    , fy-1.0, fz-1.0),
-        mx_gradient_vec3(mx_hash_vec3(X+1, Y+1, Z+1), fx-1.0, fy-1.0, fz-1.0),
-        u, v, w);
-    return mx_gradient_scale3d(result);
-}
-
-float mx_cell_noise_float(float p)
-{
-    int ix = mx_floor(p);
-    return mx_bits_to_01(mx_hash_int(ix));
-}
-
-float mx_cell_noise_float(vec2 p)
-{
-    int ix = mx_floor(p.x);
-    int iy = mx_floor(p.y);
-    return mx_bits_to_01(mx_hash_int(ix, iy));
-}
-
-float mx_cell_noise_float(vec3 p)
-{
-    int ix = mx_floor(p.x);
-    int iy = mx_floor(p.y);
-    int iz = mx_floor(p.z);
-    return mx_bits_to_01(mx_hash_int(ix, iy, iz));
-}
-
-float mx_cell_noise_float(vec4 p)
-{
-    int ix = mx_floor(p.x);
-    int iy = mx_floor(p.y);
-    int iz = mx_floor(p.z);
-    int iw = mx_floor(p.w);
-    return mx_bits_to_01(mx_hash_int(ix, iy, iz, iw));
-}
-
-vec3 mx_cell_noise_vec3(float p)
-{
-    int ix = mx_floor(p);
-    return vec3(
-            mx_bits_to_01(mx_hash_int(ix, 0)),
-            mx_bits_to_01(mx_hash_int(ix, 1)),
-            mx_bits_to_01(mx_hash_int(ix, 2))
-    );
-}
-
-vec3 mx_cell_noise_vec3(vec2 p)
-{
-    int ix = mx_floor(p.x);
-    int iy = mx_floor(p.y);
-    return vec3(
-            mx_bits_to_01(mx_hash_int(ix, iy, 0)),
-            mx_bits_to_01(mx_hash_int(ix, iy, 1)),
-            mx_bits_to_01(mx_hash_int(ix, iy, 2))
-    );
-}
-
-vec3 mx_cell_noise_vec3(vec3 p)
-{
-    int ix = mx_floor(p.x);
-    int iy = mx_floor(p.y);
-    int iz = mx_floor(p.z);
-    uint a, b, c;
-    a = b = c = uint(0xdeadbeef) + (4u << 2u) + 13u;
-    a += uint(ix);
-    b += uint(iy);
-    c += uint(iz);
-    mx_bjmix(a, b, c);
-    return vec3(
-            mx_bits_to_01(mx_bjfinal(a,      b, c)),
-            mx_bits_to_01(mx_bjfinal(a + 1u, b, c)),
-            mx_bits_to_01(mx_bjfinal(a + 2u, b, c))
-    );
-}
-
-vec3 mx_cell_noise_vec3(vec4 p)
-{
-    int ix = mx_floor(p.x);
-    int iy = mx_floor(p.y);
-    int iz = mx_floor(p.z);
-    int iw = mx_floor(p.w);
-    uint a, b, c;
-    a = b = c = uint(0xdeadbeef) + (5u << 2u) + 13u;
-    a += uint(ix);
-    b += uint(iy);
-    c += uint(iz);
-    mx_bjmix(a, b, c);
-    a += uint(iw);
-    return vec3(
-            mx_bits_to_01(mx_bjfinal(a, b,      c)),
-            mx_bits_to_01(mx_bjfinal(a, b + 1u, c)),
-            mx_bits_to_01(mx_bjfinal(a, b + 2u, c))
-    );
-}
-
-float mx_fractal2d_noise_float(vec2 p, int octaves, float lacunarity, float diminish)
-{
-    float result = 0.0;
-    float amplitude = 1.0;
-    for (int i = 0;  i < octaves; ++i)
-    {
-        result += amplitude * mx_perlin_noise_float(p);
-        amplitude *= diminish;
-        p *= lacunarity;
-    }
-    return result;
-}
-
-vec3 mx_fractal2d_noise_vec3(vec2 p, int octaves, float lacunarity, float diminish)
-{
-    vec3 result = vec3(0.0);
-    float amplitude = 1.0;
-    for (int i = 0;  i < octaves; ++i)
-    {
-        result += amplitude * mx_perlin_noise_vec3(p);
-        amplitude *= diminish;
-        p *= lacunarity;
-    }
-    return result;
-}
-
-vec2 mx_fractal2d_noise_vec2(vec2 p, int octaves, float lacunarity, float diminish)
-{
-    return vec2(mx_fractal2d_noise_float(p, octaves, lacunarity, diminish),
-                mx_fractal2d_noise_float(p+vec2(19, 193), octaves, lacunarity, diminish));
-}
-
-vec4 mx_fractal2d_noise_vec4(vec2 p, int octaves, float lacunarity, float diminish)
-{
-    vec3  c = mx_fractal2d_noise_vec3(p, octaves, lacunarity, diminish);
-    float f = mx_fractal2d_noise_float(p+vec2(19, 193), octaves, lacunarity, diminish);
-    return vec4(c, f);
-}
-
-float mx_fractal3d_noise_float(vec3 p, int octaves, float lacunarity, float diminish)
-{
-    float result = 0.0;
-    float amplitude = 1.0;
-    for (int i = 0;  i < octaves; ++i)
-    {
-        result += amplitude * mx_perlin_noise_float(p);
-        amplitude *= diminish;
-        p *= lacunarity;
-    }
-    return result;
-}
-
-vec3 mx_fractal3d_noise_vec3(vec3 p, int octaves, float lacunarity, float diminish)
-{
-    vec3 result = vec3(0.0);
-    float amplitude = 1.0;
-    for (int i = 0;  i < octaves; ++i)
-    {
-        result += amplitude * mx_perlin_noise_vec3(p);
-        amplitude *= diminish;
-        p *= lacunarity;
-    }
-    return result;
-}
-
-vec2 mx_fractal3d_noise_vec2(vec3 p, int octaves, float lacunarity, float diminish)
-{
-    return vec2(mx_fractal3d_noise_float(p, octaves, lacunarity, diminish),
-                mx_fractal3d_noise_float(p+vec3(19, 193, 17), octaves, lacunarity, diminish));
-}
-
-vec4 mx_fractal3d_noise_vec4(vec3 p, int octaves, float lacunarity, float diminish)
-{
-    vec3  c = mx_fractal3d_noise_vec3(p, octaves, lacunarity, diminish);
-    float f = mx_fractal3d_noise_float(p+vec3(19, 193, 17), octaves, lacunarity, diminish);
-    return vec4(c, f);
-}
-
-vec2 mx_worley_cell_position(int x, int y, int xoff, int yoff, float jitter)
-{
-    vec3  tmp = mx_cell_noise_vec3(vec2(x+xoff, y+yoff));
-    vec2  off = vec2(tmp.x, tmp.y);
-
-    off -= 0.5f;
-    off *= jitter;
-    off += 0.5f;
-    
-    return vec2(float(x), float(y)) + off;
-}
-
-vec3 mx_worley_cell_position(int x, int y, int z, int xoff, int yoff, int zoff, float jitter)
-{
-    vec3  off = mx_cell_noise_vec3(vec3(x+xoff, y+yoff, z+zoff));
-
-    off -= 0.5f;
-    off *= jitter;
-    off += 0.5f;
-    
-    return vec3(float(x), float(y), float(z)) + off;
-}
-
-float mx_worley_distance(vec2 p, int x, int y, int xoff, int yoff, float jitter, int metric)
-{
-    vec2 cellpos = mx_worley_cell_position(x, y, xoff, yoff, jitter);
-    vec2 diff = cellpos - p;
-    if (metric == 2)
-        return abs(diff.x) + abs(diff.y);       // Manhattan distance
-    if (metric == 3)
-        return max(abs(diff.x), abs(diff.y));   // Chebyshev distance
-    // Either Euclidean or Distance^2
-    return dot(diff, diff);
-}
-
-float mx_worley_distance(vec3 p, int x, int y, int z, int xoff, int yoff, int zoff, float jitter, int metric)
-{
-    vec3 cellpos = mx_worley_cell_position(x, y, z, xoff, yoff, zoff, jitter);
-    vec3 diff = cellpos - p;
-    if (metric == 2)
-        return abs(diff.x) + abs(diff.y) + abs(diff.z); // Manhattan distance
-    if (metric == 3)
-        return max(max(abs(diff.x), abs(diff.y)), abs(diff.z)); // Chebyshev distance
-    // Either Euclidean or Distance^2
-    return dot(diff, diff);
-}
-
-float mx_worley_noise_float(vec2 p, float jitter, int style, int metric)
-{
-    int X, Y;
-    float dist;
-    vec2 localpos = vec2(mx_floorfrac(p.x, X), mx_floorfrac(p.y, Y));
-    float sqdist = 1e6f;        // Some big number for jitter > 1 (not all GPUs may be IEEE)
-    vec2 minpos = vec2(0,0);
-    for (int x = -1; x <= 1; ++x)
-    {
-        for (int y = -1; y <= 1; ++y)
-        {
-            float dist = mx_worley_distance(localpos, x, y, X, Y, jitter, metric);
-            vec2 cellpos = mx_worley_cell_position(x, y, X, Y, jitter) - localpos;
-            if(dist < sqdist)
-            {
-                sqdist = dist;
-                minpos = cellpos;
-            }
-        }
-    }
-    if (style == 1)
-        return mx_cell_noise_float(minpos + p);
-    else
-    {
-        if (metric == 0)
-            sqdist = sqrt(sqdist);
-        return sqdist;
+    // Reference for this technique: Foley & van Dam
+    float h = hsv.x; float s = hsv.y; float v = hsv.z;
+    if (s < 0.0001f) {
+      return vec3 (v, v, v);
+    } else {
+        h = 6.0f * (h - floor(h));  // expand to [0..6)
+        int hi = int(trunc(h));
+        float f = h - float(hi);
+        float p = v * (1.0f-s);
+        float q = v * (1.0f-s*f);
+        float t = v * (1.0f-s*(1.0f-f));
+        if (hi == 0)
+            return vec3 (v, t, p);
+        else if (hi == 1)
+            return vec3 (q, v, p);
+        else if (hi == 2)
+            return vec3 (p, v, t);
+        else if (hi == 3)
+            return vec3 (p, q, v);
+        else if (hi == 4)
+            return vec3 (t, p, v);
+        return vec3 (v, p, q);
     }
 }
 
-vec2 mx_worley_noise_vec2(vec2 p, float jitter, int style, int metric)
+
+vec3 mx_rgbtohsv(vec3 c)
 {
-    int X, Y;
-    vec2 localpos = vec2(mx_floorfrac(p.x, X), mx_floorfrac(p.y, Y));
-    vec2 sqdist = vec2(1e6f, 1e6f);
-    vec2 minpos = vec2(0,0);
-    for (int x = -1; x <= 1; ++x)
-    {
-        for (int y = -1; y <= 1; ++y)
-        {
-            float dist = mx_worley_distance(localpos, x, y, X, Y, jitter, metric);
-            vec2 cellpos = mx_worley_cell_position(x, y, X, Y, jitter) - localpos;
-            if (dist < sqdist.x)
-            {
-                sqdist.y = sqdist.x;
-                sqdist.x = dist;
-                minpos = cellpos;
-            }
-            else if (dist < sqdist.y)
-            {
-                sqdist.y = dist;
-            }
-        }
+    // See Foley & van Dam
+    float r = c.x; float g = c.y; float b = c.z;
+    float mincomp = min (r, min(g, b));
+    float maxcomp = max (r, max(g, b));
+    float delta = maxcomp - mincomp;  // chroma
+    float h, s, v;
+    v = maxcomp;
+    if (maxcomp > 0.0f)
+        s = delta / maxcomp;
+    else s = 0.0f;
+    if (s <= 0.0f)
+        h = 0.0f;
+    else {
+        if      (r >= maxcomp) h = (g-b) / delta;
+        else if (g >= maxcomp) h = 2.0f + (b-r) / delta;
+        else                   h = 4.0f + (r-g) / delta;
+        h *= (1.0f/6.0f);
+        if (h < 0.0f)
+            h += 1.0f;
     }
-    if (style == 1)
-    {
-        vec3 tmp = mx_cell_noise_vec3(minpos + p);
-        return vec2(tmp.x,tmp.y);
-    }
-    else
-    {
-        if (metric == 0)
-            sqdist = sqrt(sqdist);
-        return sqdist;
-    }
+    return vec3(h, s, v);
 }
 
-vec3 mx_worley_noise_vec3(vec2 p, float jitter, int style, int metric)
+void mx_rgbtohsv_color3(vec3 _in, out vec3 result)
 {
-    int X, Y;
-    vec2 localpos = vec2(mx_floorfrac(p.x, X), mx_floorfrac(p.y, Y));
-    vec3 sqdist = vec3(1e6f, 1e6f, 1e6f);
-    vec2 minpos = vec2(0,0);
-    for (int x = -1; x <= 1; ++x)
-    {
-        for (int y = -1; y <= 1; ++y)
-        {
-            float dist = mx_worley_distance(localpos, x, y, X, Y, jitter, metric);
-            vec2 cellpos = mx_worley_cell_position(x, y, X, Y, jitter) - localpos;
-            if (dist < sqdist.x)
-            {
-                sqdist.z = sqdist.y;
-                sqdist.y = sqdist.x;
-                sqdist.x = dist;
-                minpos = cellpos;
-            }
-            else if (dist < sqdist.y)
-            {
-                sqdist.z = sqdist.y;
-                sqdist.y = dist;
-            }
-            else if (dist < sqdist.z)
-            {
-                sqdist.z = dist;
-            }
-        }
-    }
-    if (style == 1)
-        return mx_cell_noise_vec3(minpos + p);
-    else
-    {
-        if (metric == 0)
-            sqdist = sqrt(sqdist);
-        return sqdist;
-    }
+    result = mx_rgbtohsv(_in);
 }
 
-float mx_worley_noise_float(vec3 p, float jitter, int style, int metric)
+vec2 mx_transform_uv(vec2 uv, vec2 uv_scale, vec2 uv_offset)
 {
-    int X, Y, Z;
-    vec3 localpos = vec3(mx_floorfrac(p.x, X), mx_floorfrac(p.y, Y), mx_floorfrac(p.z, Z));
-    float sqdist = 1e6f;
-    vec3 minpos = vec3(0,0,0);
-    for (int x = -1; x <= 1; ++x)
-    {
-        for (int y = -1; y <= 1; ++y)
-        {
-            for (int z = -1; z <= 1; ++z)
-            {
-                float dist = mx_worley_distance(localpos, x, y, z, X, Y, Z, jitter, metric);
-                vec3 cellpos = mx_worley_cell_position(x, y, z, X, Y, Z, jitter) - localpos;
-                if(dist < sqdist)
-                {
-                    sqdist = dist;
-                    minpos = cellpos;
-                }
-            }
-        }
-    }
-    if (style == 1)
-        return mx_cell_noise_float(minpos + p);
-    else
-    {
-        if (metric == 0)
-            sqdist = sqrt(sqdist);
-        return sqdist;
-    }
+    uv = uv * uv_scale + uv_offset;
+    return uv;
 }
 
-vec2 mx_worley_noise_vec2(vec3 p, float jitter, int style, int metric)
+void mx_image_float(sampler2D tex_sampler, int layer, float defaultval, vec2 texcoord, int uaddressmode, int vaddressmode, int filtertype, int framerange, int frameoffset, int frameendaction, vec2 uv_scale, vec2 uv_offset, out float result)
 {
-    int X, Y, Z;
-    vec3 localpos = vec3(mx_floorfrac(p.x, X), mx_floorfrac(p.y, Y), mx_floorfrac(p.z, Z));
-    vec2 sqdist = vec2(1e6f, 1e6f);
-    vec3 minpos = vec3(0,0,0);
-    for (int x = -1; x <= 1; ++x)
-    {
-        for (int y = -1; y <= 1; ++y)
-        {
-            for (int z = -1; z <= 1; ++z)
-            {
-                float dist = mx_worley_distance(localpos, x, y, z, X, Y, Z, jitter, metric);
-                vec3 cellpos = mx_worley_cell_position(x, y, z, X, Y, Z, jitter) - localpos;
-                if (dist < sqdist.x)
-                {
-                    sqdist.y = sqdist.x;
-                    sqdist.x = dist;
-                    minpos = cellpos;
-                }
-                else if (dist < sqdist.y)
-                {
-                    sqdist.y = dist;
-                }
-            }
-        }
-    }
-    if (style == 1)
-    {
-        vec3 tmp = mx_cell_noise_vec3(minpos + p);
-        return vec2(tmp.x,tmp.y);
-    }
-    else
-    {
-        if (metric == 0)
-            sqdist = sqrt(sqdist);
-        return sqdist;
-    }
+    vec2 uv = mx_transform_uv(texcoord, uv_scale, uv_offset);
+    result = texture(tex_sampler, uv).r;
 }
 
-vec3 mx_worley_noise_vec3(vec3 p, float jitter, int style, int metric)
+void NG_tiledimage_float(sampler2D file, float default1, vec2 texcoord, vec2 uvtiling, vec2 uvoffset, vec2 realworldimagesize, vec2 realworldtilesize, int filtertype, int framerange, int frameoffset, int frameendaction, out float out1)
 {
-    int X, Y, Z;
-    vec3 localpos = vec3(mx_floorfrac(p.x, X), mx_floorfrac(p.y, Y), mx_floorfrac(p.z, Z));
-    vec3 sqdist = vec3(1e6f, 1e6f, 1e6f);
-    vec3 minpos = vec3(0,0,0);
-    for (int x = -1; x <= 1; ++x)
-    {
-        for (int y = -1; y <= 1; ++y)
-        {
-            for (int z = -1; z <= 1; ++z)
-            {
-                float dist = mx_worley_distance(localpos, x, y, z, X, Y, Z, jitter, metric);
-                vec3 cellpos = mx_worley_cell_position(x, y, z, X, Y, Z, jitter) - localpos;
-                if (dist < sqdist.x)
-                {
-                    sqdist.z = sqdist.y;
-                    sqdist.y = sqdist.x;
-                    sqdist.x = dist;
-                    minpos = cellpos;
-                }
-                else if (dist < sqdist.y)
-                {
-                    sqdist.z = sqdist.y;
-                    sqdist.y = dist;
-                }
-                else if (dist < sqdist.z)
-                {
-                    sqdist.z = dist;
-                }
-            }
-        }
-    }
-    if (style == 1)
-        return mx_cell_noise_vec3(minpos + p);
-    else
-    {
-        if (metric == 0)
-            sqdist = sqrt(sqdist);
-        return sqdist;
-    }
+    vec2 N_mult_float_out = texcoord * uvtiling;
+    vec2 N_sub_float_out = N_mult_float_out - uvoffset;
+    vec2 N_divtilesize_float_out = N_sub_float_out / realworldimagesize;
+    vec2 N_multtilesize_float_out = N_divtilesize_float_out * realworldtilesize;
+    float N_img_float_out = 0.0;
+    mx_image_float(file, 0, default1, N_multtilesize_float_out, 2, 2, filtertype, framerange, frameoffset, frameendaction, vec2(1.000000, 1.000000), vec2(0.000000, 0.000000), N_img_float_out);
+    out1 = N_img_float_out;
 }
 
-void mx_fractal3d_float(float amplitude, int octaves, float lacunarity, float diminish, vec3 position, out float result)
+
+void mx_image_vector3(sampler2D tex_sampler, int layer, vec3 defaultval, vec2 texcoord, int uaddressmode, int vaddressmode, int filtertype, int framerange, int frameoffset, int frameendaction, vec2 uv_scale, vec2 uv_offset, out vec3 result)
 {
-    float value = mx_fractal3d_noise_float(position, octaves, lacunarity, diminish);
-    result = value * amplitude;
+    vec2 uv = mx_transform_uv(texcoord, uv_scale, uv_offset);
+    result = texture(tex_sampler, uv).rgb;
+}
+
+void NG_tiledimage_vector3(sampler2D file, vec3 default1, vec2 texcoord, vec2 uvtiling, vec2 uvoffset, vec2 realworldimagesize, vec2 realworldtilesize, int filtertype, int framerange, int frameoffset, int frameendaction, out vec3 out1)
+{
+    vec2 N_mult_vector3_out = texcoord * uvtiling;
+    vec2 N_sub_vector3_out = N_mult_vector3_out - uvoffset;
+    vec2 N_divtilesize_vector3_out = N_sub_vector3_out / realworldimagesize;
+    vec2 N_multtilesize_vector3_out = N_divtilesize_vector3_out * realworldtilesize;
+    vec3 N_img_vector3_out = vec3(0.0);
+    mx_image_vector3(file, 0, default1, N_multtilesize_vector3_out, 2, 2, filtertype, framerange, frameoffset, frameendaction, vec2(1.000000, 1.000000), vec2(0.000000, 0.000000), N_img_vector3_out);
+    out1 = N_img_vector3_out;
+}
+
+void mx_normalmap_vector2(vec3 value, vec2 normal_scale, vec3 N, vec3 T, vec3 B, out vec3 result)
+{
+    value = (dot(value, value) == 0.0) ? vec3(0.0, 0.0, 1.0) : value * 2.0 - 1.0;
+    value = T * value.x * normal_scale.x +
+            B * value.y * normal_scale.y +
+            N * value.z;
+    result = normalize(value);
+}
+
+void mx_normalmap_float(vec3 value, float normal_scale, vec3 N, vec3 T, vec3 B, out vec3 result)
+{
+    mx_normalmap_vector2(value, vec2(normal_scale), N, T, B, result);
+}
+
+
+void mx_hsvtorgb_color3(vec3 _in, out vec3 result)
+{
+    result = mx_hsvtorgb(_in);
 }
 
 void mx_roughness_anisotropy(float roughness, float anisotropy, out vec2 result)
@@ -2548,13 +1967,136 @@ void NG_standard_surface_surfaceshader_100(float base, vec3 base_color, float di
     NG_convert_float_color3(one_minus_coat_ior_to_F0_out, emission_color0_out);
     surfaceshader shader_constructor_out = surfaceshader(vec3(0.0),vec3(0.0));
     {
-        vec3 N = g_ptN;
-        vec3 V = g_ptV;
-        vec3 L = g_ptL;
-        vec3 P = g_ptP;
-        float occlusion = g_ptOcclusion;
+        vec3 N = normalize(normalWorld);
+        vec3 V = normalize(u_viewPosition - positionWorld);
+        vec3 P = positionWorld;
+        vec3 L = vec3(0.000000, 0.000000, 0.000000);
+        float occlusion = 1.0;
 
-        ClosureData closureData = makeClosureData(g_ptClosureType, L, V, N, P, occlusion);
+        float surfaceOpacity = opacity_luminance_float_out;
+
+        // Shadow occlusion
+
+        // Light loop
+        int numLights = numActiveLightSources();
+        lightshader lightShader;
+        for (int activeLightIndex = 0; activeLightIndex < numLights; ++activeLightIndex)
+        {
+            sampleLightSource(u_lightData[activeLightIndex], positionWorld, lightShader);
+            L = lightShader.direction;
+
+            // Calculate the BSDF response for this light source
+            ClosureData closureData = makeClosureData(CLOSURE_TYPE_REFLECTION, L, V, N, P, occlusion);
+            BSDF coat_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_dielectric_bsdf(closureData, coat, vec3(1.000000, 1.000000, 1.000000), coat_IOR, coat_roughness_vector_out, false, 0.000000, 1.500000, coat_normal, coat_tangent_out, 0, 0, coat_bsdf_out);
+            BSDF metal_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_conductor_bsdf(closureData, metalness_mix_fg_weight_out, artistic_ior_ior, artistic_ior_extinction, main_roughness_out, false, thin_film_thickness, thin_film_IOR, normal, main_tangent_out, 0, metal_bsdf_out);
+            BSDF specular_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_dielectric_bsdf(closureData, specular, specular_color, specular_IOR, main_roughness_out, false, thin_film_thickness, thin_film_IOR, normal, main_tangent_out, 0, 0, specular_bsdf_out);
+            BSDF transmission_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_dielectric_bsdf(closureData, transmission_mix_fg_weight_out, transmission_color, specular_IOR, transmission_roughness_out, false, 0.000000, 1.500000, normal, main_tangent_out, 0, 1, transmission_bsdf_out);
+            BSDF sheen_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_sheen_bsdf(closureData, sheen, sheen_color, sheen_roughness, normal, 0, sheen_bsdf_out);
+            BSDF translucent_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_translucent_bsdf(closureData, selected_subsurface_bsdf_fg_weight_out, coat_affected_subsurface_color_out, normal, translucent_bsdf_out);
+            BSDF subsurface_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_subsurface_bsdf(closureData, selected_subsurface_bsdf_bg_weight_out, coat_affected_subsurface_color_out, subsurface_radius_scaled_out, subsurface_anisotropy, normal, subsurface_bsdf_out);
+            BSDF selected_subsurface_bsdf_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, translucent_bsdf_out, subsurface_bsdf_out, selected_subsurface_bsdf_add_out);
+            BSDF subsurface_mix_fg_mul_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_float(closureData, selected_subsurface_bsdf_add_out, subsurface, subsurface_mix_fg_mul_out);
+            BSDF diffuse_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_oren_nayar_diffuse_bsdf(closureData, subsurface_mix_bg_weight_out, coat_affected_diffuse_color_out, diffuse_roughness, normal, false, diffuse_bsdf_out);
+            BSDF subsurface_mix_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, subsurface_mix_fg_mul_out, diffuse_bsdf_out, subsurface_mix_add_out);
+            BSDF sheen_layer_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_layer_bsdf(closureData, sheen_bsdf_out, subsurface_mix_add_out, sheen_layer_out);
+            BSDF transmission_mix_bg_mul_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_float(closureData, sheen_layer_out, transmission_mix_mix_inv_out, transmission_mix_bg_mul_out);
+            BSDF transmission_mix_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, transmission_bsdf_out, transmission_mix_bg_mul_out, transmission_mix_add_out);
+            BSDF specular_layer_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_layer_bsdf(closureData, specular_bsdf_out, transmission_mix_add_out, specular_layer_out);
+            BSDF metalness_mix_bg_mul_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_float(closureData, specular_layer_out, metalness_mix_mix_inv_out, metalness_mix_bg_mul_out);
+            BSDF metalness_mix_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, metal_bsdf_out, metalness_mix_bg_mul_out, metalness_mix_add_out);
+            BSDF thin_film_layer_attenuated_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_color3(closureData, metalness_mix_add_out, coat_attenuation_out, thin_film_layer_attenuated_out);
+            BSDF coat_layer_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_layer_bsdf(closureData, coat_bsdf_out, thin_film_layer_attenuated_out, coat_layer_out);
+
+            // Accumulate the light's contribution
+            shader_constructor_out.color += lightShader.intensity * coat_layer_out.response;
+
+            // Clear shadow factor for next light
+            occlusion = 1.0;
+        }
+
+        // Ambient occlusion
+        occlusion = 1.0;
+
+        // Add environment contribution
+        {
+            ClosureData closureData = makeClosureData(CLOSURE_TYPE_INDIRECT, L, V, N, P, occlusion);
+            BSDF coat_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_dielectric_bsdf(closureData, coat, vec3(1.000000, 1.000000, 1.000000), coat_IOR, coat_roughness_vector_out, false, 0.000000, 1.500000, coat_normal, coat_tangent_out, 0, 0, coat_bsdf_out);
+            BSDF metal_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_conductor_bsdf(closureData, metalness_mix_fg_weight_out, artistic_ior_ior, artistic_ior_extinction, main_roughness_out, false, thin_film_thickness, thin_film_IOR, normal, main_tangent_out, 0, metal_bsdf_out);
+            BSDF specular_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_dielectric_bsdf(closureData, specular, specular_color, specular_IOR, main_roughness_out, false, thin_film_thickness, thin_film_IOR, normal, main_tangent_out, 0, 0, specular_bsdf_out);
+            BSDF transmission_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_dielectric_bsdf(closureData, transmission_mix_fg_weight_out, transmission_color, specular_IOR, transmission_roughness_out, false, 0.000000, 1.500000, normal, main_tangent_out, 0, 1, transmission_bsdf_out);
+            BSDF sheen_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_sheen_bsdf(closureData, sheen, sheen_color, sheen_roughness, normal, 0, sheen_bsdf_out);
+            BSDF translucent_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_translucent_bsdf(closureData, selected_subsurface_bsdf_fg_weight_out, coat_affected_subsurface_color_out, normal, translucent_bsdf_out);
+            BSDF subsurface_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_subsurface_bsdf(closureData, selected_subsurface_bsdf_bg_weight_out, coat_affected_subsurface_color_out, subsurface_radius_scaled_out, subsurface_anisotropy, normal, subsurface_bsdf_out);
+            BSDF selected_subsurface_bsdf_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, translucent_bsdf_out, subsurface_bsdf_out, selected_subsurface_bsdf_add_out);
+            BSDF subsurface_mix_fg_mul_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_float(closureData, selected_subsurface_bsdf_add_out, subsurface, subsurface_mix_fg_mul_out);
+            BSDF diffuse_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_oren_nayar_diffuse_bsdf(closureData, subsurface_mix_bg_weight_out, coat_affected_diffuse_color_out, diffuse_roughness, normal, false, diffuse_bsdf_out);
+            BSDF subsurface_mix_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, subsurface_mix_fg_mul_out, diffuse_bsdf_out, subsurface_mix_add_out);
+            BSDF sheen_layer_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_layer_bsdf(closureData, sheen_bsdf_out, subsurface_mix_add_out, sheen_layer_out);
+            BSDF transmission_mix_bg_mul_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_float(closureData, sheen_layer_out, transmission_mix_mix_inv_out, transmission_mix_bg_mul_out);
+            BSDF transmission_mix_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, transmission_bsdf_out, transmission_mix_bg_mul_out, transmission_mix_add_out);
+            BSDF specular_layer_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_layer_bsdf(closureData, specular_bsdf_out, transmission_mix_add_out, specular_layer_out);
+            BSDF metalness_mix_bg_mul_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_float(closureData, specular_layer_out, metalness_mix_mix_inv_out, metalness_mix_bg_mul_out);
+            BSDF metalness_mix_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, metal_bsdf_out, metalness_mix_bg_mul_out, metalness_mix_add_out);
+            BSDF thin_film_layer_attenuated_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_color3(closureData, metalness_mix_add_out, coat_attenuation_out, thin_film_layer_attenuated_out);
+            BSDF coat_layer_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_layer_bsdf(closureData, coat_bsdf_out, thin_film_layer_attenuated_out, coat_layer_out);
+
+            shader_constructor_out.color += occlusion * coat_layer_out.response;
+        }
+
+        // Add surface emission
+        {
+            ClosureData closureData = makeClosureData(CLOSURE_TYPE_EMISSION, L, V, N, P, occlusion);
+            EDF emission_edf_out = EDF(0.0);
+            mx_uniform_edf(closureData, emission_weight_out, emission_edf_out);
+            EDF coat_tinted_emission_edf_out = EDF(0.0);
+            mx_multiply_edf_color3(closureData, emission_edf_out, coat_color, coat_tinted_emission_edf_out);
+            EDF coat_emission_edf_out = EDF(0.0);
+            mx_generalized_schlick_edf(closureData, emission_color0_out, vec3(0.000000, 0.000000, 0.000000), 5.000000, coat_tinted_emission_edf_out, coat_emission_edf_out);
+            EDF blended_coat_emission_edf_out = EDF(0.0);
+            mx_mix_edf(closureData, coat_emission_edf_out, emission_edf_out, coat, blended_coat_emission_edf_out);
+            shader_constructor_out.color += blended_coat_emission_edf_out;
+        }
+
+        // Calculate the BSDF transmission for viewing direction
+        ClosureData closureData = makeClosureData(CLOSURE_TYPE_TRANSMISSION, L, V, N, P, occlusion);
         BSDF coat_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
         mx_dielectric_bsdf(closureData, coat, vec3(1.000000, 1.000000, 1.000000), coat_IOR, coat_roughness_vector_out, false, 0.000000, 1.500000, coat_normal, coat_tangent_out, 0, 0, coat_bsdf_out);
         BSDF metal_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
@@ -2595,225 +2137,73 @@ void NG_standard_surface_surfaceshader_100(float base, vec3 base_color, float di
         mx_layer_bsdf(closureData, coat_bsdf_out, thin_film_layer_attenuated_out, coat_layer_out);
         shader_constructor_out.color += coat_layer_out.response;
 
-        if (g_ptEmitEmission != 0)
+        // Compute and apply surface opacity
         {
-            ClosureData closureData = makeClosureData(CLOSURE_TYPE_EMISSION, L, V, N, P, occlusion);
-            EDF emission_edf_out = EDF(0.0);
-            mx_uniform_edf(closureData, emission_weight_out, emission_edf_out);
-            EDF coat_tinted_emission_edf_out = EDF(0.0);
-            mx_multiply_edf_color3(closureData, emission_edf_out, coat_color, coat_tinted_emission_edf_out);
-            EDF coat_emission_edf_out = EDF(0.0);
-            mx_generalized_schlick_edf(closureData, emission_color0_out, vec3(0.000000, 0.000000, 0.000000), 5.000000, coat_tinted_emission_edf_out, coat_emission_edf_out);
-            EDF blended_coat_emission_edf_out = EDF(0.0);
-            mx_mix_edf(closureData, coat_emission_edf_out, emission_edf_out, coat, blended_coat_emission_edf_out);
-            shader_constructor_out.color += blended_coat_emission_edf_out;
+            shader_constructor_out.color *= surfaceOpacity;
+            shader_constructor_out.transparency = mix(vec3(1.000000, 1.000000, 1.000000), shader_constructor_out.transparency, surfaceOpacity);
         }
     }
 
     out1 = shader_constructor_out;
 }
 
-
-surfaceshader mtlxHostEvalSurface()
+void main()
 {
-    positionObject = g_ptP;
-    normalWorld = g_ptN;
-    tangentWorld = g_ptTangent;
-    vec3 obj_pos_out = positionObject;
-    vec3 geomprop_Nworld_out = normalize(normalWorld);
-    vec3 geomprop_Tworld_out = normalize(tangentWorld);
-    const vec3 add_xyz_in2_tmp = vec3(1.000000, 1.000000, 1.000000);
-    float add_xyz_out = dot(obj_pos_out, add_xyz_in2_tmp);
-    const float scale_pos_in2_tmp = 4.000000;
-    vec3 scale_pos_out = obj_pos_out * scale_pos_in2_tmp;
-    const float scale_xyz_in2_tmp = 6.000000;
-    float scale_xyz_out = add_xyz_out * scale_xyz_in2_tmp;
-    float noise_out = 0.0;
-    mx_fractal3d_float(1.000000, 3, 2.000000, 0.500000, scale_pos_out, noise_out);
-    const float scale_noise_in2_tmp = 3.000000;
-    float scale_noise_out = noise_out * scale_noise_in2_tmp;
-    float sum_out = scale_xyz_out + scale_noise_out;
-    float sin_out = mx_sin(sum_out);
-    const float scale_in2_tmp = 0.500000;
-    float scale_out = sin_out * scale_in2_tmp;
-    const float bias_in2_tmp = 0.500000;
-    float bias_out = scale_out + bias_in2_tmp;
-    const float power_in2_tmp = 3.000000;
-    float power_out = pow(bias_out, power_in2_tmp);
-    const vec3 color_mix_bg_tmp = vec3(0.800000, 0.800000, 0.800000);
-    const vec3 color_mix_fg_tmp = vec3(0.100000, 0.100000, 0.300000);
-    vec3 color_mix_out = mix(color_mix_bg_tmp, color_mix_fg_tmp, power_out);
-    surfaceshader SR_marble1_out = surfaceshader(vec3(0.0),vec3(0.0));
-    NG_standard_surface_surfaceshader_100(base, color_mix_out, diffuse_roughness, metalness, specular, specular_color, specular_roughness, specular_IOR, specular_anisotropy, specular_rotation, transmission, transmission_color, transmission_depth, transmission_scatter, transmission_scatter_anisotropy, transmission_dispersion, transmission_extra_roughness, subsurface, color_mix_out, subsurface_radius, subsurface_scale, subsurface_anisotropy, sheen, sheen_color, sheen_roughness, coat, coat_color, coat_roughness, coat_anisotropy, coat_rotation, coat_IOR, geomprop_Nworld_out, coat_affect_color, coat_affect_roughness, thin_film_thickness, thin_film_IOR, emission, emission_color, opacity, thin_walled, geomprop_Nworld_out, geomprop_Tworld_out, SR_marble1_out);
-    return SR_marble1_out;
+    vec2 geomprop_UV0_out1 = texcoord_0.xy;
+    vec2 node_convert_1_out = vec2(0.0);
+    NG_convert_float_vector2(3.000000, node_convert_1_out);
+    vec3 node_rgbtohsv_12_out = vec3(0.0);
+    mx_rgbtohsv_color3(vec3(0.661876, 0.190880, 0.000000), node_rgbtohsv_12_out);
+    vec3 geomprop_Nworld_out1 = normalize(normalWorld);
+    vec3 geomprop_Tworld_out1 = normalize(tangentWorld);
+    vec3 geomprop_Bworld_out1 = normalize(bitangentWorld);
+    float node_tiledimage_float_26_out = 0.0;
+    NG_tiledimage_float(node_tiledimage_float_26_file, 0.000000, geomprop_UV0_out1, node_convert_1_out, vec2(0.000000, 0.000000), vec2(1.000000, 1.000000), vec2(1.000000, 1.000000), 1, 0, 0, 0, node_tiledimage_float_26_out);
+    float node_tiledimage_float_7_out = 0.0;
+    NG_tiledimage_float(node_tiledimage_float_7_file, 0.000000, geomprop_UV0_out1, node_convert_1_out, vec2(0.000000, 0.000000), vec2(1.000000, 1.000000), vec2(1.000000, 1.000000), 1, 0, 0, 0, node_tiledimage_float_7_out);
+    float node_tiledimage_float_24_out = 0.0;
+    NG_tiledimage_float(node_tiledimage_float_24_file, 0.000000, geomprop_UV0_out1, node_convert_1_out, vec2(0.000000, 0.000000), vec2(1.000000, 1.000000), vec2(1.000000, 1.000000), 1, 0, 0, 0, node_tiledimage_float_24_out);
+    float node_tiledimage_float_10_out = 0.0;
+    NG_tiledimage_float(node_tiledimage_float_10_file, 0.000000, geomprop_UV0_out1, node_convert_1_out, vec2(0.000000, 0.000000), vec2(1.000000, 1.000000), vec2(1.000000, 1.000000), 1, 0, 0, 0, node_tiledimage_float_10_out);
+    float node_tiledimage_float_22_out = 0.0;
+    NG_tiledimage_float(node_tiledimage_float_22_file, 0.000000, geomprop_UV0_out1, node_convert_1_out, vec2(0.000000, 0.000000), vec2(1.000000, 1.000000), vec2(1.000000, 1.000000), 1, 0, 0, 0, node_tiledimage_float_22_out);
+    vec3 node_tiledimage_vector3_27_out = vec3(0.0);
+    NG_tiledimage_vector3(node_tiledimage_vector3_27_file, vec3(0.000000, 0.000000, 0.000000), geomprop_UV0_out1, node_convert_1_out, vec2(0.000000, 0.000000), vec2(1.000000, 1.000000), vec2(1.000000, 1.000000), 1, 0, 0, 0, node_tiledimage_vector3_27_out);
+    const float node_multiply_25_in1_tmp = 0.083000;
+    float node_multiply_25_out = node_multiply_25_in1_tmp * node_tiledimage_float_26_out;
+    const float node_multiply_20_in1_tmp = 0.787000;
+    float node_multiply_20_out = node_multiply_20_in1_tmp * node_tiledimage_float_26_out;
+    const vec3 node_multiply_9_in1_tmp = vec3(0.263273, 0.263273, 0.263273);
+    vec3 node_multiply_9_out = node_multiply_9_in1_tmp * node_tiledimage_float_7_out;
+    const float node_multiply_23_in1_tmp = 0.248000;
+    float node_multiply_23_out = node_multiply_23_in1_tmp * node_tiledimage_float_24_out;
+    const float node_max_1_in2_tmp = 0.000010;
+    float node_max_1_out = max(node_tiledimage_float_10_out, node_max_1_in2_tmp);
+    vec3 node_normalmap_3_out = vec3(0.0);
+    mx_normalmap_float(node_tiledimage_vector3_27_out, 1.000000, geomprop_Nworld_out1, geomprop_Tworld_out1, geomprop_Bworld_out1, node_normalmap_3_out);
+    float node_add_19_out = node_multiply_25_out + node_tiledimage_float_7_out;
+    const float node_divide_21_in1_tmp = 0.853000;
+    float node_divide_21_out = node_divide_21_in1_tmp / node_max_1_out;
+    const float node_subtract_18_in2_tmp = 0.350000;
+    float node_subtract_18_out = node_add_19_out - node_subtract_18_in2_tmp;
+    float node_multiply_15_out = node_add_19_out * node_multiply_20_out;
+    float node_multiply_1_out = node_divide_21_out * node_tiledimage_float_22_out;
+    const float node_multiply_14_in2_tmp = 0.083000;
+    float node_multiply_14_out = node_subtract_18_out * node_multiply_14_in2_tmp;
+    const float node_combine3_color3_13_in2_tmp = 0.000000;
+    vec3 node_combine3_color3_13_out = vec3(node_multiply_14_out,node_combine3_color3_13_in2_tmp,node_multiply_15_out);
+    vec3 node_add_16_out = node_combine3_color3_13_out + node_rgbtohsv_12_out;
+    vec3 node_hsvtorgb_17_out = vec3(0.0);
+    mx_hsvtorgb_color3(node_add_16_out, node_hsvtorgb_17_out);
+    const vec3 node_mix_6_fg_tmp = vec3(0.563720, 0.563720, 0.563720);
+    vec3 node_mix_6_out = mix(node_hsvtorgb_17_out, node_mix_6_fg_tmp, node_multiply_23_out);
+    vec3 node_multiply_5_out = node_mix_6_out * node_tiledimage_float_7_out;
+    vec3 node_mix_8_out = mix(node_multiply_9_out, node_multiply_5_out, node_tiledimage_float_10_out);
+    const vec3 node_clamp_0_low_tmp = vec3(0.000000, 0.000000, 0.000000);
+    const vec3 node_clamp_0_high_tmp = vec3(1.000000, 1.000000, 1.000000);
+    vec3 node_clamp_0_out = clamp(node_mix_8_out, node_clamp_0_low_tmp, node_clamp_0_high_tmp);
+    surfaceshader N_StandardSurface_out = surfaceshader(vec3(0.0),vec3(0.0));
+    NG_standard_surface_surfaceshader_100(base, node_clamp_0_out, diffuse_roughness, metalness, specular, specular_color, node_multiply_1_out, specular_IOR, specular_anisotropy, specular_rotation, transmission, transmission_color, transmission_depth, transmission_scatter, transmission_scatter_anisotropy, transmission_dispersion, transmission_extra_roughness, subsurface, subsurface_color, subsurface_radius, subsurface_scale, subsurface_anisotropy, sheen, sheen_color, sheen_roughness, coat, coat_color, coat_roughness, coat_anisotropy, coat_rotation, coat_IOR, geomprop_Nworld_out1, coat_affect_color, coat_affect_roughness, thin_film_thickness, thin_film_IOR, emission, emission_color, opacity, thin_walled, node_normalmap_3_out, geomprop_Tworld_out1, N_StandardSurface_out);
+    out1 = vec4(N_StandardSurface_out.color, 1.0);
 }
 
-
-// Generated pathtracer dispatch (feature 003). Model: standard_surface
-vec3 evaluateBsdf(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL, in int material, inout float pdf_woutputL)
-{
-    g_ptP = pW;
-    g_ptN = basis.nW;
-    g_ptTangent = basis.tW;
-    g_ptBitangent = basis.bW;
-    g_ptV = localToWorld(winputL, basis);
-    g_ptL = localToWorld(woutputL, basis);
-    g_ptOcclusion = 1.0;
-    g_ptEmitEmission = 0;
-    g_ptClosureType = CLOSURE_TYPE_REFLECTION;
-    pdf_woutputL = max(woutputL.z, 0.0) / PI;
-    return mtlxHostEvalSurface().color;
-}
-
-vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed, in int material, out vec3 woutputL, out float pdf_woutputL, out Volume internal_medium)
-{
-    internal_medium.extinction = vec3(0.0);
-    internal_medium.albedo = vec3(0.0);
-    internal_medium.anisotropy = 0.0;
-    float m_metal = clamp(metalness, 0.0, 1.0);
-    float m_rough = clamp(specular_roughness, 0.0, 1.0);
-    float m_aniso = clamp(specular_anisotropy, 0.0, 0.99);
-    vec3  m_base  = (vec3(0.8)) * (base);
-    vec3  m_specC = specular_color;
-    float m_specW = specular;
-    float m_ior   = max(specular_IOR, 1.0 + 1e-3);
-    float m_coatW = clamp(coat, 0.0, 1.0);
-    float m_coatRough = clamp(coat_roughness, 0.0, 1.0);
-    float m_coatAniso = clamp(coat_anisotropy, 0.0, 0.99);
-    float m_coatIor = max(coat_IOR, 1.0 + 1e-3);
-
-    vec3 V = winputL;
-    if (V.z < 0.0) V = -V;
-    float NdotV = max(V.z, 1e-4);
-    float alpha = clamp(m_rough * m_rough, 1e-4, 1.0);
-    float anisoAspect = max(1e-4, 1.0 - m_aniso);
-    vec2 sampleAlpha = clamp(vec2(alpha * sqrt(2.0 / (anisoAspect * anisoAspect + 1.0)), alpha * anisoAspect * sqrt(2.0 / (anisoAspect * anisoAspect + 1.0))), vec2(1e-4), vec2(1.0));
-    float coatAlpha = clamp(m_coatRough * m_coatRough, 1e-4, 1.0);
-    float coatAnisoAspect = max(1e-4, 1.0 - m_coatAniso);
-    vec2 coatSampleAlpha = clamp(vec2(coatAlpha * sqrt(2.0 / (coatAnisoAspect * coatAnisoAspect + 1.0)), coatAlpha * coatAnisoAspect * sqrt(2.0 / (coatAnisoAspect * coatAnisoAspect + 1.0))), vec2(1e-4), vec2(1.0));
-    float F0d = pow((m_ior - 1.0) / (m_ior + 1.0), 2.0);
-    vec3 F0 = mix(vec3(F0d) * max(m_specC, vec3(0.0)) * m_specW, m_base, m_metal);
-    float F0lum = max(F0.x, max(F0.y, F0.z));
-    float Fv = F0lum + (1.0 - F0lum) * pow(1.0 - NdotV, 5.0);
-    float coatFv = FresnelDielectricReflectance(NdotV, m_coatIor);
-    float pCoat = clamp(m_coatW * coatFv, 0.0, 0.75);
-    float xiLobe = rand(rndSeed);
-    float pTrans = 0.0;
-    float m_transW = clamp(transmission, 0.0, 1.0);
-    vec3  m_transC = transmission_color;
-    float m_transD = transmission_depth;
-    pTrans = clamp(m_transW * (1.0 - Fv), 0.0, 0.95);
-    if (xiLobe < pCoat)
-    {
-        vec3 Hc = ggx_ndf_sample(V, coatSampleAlpha.x, coatSampleAlpha.y, rndSeed);
-        woutputL = reflect(-V, Hc);
-        if (woutputL.z <= 1e-4)
-        {
-            pdf_woutputL = 0.0;
-            return vec3(0.0);
-        }
-        float pdfCoat = ggx_G1(V, coatSampleAlpha.x, coatSampleAlpha.y) * ggx_ndf_eval(normalize(V + woutputL), coatSampleAlpha.x, coatSampleAlpha.y) / (4.0 * NdotV);
-        float pdfBaseSpec = ggx_G1(V, sampleAlpha.x, sampleAlpha.y) * ggx_ndf_eval(normalize(V + woutputL), sampleAlpha.x, sampleAlpha.y) / (4.0 * NdotV);
-        float pdfBaseDiff = pdfHemisphereCosineWeighted(woutputL);
-        float diffLumCoat = (1.0 - m_metal) * dot(m_base, vec3(0.2126, 0.7152, 0.0722));
-        float pSpecCoat = clamp(Fv / (Fv + (1.0 - Fv) * diffLumCoat + 1e-3), 0.05, 0.95);
-        pdf_woutputL = max(pCoat * pdfCoat + (1.0 - pCoat) * (1.0 - pTrans) * (pSpecCoat * pdfBaseSpec + (1.0 - pSpecCoat) * pdfBaseDiff), PDF_EPSILON);
-        float ignorePdfCoat;
-        return evaluateBsdf(pW, basis, winputL, woutputL, material, ignorePdfCoat);
-    }
-    if (xiLobe < pCoat + (1.0 - pCoat) * pTrans)
-    {
-        bool externalTransmission = (winputL.z > 0.0);
-        float etaRatio = externalTransmission ? (1.0 / m_ior) : m_ior;
-        if (alpha <= 1e-3)
-        {
-            vec3 Hdelta = vec3(0.0, 0.0, externalTransmission ? 1.0 : -1.0);
-            float HdotWiDelta = dot(Hdelta, winputL);
-            float discrDelta = 1.0 - etaRatio * etaRatio * (1.0 - HdotWiDelta * HdotWiDelta);
-            if (discrDelta < 0.0)
-            {
-                woutputL = -winputL + 2.0 * dot(winputL, Hdelta) * Hdelta;
-                pdf_woutputL = max((1.0 - pCoat) * pTrans, PDF_EPSILON);
-                return vec3(m_transW * pdf_woutputL / max(abs(woutputL.z), DENOM_TOLERANCE));
-            }
-            vec3 beamIncidentDelta = etaRatio * winputL - Hdelta * sign(HdotWiDelta) * (etaRatio * abs(HdotWiDelta) - sqrt(discrDelta));
-            woutputL = -normalize(beamIncidentDelta);
-            if (winputL.z * woutputL.z >= -1e-4)
-            {
-                pdf_woutputL = 0.0;
-                return vec3(0.0);
-            }
-            if (m_transD > 0.0)
-            {
-                internal_medium.extinction = -log(max(vec3(1e-6), m_transC)) / m_transD;
-            }
-            float Tdelta = clamp(1.0 - FresnelDielectricReflectance(abs(HdotWiDelta), 1.0 / etaRatio), 0.0, 1.0);
-            vec3 tintDelta = (m_transD == 0.0) ? m_transC : vec3(1.0);
-            pdf_woutputL = max((1.0 - pCoat) * pTrans, PDF_EPSILON);
-            return m_transW * tintDelta * Tdelta * pdf_woutputL / max(abs(woutputL.z), DENOM_TOLERANCE);
-        }
-        vec3 Vsample = winputL;
-        if (Vsample.z < 0.0) Vsample.z *= -1.0;
-        vec3 Ht = ggx_ndf_sample(Vsample, sampleAlpha.x, sampleAlpha.y, rndSeed);
-        if (winputL.z < 0.0) Ht.z *= -1.0;
-        float HdotWi = dot(Ht, winputL);
-        float discr = 1.0 - etaRatio * etaRatio * (1.0 - HdotWi * HdotWi);
-        if (discr < 0.0)
-        {
-            pdf_woutputL = 0.0;
-            return vec3(0.0);
-        }
-        vec3 beamIncident = etaRatio * winputL - Ht * sign(HdotWi) * (etaRatio * abs(HdotWi) - sqrt(discr));
-        woutputL = -normalize(beamIncident);
-        if (winputL.z * woutputL.z >= -1e-4)
-        {
-            pdf_woutputL = 0.0;
-            return vec3(0.0);
-        }
-        if (m_transD > 0.0)
-        {
-            internal_medium.extinction = -log(max(vec3(1e-6), m_transC)) / m_transD;
-        }
-        vec3 Hr = normalize(-(V + m_ior * woutputL));
-        if (Hr.z < 0.0) Hr = -Hr;
-        float VoH = abs(dot(winputL, Ht));
-        float LoH = abs(dot(woutputL, Ht));
-        float denomT = LoH + etaRatio * VoH;
-        float jacT = (etaRatio * etaRatio) * VoH / max(denomT * denomT, 1e-8);
-        float DvT = ggx_G1(Vsample, sampleAlpha.x, sampleAlpha.y) * VoH * ggx_ndf_eval(abs(Ht.z) > 0.0 ? vec3(Ht.x, Ht.y, abs(Ht.z)) : Ht, sampleAlpha.x, sampleAlpha.y) / max(abs(winputL.z), 1e-4);
-        pdf_woutputL = max((1.0 - pCoat) * pTrans * DvT * jacT, PDF_EPSILON);
-        float D = ggx_ndf_eval(abs(Ht.z) > 0.0 ? vec3(Ht.x, Ht.y, abs(Ht.z)) : Ht, sampleAlpha.x, sampleAlpha.y);
-        float G2 = ggx_G2(winputL, woutputL, sampleAlpha.x, sampleAlpha.y);
-        float etaRefl = 1.0 / etaRatio;
-        float T = clamp(1.0 - FresnelDielectricReflectance(VoH, etaRefl), 0.0, 1.0);
-        vec3 tint = (m_transD == 0.0) ? m_transC : vec3(1.0);
-        return m_transW * tint * T * VoH * jacT * D * G2 / max(abs(woutputL.z) * abs(winputL.z), DENOM_TOLERANCE);
-    }
-    float diffLum = (1.0 - m_metal) * dot(m_base, vec3(0.2126, 0.7152, 0.0722));
-    float pSpec = clamp(Fv / (Fv + (1.0 - Fv) * diffLum + 1e-3), 0.05, 0.95);
-
-    if (rand(rndSeed) < pSpec)
-    {
-        vec3 H = ggx_ndf_sample(V, sampleAlpha.x, sampleAlpha.y, rndSeed);
-        woutputL = reflect(-V, H);
-    }
-    else
-    {
-        float pdfTmp;
-        woutputL = sampleHemisphereCosineWeighted(rndSeed, pdfTmp);
-    }
-
-    if (woutputL.z <= 1e-4)
-    {
-        pdf_woutputL = 0.0;
-        return vec3(0.0);
-    }
-    vec3 Hh = normalize(V + woutputL);
-    float pdfSpec = ggx_G1(V, sampleAlpha.x, sampleAlpha.y) * ggx_ndf_eval(Hh, sampleAlpha.x, sampleAlpha.y) / (4.0 * NdotV);
-    float pdfDiff = pdfHemisphereCosineWeighted(woutputL);
-    float pdfCoat = ggx_G1(V, coatSampleAlpha.x, coatSampleAlpha.y) * ggx_ndf_eval(Hh, coatSampleAlpha.x, coatSampleAlpha.y) / (4.0 * NdotV);
-    pdf_woutputL = max(pCoat * pdfCoat + (1.0 - pCoat) * (1.0 - pTrans) * (pSpec * pdfSpec + (1.0 - pSpec) * pdfDiff), PDF_EPSILON);
-
-    float ignorePdf;
-    return evaluateBsdf(pW, basis, winputL, woutputL, material, ignorePdf);
-}

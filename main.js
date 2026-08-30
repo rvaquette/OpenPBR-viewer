@@ -31,6 +31,8 @@ import { GUI } from 'lil-gui';
 // dispatch (mtlxGen*) is generated at runtime and wired via an inline bridge.
 import glsl_mtlx_route_common           from './glsl/pathtracing/mtlx/common.glsl?raw'
 import glsl_mtlx_route_pathtracer       from './glsl/pathtracing/mtlx/pathtracer.glsl?raw'
+import glsl_rasterization_mtlx_common   from './glsl/rasterization/mtlx/common.glsl?raw'
+import glsl_rasterization_mtlx_rasterizer from './glsl/rasterization/mtlx/rasterizer.glsl?raw'
 
 import glsl_legacy_main            from './glsl/pathtracing/legacy/main.glsl?raw'
 import glsl_legacy_fuzz_brdf       from './glsl/pathtracing/legacy/fuzz_brdf.glsl?raw'
@@ -44,11 +46,11 @@ import glsl_legacy_diffuse_btdf    from './glsl/pathtracing/legacy/diffuse_btdf.
 import glsl_legacy_openpbr_surface from './glsl/pathtracing/legacy/openpbr_surface.glsl?raw'
 import glsl_legacy_pathtracer      from './glsl/pathtracing/legacy/pathtracer.glsl?raw'
 
-import glsl_rasterization_openpbr_frag          from './glsl/rasterization/openpbr.frag.glsl?raw'
-import glsl_rasterization_openpbr_vert          from './glsl/rasterization/openpbr.vert.glsl?raw'
+import glsl_rasterization_openpbr_frag          from './glsl/rasterization/legacy/openpbr.frag.glsl?raw'
+import glsl_rasterization_openpbr_vert          from './glsl/rasterization/legacy/openpbr.vert.glsl?raw'
 
-import glsl_rasterization_neutral_frag          from './glsl/rasterization/neutral.frag.glsl?raw'
-import glsl_rasterization_neutral_vert          from './glsl/rasterization/neutral.vert.glsl?raw'
+import glsl_rasterization_neutral_frag          from './glsl/rasterization/legacy/neutral.frag.glsl?raw'
+import glsl_rasterization_neutral_vert          from './glsl/rasterization/legacy/neutral.vert.glsl?raw'
 
 import { Circle } from 'progressbar.js'
 
@@ -317,6 +319,7 @@ function createMtlxRouteTextureUniforms()
         const texture = loader.load(binding.url);
         texture.wrapS = RepeatWrapping;
         texture.wrapT = RepeatWrapping;
+        texture.flipY = false;
         if (isMtlxColorTexture(binding)) texture.colorSpace = SRGBColorSpace;
         uniforms[binding.sampler] = { value: texture };
     }
@@ -656,18 +659,98 @@ async function validateGeneratedShadingContract(generatedGlsl, search)
 
 function getRendererModes()
 {
-    const modes = ['Rasterizer', 'Pathtracer', 'Pathtracer MTLX'];
-    if (legacyComparisonEnabled) modes.push('Pathtracer legacy');
-    return modes;
+    return ['Rasterizer', 'Pathtracer', 'Pathtracer MTLX', 'Pathtracer legacy'];
+}
+
+function getRendererModeOptions()
+{
+    return {
+        Rasterizer: 'Rasterizer',
+        Pathtracer: 'Pathtracer',
+        mtlx: 'Pathtracer MTLX',
+        legacy: 'Pathtracer legacy'
+    };
 }
 
 function is_mtlx_route() { return params.renderer_mode === 'Pathtracer MTLX'; }
+function is_mtlx_bvh_raster_route() { return params.renderer_mode === 'Rasterizer MTLX'; }
+function uses_mtlx_fullscreen_shader() { return is_mtlx_route() || is_mtlx_bvh_raster_route(); }
 
 function is_pathtracing_route()
 {
     return params.renderer_mode === 'Pathtracer' ||
            params.renderer_mode === 'Pathtracer MTLX' ||
            params.renderer_mode === 'Pathtracer legacy';
+}
+
+function is_fullscreen_bvh_route()
+{
+    return is_pathtracing_route() || is_mtlx_bvh_raster_route();
+}
+
+function stripGlslMain(source)
+{
+    const match = source.match(/\bvoid\s+main\s*\(\s*\)\s*\{/);
+    if (!match) return source;
+    const start = match.index;
+    const open = source.indexOf('{', start);
+    const close = findMatchingBrace(source, open);
+    if (close < 0) return source;
+    return source.slice(0, start) + source.slice(close + 1);
+}
+
+function stripFunctionsByName(source, names)
+{
+    const nameSet = new Set(names);
+    return removeFunctionBlocks(source, extractFunctionBlocks(source).filter(block => nameSet.has(block.name)));
+}
+
+function stripGeneratedBsdfEntrypoints(source)
+{
+    let result = source;
+    const nameRe = /\bmtlx(?:Mat\d+_)?mtlxGen(?:Evaluate|Sample)Bsdf\s*\(/g;
+    let match;
+    const blocks = [];
+    while ((match = nameRe.exec(result)) !== null) {
+        const nameStart = match.index;
+        const lineStart = result.lastIndexOf('\n', nameStart) + 1;
+        const open = result.indexOf('{', match.index);
+        if (open < 0) continue;
+        const close = findMatchingBrace(result, open);
+        if (close < 0) continue;
+        blocks.push({ start: lineStart, end: close + 1 });
+        nameRe.lastIndex = close + 1;
+    }
+    for (const block of blocks.sort((a, b) => b.start - a.start)) {
+        result = result.slice(0, block.start) + result.slice(block.end);
+    }
+    return result;
+}
+
+function transformGeneratedMainToFunction(source, functionName)
+{
+    const match = source.match(/\bvoid\s+main\s*\(\s*\)\s*\{/);
+    if (!match) return source;
+    const start = match.index;
+    const open = source.indexOf('{', start);
+    const close = findMatchingBrace(source, open);
+    if (close < 0) return source;
+    const body = source.slice(open + 1, close);
+    return source.slice(0, start) + `vec4 ${functionName}()\n{` + body + `\n    return mtlxRasterOut;\n}` + source.slice(close + 1);
+}
+
+function emitRasterGeneratedInputAssignments(prefix = '')
+{
+    const source = mtlxRouteDispatchGlsl;
+    const target = name => `${prefix}${name}`;
+    const lines = [];
+    if (new RegExp(`\\b${escapeRegExp(target('texcoord_0'))}\\b`).test(source)) lines.push(`    ${target('texcoord_0')} = basis.texCoord;`);
+    if (new RegExp(`\\b${escapeRegExp(target('normalWorld'))}\\b`).test(source)) lines.push(`    ${target('normalWorld')} = basis.nW;`);
+    if (new RegExp(`\\b${escapeRegExp(target('tangentWorld'))}\\b`).test(source)) lines.push(`    ${target('tangentWorld')} = basis.tW;`);
+    if (new RegExp(`\\b${escapeRegExp(target('bitangentWorld'))}\\b`).test(source)) lines.push(`    ${target('bitangentWorld')} = basis.bW;`);
+    if (new RegExp(`\\b${escapeRegExp(target('positionWorld'))}\\b`).test(source)) lines.push(`    ${target('positionWorld')} = pW;`);
+    if (new RegExp(`\\b${escapeRegExp(target('positionObject'))}\\b`).test(source)) lines.push(`    ${target('positionObject')} = pW;`);
+    return lines.join('\n');
 }
 
 function summarizeMtlxRouteMaterialParams(p)
@@ -737,7 +820,7 @@ function assemble_mtlx_route_dispatch()
     const dispatch = (mtlxRouteDispatchGlsl || '').trim();
     const hasEval = /\bvec3\s+mtlxGenEvaluateBsdf\s*\(/.test(dispatch);
     const hasSample = /\bvec3\s+mtlxGenSampleBsdf\s*\(/.test(dispatch);
-    if (!dispatch || !hasEval || !hasSample)
+    if (!dispatch || (!is_mtlx_bvh_raster_route() && (!hasEval || !hasSample)))
     {
         substitutionRuntimeState.contractStatus = 'invalid';
         substitutionRuntimeState.contractValidationStep = 'mtlx-route-dispatch-assembly';
@@ -746,11 +829,22 @@ function assemble_mtlx_route_dispatch()
     }
     const evalRoutes = [];
     const sampleRoutes = [];
+    const rasterRoutes = [];
     for (let slot = 1; slot < mtlxRouteDispatches.length; ++slot) {
         evalRoutes.push(`    if (basis.materialSlot == ${slot}) return mtlxMat${slot}_mtlxGenEvaluateBsdf(pW, basis, winputL, woutputL, MATERIAL_OPENPBR, pdf_woutputL);`);
         sampleRoutes.push(`    if (basis.materialSlot == ${slot}) return mtlxMat${slot}_mtlxGenSampleBsdf(pW, basis, winputL, rndSeed, MATERIAL_OPENPBR, woutputL, pdf_woutputL, internal_medium);`);
+        rasterRoutes.push(`    if (basis.materialSlot == ${slot}) {\n${emitRasterGeneratedInputAssignments(`mtlxMat${slot}_`)}\n        return mtlxMat${slot}_mtlxRasterMain().rgb;\n    }`);
     }
-    const bridge = `
+    const bridge = is_mtlx_bvh_raster_route() ? `
+void mtlx_openpbr_prepare(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed) {}
+vec3 mtlx_openpbr_raster_color(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL) {
+${emitRasterGeneratedInputAssignments('')}
+${rasterRoutes.join('\n')}
+    return mtlxRasterMain().rgb;
+}
+${emitMtlxSlotBoolFunction('mtlx_openpbr_is_opaque', 'opaque', true)}
+${emitMtlxSlotBoolFunction('mtlx_openpbr_is_thinwalled', 'thinWalled', false)}
+` : `
 vec3 mtlx_openpbr_bsdf_evaluate(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL, inout float pdf_woutputL) {
 ${evalRoutes.join('\n')}
     return mtlxGenEvaluateBsdf(pW, basis, winputL, woutputL, MATERIAL_OPENPBR, pdf_woutputL);
@@ -760,6 +854,20 @@ ${sampleRoutes.join('\n')}
     return mtlxGenSampleBsdf(pW, basis, winputL, rndSeed, MATERIAL_OPENPBR, woutputL, pdf_woutputL, internal_medium);
 }
 void mtlx_openpbr_prepare(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed) {}
+vec3 mtlx_openpbr_raster_color(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL) {
+    g_ptP = pW;
+    g_ptN = basis.nW;
+    g_ptTangent = basis.tW;
+    g_ptBitangent = basis.bW;
+    g_ptTexcoord = basis.texCoord;
+    g_ptV = localToWorld(winputL, basis);
+    g_ptL = localToWorld(woutputL, basis);
+    g_ptOcclusion = 1.0;
+    g_ptEmitEmission = 1;
+    g_ptClosureType = CLOSURE_TYPE_INDIRECT;
+${rasterRoutes.join('\n')}
+    return mtlxHostEvalSurface().color;
+}
 ${emitMtlxSlotBoolFunction('mtlx_openpbr_is_opaque', 'opaque', true)}
 ${emitMtlxSlotBoolFunction('mtlx_openpbr_is_thinwalled', 'thinWalled', false)}
 ${emitMtlxSlotVec3Function('mtlx_openpbr_emission', 'emission', [0, 0, 0])}
@@ -770,7 +878,13 @@ ${emitMtlxSlotScalarFunction('mtlx_openpbr_specular_ior', 'specularIor', 1.5)}
 ${emitMtlxSlotScalarFunction('mtlx_openpbr_specular_roughness', 'specularRoughness', 0.3)}
 ${emitMtlxSlotScalarFunction('mtlx_openpbr_transmission_weight', 'transmissionWeight', 0)}
 `;
-    return mtlxRouteDispatchGlsl + bridge + glsl_mtlx_route_pathtracer;
+    const dispatchBody = is_mtlx_bvh_raster_route()
+        ? stripGeneratedBsdfEntrypoints(mtlxRouteDispatchGlsl)
+        : mtlxRouteDispatchGlsl;
+    const routeBody = is_mtlx_bvh_raster_route()
+        ? glsl_rasterization_mtlx_rasterizer
+        : glsl_mtlx_route_pathtracer;
+    return dispatchBody + bridge + routeBody;
 }
 
 // Minimal default OpenPBR material used when no .mtlx file is supplied.
@@ -858,6 +972,98 @@ async function generateMtlxGlsl(mtlxText) {
     };
 
     // Clean up embind handles.
+    try { shader.delete?.(); } catch {}
+    try { elem.delete?.();   } catch {}
+    try { stdlib.delete?.(); } catch {}
+    try { ctx.delete?.();    } catch {}
+    try { gen.delete?.();    } catch {}
+    try { doc.delete?.();    } catch {}
+    return { glsl, mtlxParams };
+}
+
+async function generateMtlxRasterDispatch(mtlxText) {
+    const mx = await loadMtlxModule();
+    if (typeof mx.EsslHostShaderGenerator === 'undefined') {
+        throw new Error('[mtlx-raster] EsslHostShaderGenerator not exposed by WASM build');
+    }
+    const gen = mx.EsslHostShaderGenerator.create();
+    const ctx = new mx.GenContext(gen);
+    const stdlib = mx.loadStandardLibraries(ctx);
+    const doc = mx.createDocument();
+    doc.importLibrary(stdlib);
+    await mx.readFromXmlString(doc, mtlxText, '');
+    const elem = mx.findRenderableElement(doc);
+    if (!elem) throw new Error('[mtlx-raster] No renderable element found in .mtlx');
+    const shader = gen.generate(elem.getNamePath(), elem, ctx);
+    let glsl = shader.getSourceCode('pixel');
+
+    glsl = glsl
+        .replace(/^[ \t]*#version[^\n]*\n/gm, '')
+        .replace(/^[ \t]*precision[^\n]*\n/gm, '')
+        .replace(/^[ \t]*#define[ \t]+material[ \t]+surfaceshader[ \t]*\r?\n/gm, '');
+    glsl = glsl
+        .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envRadiance[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envIrradiance[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envLightIntensity[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envMatrix[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envRadianceMips[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envRadianceSamples[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+bool[ \t]+u_refractionTwoSided[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+vec3[ \t]+u_viewPosition[ \t]*;[ \t]*\r?\n/gm, '')
+        .replace(/^[ \t]*uniform[ \t]+int[ \t]+u_numActiveLightSources[ \t]*;[ \t]*\r?\n/gm, '');
+    glsl = glsl.replace(/^[ \t]*sampler2D[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*;[ \t]*\r?\n/gm, 'uniform sampler2D $1;\n');
+    glsl = glsl.replace(/^[ \t]*in[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*;[ \t]*\r?\n/gm, '$1 $2;\n');
+    glsl = glsl.replace(/^[ \t]*out[ \t]+vec4[ \t]+out1[ \t]*;[ \t]*\r?\n/gm, 'vec4 mtlxRasterOut;\n');
+    glsl = glsl.replace(/\bout1\b/g, 'mtlxRasterOut');
+    glsl = transformGeneratedMainToFunction(glsl, 'mtlxRasterMain');
+    const envPreamble =
+        'uniform sampler2D envMapLatLong;\n' +
+        'uniform sampler2D envMapIrradiance;\n' +
+        'mat4 mtlxEnvMatrix() {\n' +
+        '    float a = 1.57079632679;\n' +
+        '    float c = cos(a), s = sin(a);\n' +
+        '    return mat4(c,0.,-s,0., 0.,1.,0.,0., s,0.,c,0., 0.,0.,0.,1.);\n' +
+        '}\n' +
+        '#define u_envMatrix    mtlxEnvMatrix()\n' +
+        '#define u_envRadiance  envMapLatLong\n' +
+        '#define u_envIrradiance envMapIrradiance\n' +
+        '#define u_envLightIntensity skyPower\n' +
+        '#define u_envRadianceMips   1\n' +
+        '#define u_envRadianceSamples 1\n' +
+        '#define u_refractionTwoSided false\n' +
+        '#define u_numActiveLightSources mtlxLightCount\n' +
+        '#define u_viewPosition cameraWorldMatrix[3].xyz\n';
+    glsl = envPreamble + glsl;
+
+    const extractParam = (name, fallback) => {
+        const m = glsl.match(new RegExp(`\\b(?:float|bool)\\s+${name}\\s*=\\s*([^;]+);`));
+        if (!m) return fallback;
+        const v = m[1].trim();
+        return v === 'true' ? true : v === 'false' ? false : parseFloat(v);
+    };
+    const extractVec3Param = (name, fallback) => {
+        const m = glsl.match(new RegExp(`\\bvec3\\s+${name}\\s*=\\s*vec3\\(([^)]+)\\);`));
+        if (!m) return fallback;
+        const values = m[1].split(',').map(v => parseFloat(v.trim()));
+        return values.length === 3 && values.every(Number.isFinite) ? values : fallback;
+    };
+    const emissionColor = extractVec3Param('emission_color', [1, 1, 1]);
+    const emissionScale = extractParam('emission_luminance', extractParam('emission', 0));
+    const thinFilmThickness = extractParam('thin_film_thickness', 0);
+    const thinFilmIor = extractParam('thin_film_ior', extractParam('thin_film_IOR', 1.5));
+    const mtlxParams = {
+        transmissionWeight:   extractParam('transmission_weight', extractParam('transmission', 0)),
+        transmissionDepth:    extractParam('transmission_depth', 0),
+        dispersionScale:      extractParam('transmission_dispersion_scale', 0),
+        thinFilmWeight:       extractParam('thin_film_weight', 0),
+        thinFilmThicknessNm:  thinFilmThickness * 1000.0,
+        thinFilmIor:          thinFilmIor,
+        specularIor:          extractParam('specular_ior', extractParam('specular_IOR', 1.5)),
+        specularRoughness:    extractParam('specular_roughness', 0.3),
+        geometry_thin_walled: extractParam('geometry_thin_walled', extractParam('thin_walled', false)),
+        emission:             emissionColor.map(v => v * emissionScale),
+    };
+
     try { shader.delete?.(); } catch {}
     try { elem.delete?.();   } catch {}
     try { stdlib.delete?.(); } catch {}
@@ -988,11 +1194,13 @@ var progress_finished_timer;
 
 var LOADED;
 var COMPILING;
-var PATHTRACING;
+var FULLSCREEN_BVH_ROUTE;
 var samples = 0;
 
 function is_legacy_pt() { return params.renderer_mode === 'Pathtracer legacy'; }
-function active_pathtrace_material() { return is_legacy_pt() ? pathtracedMaterial_legacy : pathtracedMaterial; }
+function uses_legacy_pathtracer_shader() { return params.renderer_mode === 'Pathtracer' || is_legacy_pt(); }
+function active_pathtrace_material() { return uses_legacy_pathtracer_shader() ? pathtracedMaterial_legacy : pathtracedMaterial; }
+function get_pathtrace_materials() { return [pathtracedMaterial, pathtracedMaterial_legacy].filter(Boolean); }
 
 function updateSunDir()
 {
@@ -1076,8 +1284,9 @@ var scene_names = {
         }
     }
     try {
-        if (is_pathtracing_route()) {
-            // MTLX route: use the MtlxPathTracerHostShaderGenerator dispatch (feature 003).
+        if (is_mtlx_route() || is_mtlx_bvh_raster_route()) {
+            // MTLX BVH routes: pathtracer uses MtlxPathTracerHostShaderGenerator;
+            // raster uses EsslHostShaderGenerator and calls its generated main().
             const materialInputs = mtlxRouteScene
                 ? mtlxRouteScene.materials.map((material, slot) => ({ slot, url: material.mtlx_url, materialId: material.materialId || material.id }))
                 : [{ slot: 0, url: search.get('mtlx_url') || '', materialId: search.get('material_id') || 'default-material' }];
@@ -1101,7 +1310,9 @@ var scene_names = {
                     if (!resp.ok) throw new Error(`[mtlx-scene] material fetch failed: ${resp.status} ${materialUrl}`);
                     materialText = await resp.text();
                 }
-                const result = await generateMtlxRouteDispatch(materialText);
+                const result = is_mtlx_bvh_raster_route()
+                    ? await generateMtlxRasterDispatch(materialText)
+                    : await generateMtlxRouteDispatch(materialText);
                 mtlxRouteDispatches.push({ slot: input.slot, glsl: result.glsl, mtlxParams: result.mtlxParams });
                 mtlxRouteMaterialSummaries[input.slot] = summarizeMtlxRouteMaterialParams(result.mtlxParams);
                 if (!firstParams) firstParams = result.mtlxParams;
@@ -1178,7 +1389,7 @@ function create_materials()
         pathtracedMaterial.dispose();
     // pathtracedMaterial_legacy is rebuilt separately inside create_materials()
 
-    if (!PATHTRACING)
+    if (!FULLSCREEN_BVH_ROUTE)
     {
         //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
         // openpbrMaterial (for rasterization)
@@ -1332,13 +1543,31 @@ function create_materials()
         } );
     }
 
-    if (PATHTRACING)
+    if (FULLSCREEN_BVH_ROUTE)
     {
         //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
         // pathtracedMaterial (for pathtracing shader)
         //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-        pathtracedMaterial = new ShaderMaterial( {
+        if (uses_mtlx_fullscreen_shader()) {
+            const mtlxRouteCommon = is_mtlx_bvh_raster_route()
+                ? glsl_rasterization_mtlx_common
+                : glsl_mtlx_route_common;
+            const mtlxFragmentShader = `precision highp isampler2D;
+                            precision highp usampler2D;
+                            precision highp int;
+                            ${ shaderStructs }
+                            ${ shaderIntersectFunction }
+                        `
+                        + mtlxRouteCommon + '\n'
+                        + assemble_mtlx_route_dispatch();
+
+            if (is_mtlx_bvh_raster_route()) {
+                console.log('[mtlx-raster] fragment shader lines', mtlxFragmentShader.split('\n').length);
+                window.__openpbrMtlxRasterFragmentShader = mtlxFragmentShader;
+            }
+
+            pathtracedMaterial = new ShaderMaterial( {
 
         defines: materialDefines,
 
@@ -1424,16 +1653,13 @@ function create_materials()
             }
         `,
 
-        fragmentShader: `precision highp isampler2D;
-                            precision highp usampler2D;
-                            precision highp int;
-                            ${ shaderStructs }
-                            ${ shaderIntersectFunction }
-                        `
-                        + glsl_mtlx_route_common + '\n'
-                        + assemble_mtlx_route_dispatch()
+        fragmentShader: mtlxFragmentShader
 
-        } );
+            } );
+        }
+        else {
+            pathtracedMaterial = null;
+        }
 
         //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
         // pathtracedMaterial_legacy (handwritten OpenPBR BSDF, pre-MaterialX)
@@ -1656,7 +1882,7 @@ function init()
 
     document.body.appendChild( renderer.domElement );
 
-    PATHTRACING = (params.renderer_mode === 'Pathtracer' || params.renderer_mode === 'Pathtracer MTLX' || params.renderer_mode === 'Pathtracer legacy');
+    FULLSCREEN_BVH_ROUTE = is_fullscreen_bvh_route();
 
     // stats setup
     stats = new Stats();
@@ -1688,7 +1914,7 @@ function load_geometry(scene_name)
     scene.background = env_map_texture;
     env_map_texture.mapping = EquirectangularReflectionMapping ;
     env_map_texture.colorSpace = SRGBColorSpace;
-    if (!PATHTRACING)
+    if (!FULLSCREEN_BVH_ROUTE)
     {
         neutralMaterial.envMap                = env_map_texture;
         neutralMaterial.uniforms.envMap.value = env_map_texture;
@@ -1697,18 +1923,18 @@ function load_geometry(scene_name)
     }
     else
     {
-        pathtracedMaterial.envMap                = env_map_texture;
-        pathtracedMaterial.uniforms.envMap.value = env_map_texture;
-        pathtracedMaterial.uniforms.envMapLatLong.value = env_map_texture;
-        pathtracedMaterial.uniforms.envMapIrradiance.value = env_irradiance_texture || env_map_texture;
-        pathtracedMaterial_legacy.envMap                = env_map_texture;
-        pathtracedMaterial_legacy.uniforms.envMap.value = env_map_texture;
+        for (const pm of get_pathtrace_materials()) {
+            pm.envMap = env_map_texture;
+            pm.uniforms.envMap.value = env_map_texture;
+            if (pm.uniforms.envMapLatLong) pm.uniforms.envMapLatLong.value = env_map_texture;
+            if (pm.uniforms.envMapIrradiance) pm.uniforms.envMapIrradiance.value = env_irradiance_texture || env_map_texture;
+        }
     }
 
     // Load "neutral" objects (i.e. Lambert shaded background stuff)
     mesh_loader.load(scene_name + '/neutral_objects.glb').then( () => {
 
-        if (!PATHTRACING)
+        if (!FULLSCREEN_BVH_ROUTE)
         {
             // Set up mesh properties for rasterization
             mesh_loader.result.scene.traverse((o) => {
@@ -1726,11 +1952,11 @@ function load_geometry(scene_name)
 
         MESH_PROPS = mesh_loader.result.mesh;
 
-        if (PATHTRACING)
+        if (FULLSCREEN_BVH_ROUTE)
         {
             // Set up mesh properties for pathtracing
             BVH_PROPS  = mesh_loader.result.bvh;
-            for (const pm of [pathtracedMaterial, pathtracedMaterial_legacy]) {
+                for (const pm of get_pathtrace_materials()) {
                 pm.uniforms.bvh_props.value.updateFrom( BVH_PROPS );
                 pm.uniforms.has_normals_props.value = false;
                 pm.uniforms.has_tangents_props.value = false;
@@ -1751,8 +1977,9 @@ function load_geometry(scene_name)
                     pm.uniforms.has_uvs_props.value = true;
                 }
             }
-            console.log("  has_normals_scene:  ", pathtracedMaterial.uniforms.has_normals_props);
-            console.log("  has_tangents_scene: ", pathtracedMaterial.uniforms.has_tangents_props);
+                const pt = active_pathtrace_material();
+                console.log("  has_normals_scene:  ", pt.uniforms.has_normals_props);
+                console.log("  has_tangents_scene: ", pt.uniforms.has_tangents_props);
         }
 
         progress_bar.animate(0.5);
@@ -1764,7 +1991,7 @@ function load_geometry(scene_name)
             materialSlotByObject: mtlxRouteMaterialSlotByObject
         }).then( () => {
 
-            if (!PATHTRACING)
+            if (!FULLSCREEN_BVH_ROUTE)
             {
                 // Set up mesh properties for rasterization
                 mesh_loader.result.scene.traverse((o) => {
@@ -1781,11 +2008,11 @@ function load_geometry(scene_name)
 
             MESH_SURFACE = mesh_loader.result.mesh;
 
-            if (PATHTRACING)
+            if (FULLSCREEN_BVH_ROUTE)
             {
                 // Set up mesh properties for pathtracing
                 BVH_SURFACE  = mesh_loader.result.bvh;
-                for (const pm of [pathtracedMaterial, pathtracedMaterial_legacy]) {
+                for (const pm of get_pathtrace_materials()) {
                     pm.uniforms.bvh_surface.value.updateFrom( BVH_SURFACE );
                     pm.uniforms.has_normals_surface.value = false;
                     pm.uniforms.has_tangents_surface.value = false;
@@ -1810,8 +2037,9 @@ function load_geometry(scene_name)
                         pm.uniforms.materialSlotAttribute_surface.value.updateFrom( MESH_SURFACE.geometry.attributes.mtlxMaterialSlot );
                     }
                 }
-                console.log("  has_normals_surface:  ", pathtracedMaterial.uniforms.has_normals_surface);
-                console.log("  has_tangents_surface: ", pathtracedMaterial.uniforms.has_tangents_surface);
+                const pt = active_pathtrace_material();
+                console.log("  has_normals_surface:  ", pt.uniforms.has_normals_surface);
+                console.log("  has_tangents_surface: ", pt.uniforms.has_tangents_surface);
                 console.log("===> LOADED");
             }
 
@@ -1822,7 +2050,7 @@ function load_geometry(scene_name)
             groundTex.wrapT = RepeatWrapping;
             groundTex.colorSpace = SRGBColorSpace;
 
-            if (!PATHTRACING)
+            if (!FULLSCREEN_BVH_ROUTE)
             {
                 // Rasterizer: add ground plane mesh
                 groundTex.repeat.set(2, 2);
@@ -1838,8 +2066,9 @@ function load_geometry(scene_name)
             else
             {
                 // Pathtracer: pass texture as uniform (UV mapping done in shader)
-                pathtracedMaterial.uniforms.ground_texture.value = groundTex;
-                pathtracedMaterial_legacy.uniforms.ground_texture.value = groundTex;
+                for (const pm of get_pathtrace_materials()) {
+                    pm.uniforms.ground_texture.value = groundTex;
+                }
             }
 
             LOADED = true;
@@ -1860,7 +2089,7 @@ function load_scene(scene_name)
     console.log('Loading scene: ', scene_name);
     LOADED = false;
 
-    PATHTRACING = (params.renderer_mode === 'Pathtracer' || params.renderer_mode === 'Pathtracer MTLX' || params.renderer_mode === 'Pathtracer legacy');
+    FULLSCREEN_BVH_ROUTE = is_fullscreen_bvh_route();
 
     create_materials()
 
@@ -2083,7 +2312,7 @@ function setup_gui()
 
     ///// Renderer folder /////////////////////////////////////
     const renderer_folder = gui.addFolder('Renderer');
-    renderer_folder.add(params, 'renderer_mode', getRendererModes()).onChange(                           v => { load_scene(params.scene_name); });
+    renderer_folder.add(params, 'renderer_mode', getRendererModeOptions()).onChange(                    v => { load_scene(params.scene_name); });
     renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => { load_scene(v); });
     renderer_folder.add( params, 'smooth_normals' ).onChange(                                         v => { resetSamples(); });
     renderer_folder.add( params, 'wireframe' ).onChange(                                              v => { resetSamples(); });
@@ -2102,7 +2331,7 @@ function post_load_setup()
 {
     console.log(scene);
 
-    if (!PATHTRACING)
+    if (!FULLSCREEN_BVH_ROUTE)
     {
         //////////////////////////////////////////////////////////
         // Setup THREE.js lighting
@@ -2140,7 +2369,7 @@ function post_load_setup()
         //scene.add(helper);
     }
 
-    if (PATHTRACING)
+    if (FULLSCREEN_BVH_ROUTE)
     {
         //////////////////////////////////////////////////////////
         // Setup framebuffers for pathtracing
@@ -2188,7 +2417,7 @@ function trigger_recompile()
     let promises = [renderer.compileAsync(scene, tmp_cam)];
 
     // FullScreenQuad meshes aren't in the scene, so compile them separately
-    if (PATHTRACING && pathtracedQuad) {
+    if (FULLSCREEN_BVH_ROUTE && pathtracedQuad) {
         promises.push(renderer.compileAsync(pathtracedQuad._mesh, tmp_cam));
     }
 
@@ -2219,7 +2448,7 @@ function trigger_recompile()
         clearTimeout(abortTimer);
         console.log('shaders successfully compiled.');
         // Warm-up render to flush any remaining GPU pipeline stalls
-        if (PATHTRACING && pathtracedQuad && pathtracingRenderTarget) {
+        if (FULLSCREEN_BVH_ROUTE && pathtracedQuad && pathtracingRenderTarget) {
             renderer.setRenderTarget(pathtracingRenderTarget);
             pathtracedQuad.render(renderer);
             renderer.setRenderTarget(null);
@@ -2266,7 +2495,7 @@ function resize()
     const h = window.innerHeight;
     renderer.setSize( w, h );
     renderer.setPixelRatio(1.0);
-    if (PATHTRACING)
+    if (FULLSCREEN_BVH_ROUTE)
         pathtracingRenderTarget.setSize(w, h);
     resetSamples();
 }
@@ -2397,7 +2626,7 @@ function render()
         // render framebuffer
         //////////////////////////////////////////////////////
 
-        if (PATHTRACING)
+        if (FULLSCREEN_BVH_ROUTE)
         {
             sync_shader_uniforms(active_pathtrace_material().uniforms);
 
@@ -2461,11 +2690,11 @@ function render()
     // Text HUD update
     let samples_txt = document.getElementById('samples');
     let    info_txt = document.getElementById('info');
-    if (PATHTRACING)
+    if (FULLSCREEN_BVH_ROUTE)
     {
         samples_txt.style.visibility = 'visible';
         samples_txt.innerText = `samples: ${ samples }`;
-        const modeLabel = is_legacy_pt() ? 'pathtracing (legacy)' : 'pathtracing (MaterialX)';
+        const modeLabel = is_mtlx_bvh_raster_route() ? 'rasterization (MaterialX BVH)' : is_legacy_pt() ? 'pathtracing (legacy)' : 'pathtracing (MaterialX)';
         info_txt.innerText = `OpenPBR viewer, ${modeLabel} (press 'R' to cycle mode)`;
     }
     else
@@ -2622,7 +2851,7 @@ document.onkeydown = function (event)
         {
             const modes = getRendererModes();
             params.renderer_mode = modes[(modes.indexOf(params.renderer_mode) + 1) % modes.length];
-            PATHTRACING = (params.renderer_mode !== 'Rasterizer');
+            FULLSCREEN_BVH_ROUTE = is_fullscreen_bvh_route();
             load_scene(params.scene_name);
             break;
         }

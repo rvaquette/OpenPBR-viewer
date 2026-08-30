@@ -1,6 +1,666 @@
-#version 300 es
+precision highp isampler2D;
+                            precision highp usampler2D;
+                            precision highp int;
+                            
+#ifndef TRI_INTERSECT_EPSILON
+#define TRI_INTERSECT_EPSILON 1e-5
+#endif
 
-precision highp float;
+#ifndef INFINITY
+#define INFINITY 1e20
+#endif
+
+struct BVH {
+
+	usampler2D index;
+	sampler2D position;
+
+	sampler2D bvhBounds;
+	usampler2D bvhContents;
+
+};
+
+                            
+
+// Utilities
+uvec4 uTexelFetch1D( usampler2D tex, uint index ) {
+
+	uint width = uint( textureSize( tex, 0 ).x );
+	uvec2 uv;
+	uv.x = index % width;
+	uv.y = index / width;
+
+	return texelFetch( tex, ivec2( uv ), 0 );
+
+}
+
+ivec4 iTexelFetch1D( isampler2D tex, uint index ) {
+
+	uint width = uint( textureSize( tex, 0 ).x );
+	uvec2 uv;
+	uv.x = index % width;
+	uv.y = index / width;
+
+	return texelFetch( tex, ivec2( uv ), 0 );
+
+}
+
+vec4 texelFetch1D( sampler2D tex, uint index ) {
+
+	uint width = uint( textureSize( tex, 0 ).x );
+	uvec2 uv;
+	uv.x = index % width;
+	uv.y = index / width;
+
+	return texelFetch( tex, ivec2( uv ), 0 );
+
+}
+
+vec4 textureSampleBarycoord( sampler2D tex, vec3 barycoord, uvec3 faceIndices ) {
+
+	return
+		barycoord.x * texelFetch1D( tex, faceIndices.x ) +
+		barycoord.y * texelFetch1D( tex, faceIndices.y ) +
+		barycoord.z * texelFetch1D( tex, faceIndices.z );
+
+}
+
+void ndcToCameraRay(
+	vec2 coord, mat4 cameraWorld, mat4 invProjectionMatrix,
+	out vec3 rayOrigin, out vec3 rayDirection
+) {
+
+	// get camera look direction and near plane for camera clipping
+	vec4 lookDirection = cameraWorld * vec4( 0.0, 0.0, - 1.0, 0.0 );
+	vec4 nearVector = invProjectionMatrix * vec4( 0.0, 0.0, - 1.0, 1.0 );
+	float near = abs( nearVector.z / nearVector.w );
+
+	// get the camera direction and position from camera matrices
+	vec4 origin = cameraWorld * vec4( 0.0, 0.0, 0.0, 1.0 );
+	vec4 direction = invProjectionMatrix * vec4( coord, 0.5, 1.0 );
+	direction /= direction.w;
+	direction = cameraWorld * direction - origin;
+
+	// slide the origin along the ray until it sits at the near clip plane position
+	origin.xyz += direction.xyz * near / dot( direction, lookDirection );
+
+	rayOrigin = origin.xyz;
+	rayDirection = direction.xyz;
+
+}
+
+// Raycasting
+float intersectsBounds( vec3 rayOrigin, vec3 rayDirection, vec3 boundsMin, vec3 boundsMax ) {
+
+	// https://www.reddit.com/r/opengl/comments/8ntzz5/fast_glsl_ray_box_intersection/
+	// https://tavianator.com/2011/ray_box.html
+	vec3 invDir = 1.0 / rayDirection;
+
+	// find intersection distances for each plane
+	vec3 tMinPlane = invDir * ( boundsMin - rayOrigin );
+	vec3 tMaxPlane = invDir * ( boundsMax - rayOrigin );
+
+	// get the min and max distances from each intersection
+	vec3 tMinHit = min( tMaxPlane, tMinPlane );
+	vec3 tMaxHit = max( tMaxPlane, tMinPlane );
+
+	// get the furthest hit distance
+	vec2 t = max( tMinHit.xx, tMinHit.yz );
+	float t0 = max( t.x, t.y );
+
+	// get the minimum hit distance
+	t = min( tMaxHit.xx, tMaxHit.yz );
+	float t1 = min( t.x, t.y );
+
+	// set distance to 0.0 if the ray starts inside the box
+	float dist = max( t0, 0.0 );
+
+	return t1 >= dist ? dist : INFINITY;
+
+}
+
+bool intersectsTriangle(
+	vec3 rayOrigin, vec3 rayDirection, vec3 a, vec3 b, vec3 c,
+	out vec3 barycoord, out vec3 norm, out float dist, out float side
+) {
+
+	// https://stackoverflow.com/questions/42740765/intersection-between-line-and-triangle-in-3d
+	vec3 edge1 = b - a;
+	vec3 edge2 = c - a;
+	norm = cross( edge1, edge2 );
+
+	float det = - dot( rayDirection, norm );
+	float invdet = 1.0 / det;
+
+	vec3 AO = rayOrigin - a;
+	vec3 DAO = cross( AO, rayDirection );
+
+	vec4 uvt;
+	uvt.x = dot( edge2, DAO ) * invdet;
+	uvt.y = - dot( edge1, DAO ) * invdet;
+	uvt.z = dot( AO, norm ) * invdet;
+	uvt.w = 1.0 - uvt.x - uvt.y;
+
+	// set the hit information
+	barycoord = uvt.wxy; // arranged in A, B, C order
+	dist = uvt.z;
+	side = sign( det );
+	norm = side * normalize( norm );
+
+	// add an epsilon to avoid misses between triangles
+	uvt += vec4( TRI_INTERSECT_EPSILON );
+
+	return all( greaterThanEqual( uvt, vec4( 0.0 ) ) );
+
+}
+
+bool intersectTriangles(
+	BVH bvh, vec3 rayOrigin, vec3 rayDirection, uint offset, uint count,
+	inout float minDistance, inout uvec4 faceIndices, inout vec3 faceNormal, inout vec3 barycoord,
+	inout float side, inout float dist
+) {
+
+	bool found = false;
+	vec3 localBarycoord, localNormal;
+	float localDist, localSide;
+	for ( uint i = offset, l = offset + count; i < l; i ++ ) {
+
+		uvec3 indices = uTexelFetch1D( bvh.index, i ).xyz;
+		vec3 a = texelFetch1D( bvh.position, indices.x ).rgb;
+		vec3 b = texelFetch1D( bvh.position, indices.y ).rgb;
+		vec3 c = texelFetch1D( bvh.position, indices.z ).rgb;
+
+		if (
+			intersectsTriangle( rayOrigin, rayDirection, a, b, c, localBarycoord, localNormal, localDist, localSide )
+			&& localDist < minDistance
+		) {
+
+			found = true;
+			minDistance = localDist;
+
+			faceIndices = uvec4( indices.xyz, i );
+			faceNormal = localNormal;
+
+			side = localSide;
+			barycoord = localBarycoord;
+			dist = localDist;
+
+		}
+
+	}
+
+	return found;
+
+}
+
+float intersectsBVHNodeBounds( vec3 rayOrigin, vec3 rayDirection, BVH bvh, uint currNodeIndex ) {
+
+	vec3 boundsMin = texelFetch1D( bvh.bvhBounds, currNodeIndex * 2u + 0u ).xyz;
+	vec3 boundsMax = texelFetch1D( bvh.bvhBounds, currNodeIndex * 2u + 1u ).xyz;
+	return intersectsBounds( rayOrigin, rayDirection, boundsMin, boundsMax );
+
+}
+
+bool bvhIntersectFirstHit(
+	BVH bvh, vec3 rayOrigin, vec3 rayDirection,
+
+	// output variables
+	inout uvec4 faceIndices, inout vec3 faceNormal, inout vec3 barycoord,
+	inout float side, inout float dist
+) {
+
+	// stack needs to be twice as long as the deepest tree we expect because
+	// we push both the left and right child onto the stack every traversal
+	int ptr = 0;
+	uint stack[ 60 ];
+	stack[ 0 ] = 0u;
+
+	float triangleDistance = 1e20;
+	bool found = false;
+	while ( ptr > - 1 && ptr < 60 ) {
+
+		uint currNodeIndex = stack[ ptr ];
+		ptr --;
+
+		// check if we intersect the current bounds
+		float boundsHitDistance = intersectsBVHNodeBounds( rayOrigin, rayDirection, bvh, currNodeIndex );
+		if ( boundsHitDistance == INFINITY || boundsHitDistance > triangleDistance ) {
+
+			continue;
+
+		}
+
+		uvec2 boundsInfo = uTexelFetch1D( bvh.bvhContents, currNodeIndex ).xy;
+		bool isLeaf = bool( boundsInfo.x & 0xffff0000u );
+
+		if ( isLeaf ) {
+
+			uint count = boundsInfo.x & 0x0000ffffu;
+			uint offset = boundsInfo.y;
+
+			found = intersectTriangles(
+				bvh, rayOrigin, rayDirection, offset, count, triangleDistance,
+				faceIndices, faceNormal, barycoord, side, dist
+			) || found;
+
+		} else {
+
+			uint leftIndex = currNodeIndex + 1u;
+			uint splitAxis = boundsInfo.x & 0x0000ffffu;
+			uint rightIndex = boundsInfo.y;
+
+			bool leftToRight = rayDirection[ splitAxis ] >= 0.0;
+			uint c1 = leftToRight ? leftIndex : rightIndex;
+			uint c2 = leftToRight ? rightIndex : leftIndex;
+
+			// set c2 in the stack so we traverse it later. We need to keep track of a pointer in
+			// the stack while we traverse. The second pointer added is the one that will be
+			// traversed first
+			ptr ++;
+			stack[ ptr ] = c2;
+
+			ptr ++;
+			stack[ ptr ] = c1;
+
+		}
+
+	}
+
+	return found;
+
+}
+
+                        
+#include <envmap_common_pars_fragment>
+
+//////////////////////////////////////////////////////
+// camera uniforms
+//////////////////////////////////////////////////////
+
+uniform mat4 cameraWorldMatrix;
+uniform mat4 invProjectionMatrix;
+uniform mat4 invModelMatrix;
+uniform vec2 resolution;
+
+//////////////////////////////////////////////////////
+// geometry uniforms
+//////////////////////////////////////////////////////
+
+uniform BVH bvh_surface;
+uniform BVH bvh_props;
+
+uniform sampler2D normalAttribute_surface;
+uniform sampler2D normalAttribute_props;
+uniform sampler2D tangentAttribute_surface;
+uniform sampler2D tangentAttribute_props;
+uniform sampler2D uvAttribute_surface;
+uniform sampler2D uvAttribute_props;
+uniform sampler2D materialSlotAttribute_surface;
+uniform bool has_normals_surface;
+uniform bool has_tangents_surface;
+uniform bool has_uvs_surface;
+uniform bool has_normals_props;
+uniform bool has_tangents_props;
+uniform bool has_uvs_props;
+
+uniform sampler2D ground_texture;
+
+//////////////////////////////////////////////////////
+// renderer uniforms
+//////////////////////////////////////////////////////
+
+uniform float accumulation_weight;
+uniform float samples;
+uniform bool wireframe;
+uniform bool debug_material_slots;
+uniform vec3 neutral_color;
+uniform bool smooth_normals;
+uniform int bounces;
+uniform int max_volume_steps;
+uniform float firefly_clamp;
+uniform bool strict_failure_enabled;
+uniform bool generated_contract_valid;
+uniform int generated_contract_failure_code;
+
+//////////////////////////////////////////////////////
+// lighting uniforms
+//////////////////////////////////////////////////////
+
+uniform float skyPower;
+uniform vec3 skyColor;
+
+uniform float sunPower;
+uniform float sunAngularSize;
+uniform vec3 sunColor;
+uniform vec3 sunDir;
+uniform bool mtlxDisableSun;
+
+uniform int mtlxLightCount;
+uniform int mtlxLightType[MAX_MTLX_LIGHTS];
+uniform vec3 mtlxLightPosition[MAX_MTLX_LIGHTS];
+uniform vec3 mtlxLightDirection[MAX_MTLX_LIGHTS];
+uniform vec3 mtlxLightColor[MAX_MTLX_LIGHTS];
+uniform float mtlxLightIntensity[MAX_MTLX_LIGHTS];
+uniform float mtlxLightDecayRate[MAX_MTLX_LIGHTS];
+uniform float mtlxLightInnerCone[MAX_MTLX_LIGHTS];
+uniform float mtlxLightOuterCone[MAX_MTLX_LIGHTS];
+
+//////////////////////////////////////////////////////
+// UVs
+//////////////////////////////////////////////////////
+varying vec2 vUv;
+
+//////////////////////////////////////////////////////
+// useful constants
+//////////////////////////////////////////////////////
+
+const float PI                    = 3.141592653589793;
+const float PI2                   = 6.283185307179586;
+const float HUGE_DIST             = 1.0e20;
+const float RAY_OFFSET            = 1.0e-4;
+const float DENOM_TOLERANCE       = 1.0e-10;
+
+const int MATERIAL_PROPS   = 0;
+const int MATERIAL_OPENPBR = 1;
+const int MATERIAL_GROUND  = 2;
+
+bool strictGeneratedContractFailure()
+{
+    return strict_failure_enabled && !generated_contract_valid;
+}
+
+vec3 safe_normalize(in vec3 N)
+{
+    float l = length(N);
+    return N/max(l, DENOM_TOLERANCE);
+}
+
+float minComponent(in vec3 v)
+{
+    return min(v.x, min(v.y, v.z));
+}
+
+struct Basis
+{
+    vec3 nW;
+    vec3 tW;
+    vec3 bW;
+    vec3 baryCoord;
+    vec2 texCoord;
+    int materialSlot;
+};
+
+vec3 normalToTangent(in vec3 N)
+{
+    vec3 T;
+    if (abs(N.z) < abs(N.x))
+        T = vec3(N.z, 0.0, -N.x);
+    else
+        T = vec3(0.0, N.z, -N.y);
+    T = safe_normalize(T);
+    return T;
+}
+
+void triangleUvFrame(in BVH bvh, in uvec3 faceIndices, in vec3 N, in sampler2D uvAttribute, out vec3 T, out vec3 B)
+{
+    vec3 p0 = texelFetch1D(bvh.position, faceIndices.x).xyz;
+    vec3 p1 = texelFetch1D(bvh.position, faceIndices.y).xyz;
+    vec3 p2 = texelFetch1D(bvh.position, faceIndices.z).xyz;
+    vec2 uv0 = texelFetch1D(uvAttribute, faceIndices.x).xy;
+    vec2 uv1 = texelFetch1D(uvAttribute, faceIndices.y).xy;
+    vec2 uv2 = texelFetch1D(uvAttribute, faceIndices.z).xy;
+
+    vec3 dp1 = p1 - p0;
+    vec3 dp2 = p2 - p0;
+    vec2 duv1 = uv1 - uv0;
+    vec2 duv2 = uv2 - uv0;
+    float det = duv1.x * duv2.y - duv1.y * duv2.x;
+    if (abs(det) < DENOM_TOLERANCE)
+    {
+        T = normalToTangent(N);
+        B = cross(N, T);
+        return;
+    }
+
+    T = (dp1 * duv2.y - dp2 * duv1.y) / det;
+    B = (dp2 * duv1.x - dp1 * duv2.x) / det;
+    T = safe_normalize(T - N * dot(N, T));
+    B = safe_normalize(B - N * dot(N, B) - T * dot(T, B));
+}
+
+Basis makeBasis(in vec3 nW)
+{
+    Basis basis;
+    basis.nW = safe_normalize(nW);
+    basis.tW = normalToTangent(nW);
+    basis.bW = cross(basis.nW, basis.tW);
+    basis.baryCoord = vec3(0.0);
+    basis.texCoord = vec2(0.0);
+    basis.materialSlot = 0;
+    return basis;
+}
+
+Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 baryCoord, in vec2 texCoord, in int materialSlot)
+{
+    Basis basis;
+    basis.nW = safe_normalize(nW);
+    basis.tW = safe_normalize(tW);
+    basis.bW = cross(basis.nW, basis.tW);
+    basis.baryCoord = baryCoord;
+    basis.texCoord = texCoord;
+    basis.materialSlot = materialSlot;
+    return basis;
+}
+
+Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 bW, in vec3 baryCoord, in vec2 texCoord, in int materialSlot)
+{
+    Basis basis;
+    basis.nW = safe_normalize(nW);
+    basis.tW = safe_normalize(tW);
+    basis.bW = safe_normalize(bW);
+    basis.baryCoord = baryCoord;
+    basis.texCoord = texCoord;
+    basis.materialSlot = materialSlot;
+    return basis;
+}
+
+vec3 worldToLocal(in vec3 vWorld, in Basis basis)
+{
+    return vec3( dot(vWorld, basis.tW),
+                 dot(vWorld, basis.bW),
+                 dot(vWorld, basis.nW) );
+}
+
+vec3 localToWorld(in vec3 vLocal, in Basis basis)
+{
+    return basis.tW*vLocal.x + basis.bW*vLocal.y + basis.nW*vLocal.z;
+}
+
+bool bvhIntersectFirstHitWithinDistance(
+    BVH bvh, vec3 rayOrigin, vec3 rayDirection, in float maxDistance,
+    inout uvec4 faceIndices, inout vec3 faceNormal, inout vec3 barycoord,
+    inout float side, inout float dist)
+{
+    int ptr = 0;
+    uint stack[32];
+    stack[0] = 0u;
+    float triangleDistance = HUGE_DIST;
+    bool found = false;
+    while (ptr > -1 && ptr < 32)
+    {
+        uint currNodeIndex = stack[ptr];
+        ptr--;
+        float boundsHitDistance = intersectsBVHNodeBounds(rayOrigin, rayDirection, bvh, currNodeIndex);
+        if (boundsHitDistance == INFINITY ||
+            boundsHitDistance > triangleDistance ||
+            boundsHitDistance > maxDistance)
+            continue;
+        uvec2 boundsInfo = uTexelFetch1D(bvh.bvhContents, currNodeIndex).xy;
+        bool isLeaf = bool(boundsInfo.x & 0xffff0000u);
+        if (isLeaf)
+        {
+            uint count = boundsInfo.x & 0x0000ffffu;
+            uint offset = boundsInfo.y;
+            float minDistance = min(maxDistance, triangleDistance);
+            bool foundIntersection = intersectTriangles(bvh, rayOrigin, rayDirection, offset, count, minDistance,
+                                                        faceIndices, faceNormal, barycoord, side, dist);
+            if (foundIntersection)
+            {
+                triangleDistance = minDistance;
+                found = true;
+            }
+        }
+        else
+        {
+            uint leftIndex = currNodeIndex + 1u;
+            uint splitAxis = boundsInfo.x & 0x0000ffffu;
+            uint rightIndex = boundsInfo.y;
+            bool leftToRight = rayDirection[splitAxis] >= 0.0;
+            uint c1 = leftToRight ? leftIndex : rightIndex;
+            uint c2 = leftToRight ? rightIndex : leftIndex;
+            ptr++;
+            stack[ptr] = c2;
+            ptr++;
+            stack[ptr] = c1;
+        }
+    }
+    return found;
+}
+
+bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
+           out vec3 P, out vec3 Ns, out vec3 Ng, out vec3 Ts, out vec3 Bs, out vec3 baryCoord, out vec2 texCoord, out int materialSlot, out int material)
+{
+    uvec4 faceIndices_surface = uvec4(0u);
+    vec3 faceNormal_surface = vec3(0.0, 0.0, 1.0);
+    vec3 barycoord_surface = vec3(0.0);
+    float side_surface = 1.0;
+    float dist_surface = HUGE_DIST;
+    bool hit_surface = bvhIntersectFirstHitWithinDistance(bvh_surface, rayOrigin, rayDir, maxDistance,
+                                                          faceIndices_surface, faceNormal_surface, barycoord_surface, side_surface, dist_surface);
+    uvec4 faceIndices_props = uvec4(0u);
+    vec3 faceNormal_props = vec3(0.0, 0.0, 1.0);
+    vec3 barycoord_props = vec3(0.0);
+    float side_props = 1.0;
+    float dist_props = HUGE_DIST;
+    bool hit_props = bvhIntersectFirstHitWithinDistance(bvh_props, rayOrigin, rayDir, min(dist_surface, maxDistance),
+                                                        faceIndices_props, faceNormal_props, barycoord_props, side_props, dist_props);
+
+    float dist_closest = HUGE_DIST;
+    if (hit_surface) dist_closest = min(dist_closest, dist_surface);
+    if (hit_props)   dist_closest = min(dist_closest, dist_props);
+
+    const float GROUND_Y = 0.01;
+    float dist_ground = HUGE_DIST;
+    bool hit_ground = false;
+    if (abs(rayDir.y) > DENOM_TOLERANCE)
+    {
+        float t = (GROUND_Y - rayOrigin.y) / rayDir.y;
+        if (t > 0.0 && t < min(dist_closest, maxDistance))
+        {
+            dist_ground = t;
+            hit_ground = true;
+        }
+    }
+
+    bool hit = hit_surface || hit_props || hit_ground;
+    if (!hit) return false;
+
+    if (hit_surface && (!hit_props || (dist_surface <= dist_props)) && (!hit_ground || (dist_surface <= dist_ground)))
+    {
+        P = rayOrigin + dist_surface*rayDir;
+        material = MATERIAL_OPENPBR;
+        baryCoord = barycoord_surface;
+        Ng = safe_normalize(faceNormal_surface);
+        texCoord = has_uvs_surface ? textureSampleBarycoord(uvAttribute_surface, barycoord_surface, faceIndices_surface.xyz).xy : barycoord_surface.xy;
+        Ns = has_normals_surface ? textureSampleBarycoord(normalAttribute_surface, barycoord_surface, faceIndices_surface.xyz).xyz : Ng;
+        if (has_tangents_surface)
+        {
+            Ts = textureSampleBarycoord(tangentAttribute_surface, barycoord_surface, faceIndices_surface.xyz).xyz;
+            Bs = cross(safe_normalize(Ns), safe_normalize(Ts));
+        }
+        else if (has_uvs_surface)
+            triangleUvFrame(bvh_surface, faceIndices_surface.xyz, safe_normalize(Ns), uvAttribute_surface, Ts, Bs);
+        else
+        {
+            Ts = normalToTangent(Ns);
+            Bs = cross(safe_normalize(Ns), safe_normalize(Ts));
+        }
+        materialSlot = int(floor(textureSampleBarycoord(materialSlotAttribute_surface, barycoord_surface, faceIndices_surface.xyz).x + 0.5));
+    }
+    else if (hit_props && (!hit_ground || (dist_props <= dist_ground)))
+    {
+        P = rayOrigin + dist_props*rayDir;
+        material = MATERIAL_PROPS;
+        baryCoord = barycoord_props;
+        Ng = safe_normalize(faceNormal_props);
+        texCoord = has_uvs_props ? textureSampleBarycoord(uvAttribute_props, barycoord_props, faceIndices_props.xyz).xy : barycoord_props.xy;
+        Ns = has_normals_props ? textureSampleBarycoord(normalAttribute_props, barycoord_props, faceIndices_props.xyz).xyz : Ng;
+        if (has_tangents_props)
+        {
+            Ts = textureSampleBarycoord(tangentAttribute_props, barycoord_props, faceIndices_props.xyz).xyz;
+            Bs = cross(safe_normalize(Ns), safe_normalize(Ts));
+        }
+        else if (has_uvs_props)
+            triangleUvFrame(bvh_props, faceIndices_props.xyz, safe_normalize(Ns), uvAttribute_props, Ts, Bs);
+        else
+        {
+            Ts = normalToTangent(Ns);
+            Bs = cross(safe_normalize(Ns), safe_normalize(Ts));
+        }
+        materialSlot = 0;
+    }
+    else if (hit_ground)
+    {
+        P = rayOrigin + dist_ground*rayDir;
+        material = MATERIAL_GROUND;
+        baryCoord = vec3(0.0);
+        Ng = vec3(0.0, 1.0, 0.0);
+        Ns = Ng;
+        Ts = vec3(1.0, 0.0, 0.0);
+        Bs = vec3(0.0, 0.0, -1.0);
+        texCoord = vec2(P.x, -P.z) / 200.0 * 2.0 + 0.5;
+        materialSlot = 0;
+    }
+    return true;
+}
+
+vec3 ground_albedo(in vec3 pW)
+{
+    vec2 uv = vec2(pW.x, -pW.z) / 200.0 * 2.0 + 0.5;
+    return texture(ground_texture, uv).rgb;
+}
+
+Basis sunBasis;
+
+vec3 sunRadiance(in vec3 woutputW)
+{
+    float theta_max = sunAngularSize * PI/180.0;
+    if (dot(woutputW, sunDir) < cos(theta_max)) return vec3(0.0);
+    return sunPower * sunColor;
+}
+
+vec3 skyRadiance(in vec3 woutputW)
+{
+    vec4 env = textureLod(envMap, vec3(woutputW.x, woutputW.yz), 0.0);
+    return env.rgb * skyPower * skyColor;
+}
+uniform sampler2D envMapLatLong;
+uniform sampler2D envMapIrradiance;
+mat4 mtlxEnvMatrix() {
+    float a = 1.57079632679;
+    float c = cos(a), s = sin(a);
+    return mat4(c,0.,-s,0., 0.,1.,0.,0., s,0.,c,0., 0.,0.,0.,1.);
+}
+#define u_envMatrix    mtlxEnvMatrix()
+#define u_envRadiance  envMapLatLong
+#define u_envIrradiance envMapIrradiance
+#define u_envLightIntensity skyPower
+#define u_envRadianceMips   1
+#define u_envRadianceSamples 1
+#define u_refractionTwoSided false
+#define u_numActiveLightSources mtlxLightCount
+#define u_viewPosition cameraWorldMatrix[3].xyz
+
 
 
 struct BSDF { vec3 response; vec3 throughput; };
@@ -10,15 +670,71 @@ struct surfaceshader { vec3 color; vec3 transparency; };
 struct volumeshader { vec3 color; vec3 transparency; };
 struct displacementshader { vec3 offset; float scale; };
 struct lightshader { vec3 intensity; vec3 direction; };
-#define material surfaceshader
 
-uniform mat4 u_envMatrix;
-uniform sampler2D u_envRadiance;
-uniform float u_envLightIntensity;
-uniform int u_envRadianceMips;
-uniform int u_envRadianceSamples;
-uniform sampler2D u_envIrradiance;
-uniform bool u_refractionTwoSided;
+// __MTLX_PARAMS_BEGIN__
+float base = 1.000000;
+float diffuse_roughness = 0.000000;
+float metalness = 0.000000;
+float specular = 1.000000;
+vec3 specular_color = vec3(1.000000, 1.000000, 1.000000);
+float specular_IOR = 1.500000;
+float specular_anisotropy = 0.000000;
+float specular_rotation = 0.000000;
+float transmission = 0.000000;
+vec3 transmission_color = vec3(1.000000, 1.000000, 1.000000);
+float transmission_depth = 0.000000;
+vec3 transmission_scatter = vec3(0.000000, 0.000000, 0.000000);
+float transmission_scatter_anisotropy = 0.000000;
+float transmission_dispersion = 0.000000;
+float transmission_extra_roughness = 0.000000;
+float subsurface = 0.000000;
+vec3 subsurface_color = vec3(1.000000, 1.000000, 1.000000);
+vec3 subsurface_radius = vec3(1.000000, 1.000000, 1.000000);
+float subsurface_scale = 1.000000;
+float subsurface_anisotropy = 0.000000;
+float sheen = 0.000000;
+vec3 sheen_color = vec3(1.000000, 1.000000, 1.000000);
+float sheen_roughness = 0.300000;
+float coat = 0.000000;
+vec3 coat_color = vec3(1.000000, 1.000000, 1.000000);
+float coat_roughness = 0.100000;
+float coat_anisotropy = 0.000000;
+float coat_rotation = 0.000000;
+float coat_IOR = 1.500000;
+float coat_affect_color = 0.000000;
+float coat_affect_roughness = 0.000000;
+float thin_film_thickness = 0.000000;
+float thin_film_IOR = 1.500000;
+float emission = 0.000000;
+vec3 emission_color = vec3(1.000000, 1.000000, 1.000000);
+vec3 opacity = vec3(1.000000, 1.000000, 1.000000);
+bool thin_walled = false;
+uniform sampler2D node_tiledimage_float_26_file;
+uniform sampler2D node_tiledimage_float_7_file;
+uniform sampler2D node_tiledimage_float_24_file;
+uniform sampler2D node_tiledimage_float_10_file;
+uniform sampler2D node_tiledimage_float_22_file;
+uniform sampler2D node_tiledimage_vector3_27_file;
+// __MTLX_PARAMS_END__
+
+// ESSL host geometric streams (fed each hit by pt_MtlxBindGeom).
+vec2 texcoord_0;
+vec3 normalWorld;
+vec3 tangentWorld;
+vec3 bitangentWorld;
+vec3 positionWorld;
+
+void pt_MtlxBindGeom(vec3 ptN, vec3 ptT, vec3 ptB, vec3 ptP, vec2 ptUv)
+{
+    texcoord_0 = ptUv;
+    normalWorld = ptN;
+    tangentWorld = ptT;
+    bitangentWorld = ptB;
+    positionWorld = ptP;
+}
+
+// Pixel shader outputs
+vec4 mtlxRasterOut;
 
 #define M_FLOAT_EPS 1e-8
 #define M_PI 3.1415926535897932
@@ -69,8 +785,10 @@ vec3 mx_srgb_encode(vec3 color)
 }
 
 #define DIRECTIONAL_ALBEDO_METHOD 0
+
 #define AIRY_FRESNEL_ITERATIONS 2
 
+#define MAX_LIGHT_SOURCES 1
 #define M_PI 3.1415926535897932
 #define M_PI_INV (1.0 / M_PI)
 
@@ -825,73 +1543,28 @@ vec3 mx_surface_transmission(vec3 N, vec3 V, vec3 X, vec2 alpha, int distributio
     return mx_environment_radiance(N, V, X, alpha, distribution, fd) * tint;
 }
 
+struct LightData
+{
+    int type;
+};
 
-// Host closure globals (set by evaluateBsdf / sampleBsdf).
-vec3 g_ptV;
-vec3 g_ptN;
-vec3 g_ptL;
-vec3 g_ptP;
-vec3 g_ptTangent;
-vec3 g_ptBitangent;
-vec2 g_ptTexcoord;
-int g_ptClosureType;
-float g_ptOcclusion = 1.0;
-int g_ptEmitEmission = 1;
-vec2 texcoord_0;
-vec3 normalWorld;
-vec3 tangentWorld;
-vec3 bitangentWorld;
+uniform LightData u_lightData[MAX_LIGHT_SOURCES];
 
-// __MTLX_PARAMS_BEGIN__
-float base = 1.000000;
-float diffuse_roughness = 0.000000;
-float metalness = 0.000000;
-float specular = 1.000000;
-vec3 specular_color = vec3(1.000000, 1.000000, 1.000000);
-float specular_IOR = 1.500000;
-float specular_anisotropy = 0.000000;
-float specular_rotation = 0.000000;
-float transmission = 0.000000;
-vec3 transmission_color = vec3(1.000000, 1.000000, 1.000000);
-float transmission_depth = 0.000000;
-vec3 transmission_scatter = vec3(0.000000, 0.000000, 0.000000);
-float transmission_scatter_anisotropy = 0.000000;
-float transmission_dispersion = 0.000000;
-float transmission_extra_roughness = 0.000000;
-float subsurface = 0.000000;
-vec3 subsurface_color = vec3(1.000000, 1.000000, 1.000000);
-vec3 subsurface_radius = vec3(1.000000, 1.000000, 1.000000);
-float subsurface_scale = 1.000000;
-float subsurface_anisotropy = 0.000000;
-float sheen = 0.000000;
-vec3 sheen_color = vec3(1.000000, 1.000000, 1.000000);
-float sheen_roughness = 0.300000;
-float coat = 0.000000;
-vec3 coat_color = vec3(1.000000, 1.000000, 1.000000);
-float coat_roughness = 0.100000;
-float coat_anisotropy = 0.000000;
-float coat_rotation = 0.000000;
-float coat_IOR = 1.500000;
-float coat_affect_color = 0.000000;
-float coat_affect_roughness = 0.000000;
-float thin_film_thickness = 0.000000;
-float thin_film_IOR = 1.500000;
-float emission = 0.000000;
-vec3 emission_color = vec3(1.000000, 1.000000, 1.000000);
-vec3 opacity = vec3(1.000000, 1.000000, 1.000000);
-bool thin_walled = false;
-sampler2D node_tiledimage_float_26_file;
-sampler2D node_tiledimage_float_7_file;
-sampler2D node_tiledimage_float_24_file;
-sampler2D node_tiledimage_float_10_file;
-sampler2D node_tiledimage_float_22_file;
-sampler2D node_tiledimage_vector3_27_file;
-// __MTLX_PARAMS_END__
+int numActiveLightSources()
+{
+    return min(u_numActiveLightSources, MAX_LIGHT_SOURCES) ;
+}
 
-void NG_convert_float_vector2(float in1, out vec2 out1)
+void sampleLightSource(LightData light, vec3 position, out lightshader result)
+{
+    result.intensity = vec3(0.000000, 0.000000, 0.000000);
+    result.direction = vec3(0.000000, 0.000000, 0.000000);
+}
+
+void NG_convert_float_vector2(float in1, out vec2 mtlxRasterOut)
 {
     vec2 combine_out = vec2(in1,in1);
-    out1 = combine_out;
+    mtlxRasterOut = combine_out;
 }
 
 /*
@@ -1003,7 +1676,7 @@ void mx_image_float(sampler2D tex_sampler, int layer, float defaultval, vec2 tex
     result = texture(tex_sampler, uv).r;
 }
 
-void NG_tiledimage_float(sampler2D file, float default1, vec2 texcoord, vec2 uvtiling, vec2 uvoffset, vec2 realworldimagesize, vec2 realworldtilesize, int filtertype, int framerange, int frameoffset, int frameendaction, out float out1)
+void NG_tiledimage_float(sampler2D file, float default1, vec2 texcoord, vec2 uvtiling, vec2 uvoffset, vec2 realworldimagesize, vec2 realworldtilesize, int filtertype, int framerange, int frameoffset, int frameendaction, out float mtlxRasterOut)
 {
     vec2 N_mult_float_out = texcoord * uvtiling;
     vec2 N_sub_float_out = N_mult_float_out - uvoffset;
@@ -1011,7 +1684,7 @@ void NG_tiledimage_float(sampler2D file, float default1, vec2 texcoord, vec2 uvt
     vec2 N_multtilesize_float_out = N_divtilesize_float_out * realworldtilesize;
     float N_img_float_out = 0.0;
     mx_image_float(file, 0, default1, N_multtilesize_float_out, 2, 2, filtertype, framerange, frameoffset, frameendaction, vec2(1.000000, 1.000000), vec2(0.000000, 0.000000), N_img_float_out);
-    out1 = N_img_float_out;
+    mtlxRasterOut = N_img_float_out;
 }
 
 
@@ -1021,7 +1694,7 @@ void mx_image_vector3(sampler2D tex_sampler, int layer, vec3 defaultval, vec2 te
     result = texture(tex_sampler, uv).rgb;
 }
 
-void NG_tiledimage_vector3(sampler2D file, vec3 default1, vec2 texcoord, vec2 uvtiling, vec2 uvoffset, vec2 realworldimagesize, vec2 realworldtilesize, int filtertype, int framerange, int frameoffset, int frameendaction, out vec3 out1)
+void NG_tiledimage_vector3(sampler2D file, vec3 default1, vec2 texcoord, vec2 uvtiling, vec2 uvoffset, vec2 realworldimagesize, vec2 realworldtilesize, int filtertype, int framerange, int frameoffset, int frameendaction, out vec3 mtlxRasterOut)
 {
     vec2 N_mult_vector3_out = texcoord * uvtiling;
     vec2 N_sub_vector3_out = N_mult_vector3_out - uvoffset;
@@ -1029,7 +1702,7 @@ void NG_tiledimage_vector3(sampler2D file, vec3 default1, vec2 texcoord, vec2 uv
     vec2 N_multtilesize_vector3_out = N_divtilesize_vector3_out * realworldtilesize;
     vec3 N_img_vector3_out = vec3(0.0);
     mx_image_vector3(file, 0, default1, N_multtilesize_vector3_out, 2, 2, filtertype, framerange, frameoffset, frameendaction, vec2(1.000000, 1.000000), vec2(0.000000, 0.000000), N_img_vector3_out);
-    out1 = N_img_vector3_out;
+    mtlxRasterOut = N_img_vector3_out;
 }
 
 void mx_normalmap_vector2(vec3 value, vec2 normal_scale, vec3 N, vec3 T, vec3 B, out vec3 result)
@@ -1805,10 +2478,10 @@ void mx_oren_nayar_diffuse_bsdf(ClosureData closureData, float weight, vec3 colo
     }
 }
 
-void NG_convert_float_color3(float in1, out vec3 out1)
+void NG_convert_float_color3(float in1, out vec3 mtlxRasterOut)
 {
     vec3 combine_out = vec3(in1,in1,in1);
-    out1 = combine_out;
+    mtlxRasterOut = combine_out;
 }
 
 
@@ -1866,7 +2539,7 @@ void mx_multiply_bsdf_color3(ClosureData closureData, BSDF in1, vec3 in2, out BS
     result.throughput = in1.throughput;
 }
 
-void NG_standard_surface_surfaceshader_100(float base, vec3 base_color, float diffuse_roughness, float metalness, float specular, vec3 specular_color, float specular_roughness, float specular_IOR, float specular_anisotropy, float specular_rotation, float transmission, vec3 transmission_color, float transmission_depth, vec3 transmission_scatter, float transmission_scatter_anisotropy, float transmission_dispersion, float transmission_extra_roughness, float subsurface, vec3 subsurface_color, vec3 subsurface_radius, float subsurface_scale, float subsurface_anisotropy, float sheen, vec3 sheen_color, float sheen_roughness, float coat, vec3 coat_color, float coat_roughness, float coat_anisotropy, float coat_rotation, float coat_IOR, vec3 coat_normal, float coat_affect_color, float coat_affect_roughness, float thin_film_thickness, float thin_film_IOR, float emission, vec3 emission_color, vec3 opacity, bool thin_walled, vec3 normal, vec3 tangent, out surfaceshader out1)
+void NG_standard_surface_surfaceshader_100(float base, vec3 base_color, float diffuse_roughness, float metalness, float specular, vec3 specular_color, float specular_roughness, float specular_IOR, float specular_anisotropy, float specular_rotation, float transmission, vec3 transmission_color, float transmission_depth, vec3 transmission_scatter, float transmission_scatter_anisotropy, float transmission_dispersion, float transmission_extra_roughness, float subsurface, vec3 subsurface_color, vec3 subsurface_radius, float subsurface_scale, float subsurface_anisotropy, float sheen, vec3 sheen_color, float sheen_roughness, float coat, vec3 coat_color, float coat_roughness, float coat_anisotropy, float coat_rotation, float coat_IOR, vec3 coat_normal, float coat_affect_color, float coat_affect_roughness, float thin_film_thickness, float thin_film_IOR, float emission, vec3 emission_color, vec3 opacity, bool thin_walled, vec3 normal, vec3 tangent, out surfaceshader mtlxRasterOut)
 {
     vec2 coat_roughness_vector_out = vec2(0.0);
     mx_roughness_anisotropy(coat_roughness, coat_anisotropy, coat_roughness_vector_out);
@@ -1953,13 +2626,136 @@ void NG_standard_surface_surfaceshader_100(float base, vec3 base_color, float di
     NG_convert_float_color3(one_minus_coat_ior_to_F0_out, emission_color0_out);
     surfaceshader shader_constructor_out = surfaceshader(vec3(0.0),vec3(0.0));
     {
-        vec3 N = g_ptN;
-        vec3 V = g_ptV;
-        vec3 L = g_ptL;
-        vec3 P = g_ptP;
-        float occlusion = g_ptOcclusion;
+        vec3 N = normalize(normalWorld);
+        vec3 V = normalize(u_viewPosition - positionWorld);
+        vec3 P = positionWorld;
+        vec3 L = vec3(0.000000, 0.000000, 0.000000);
+        float occlusion = 1.0;
 
-        ClosureData closureData = makeClosureData(g_ptClosureType, L, V, N, P, occlusion);
+        float surfaceOpacity = opacity_luminance_float_out;
+
+        // Shadow occlusion
+
+        // Light loop
+        int numLights = numActiveLightSources();
+        lightshader lightShader;
+        for (int activeLightIndex = 0; activeLightIndex < numLights; ++activeLightIndex)
+        {
+            sampleLightSource(u_lightData[activeLightIndex], positionWorld, lightShader);
+            L = lightShader.direction;
+
+            // Calculate the BSDF response for this light source
+            ClosureData closureData = makeClosureData(CLOSURE_TYPE_REFLECTION, L, V, N, P, occlusion);
+            BSDF coat_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_dielectric_bsdf(closureData, coat, vec3(1.000000, 1.000000, 1.000000), coat_IOR, coat_roughness_vector_out, false, 0.000000, 1.500000, coat_normal, coat_tangent_out, 0, 0, coat_bsdf_out);
+            BSDF metal_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_conductor_bsdf(closureData, metalness_mix_fg_weight_out, artistic_ior_ior, artistic_ior_extinction, main_roughness_out, false, thin_film_thickness, thin_film_IOR, normal, main_tangent_out, 0, metal_bsdf_out);
+            BSDF specular_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_dielectric_bsdf(closureData, specular, specular_color, specular_IOR, main_roughness_out, false, thin_film_thickness, thin_film_IOR, normal, main_tangent_out, 0, 0, specular_bsdf_out);
+            BSDF transmission_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_dielectric_bsdf(closureData, transmission_mix_fg_weight_out, transmission_color, specular_IOR, transmission_roughness_out, false, 0.000000, 1.500000, normal, main_tangent_out, 0, 1, transmission_bsdf_out);
+            BSDF sheen_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_sheen_bsdf(closureData, sheen, sheen_color, sheen_roughness, normal, 0, sheen_bsdf_out);
+            BSDF translucent_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_translucent_bsdf(closureData, selected_subsurface_bsdf_fg_weight_out, coat_affected_subsurface_color_out, normal, translucent_bsdf_out);
+            BSDF subsurface_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_subsurface_bsdf(closureData, selected_subsurface_bsdf_bg_weight_out, coat_affected_subsurface_color_out, subsurface_radius_scaled_out, subsurface_anisotropy, normal, subsurface_bsdf_out);
+            BSDF selected_subsurface_bsdf_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, translucent_bsdf_out, subsurface_bsdf_out, selected_subsurface_bsdf_add_out);
+            BSDF subsurface_mix_fg_mul_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_float(closureData, selected_subsurface_bsdf_add_out, subsurface, subsurface_mix_fg_mul_out);
+            BSDF diffuse_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_oren_nayar_diffuse_bsdf(closureData, subsurface_mix_bg_weight_out, coat_affected_diffuse_color_out, diffuse_roughness, normal, false, diffuse_bsdf_out);
+            BSDF subsurface_mix_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, subsurface_mix_fg_mul_out, diffuse_bsdf_out, subsurface_mix_add_out);
+            BSDF sheen_layer_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_layer_bsdf(closureData, sheen_bsdf_out, subsurface_mix_add_out, sheen_layer_out);
+            BSDF transmission_mix_bg_mul_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_float(closureData, sheen_layer_out, transmission_mix_mix_inv_out, transmission_mix_bg_mul_out);
+            BSDF transmission_mix_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, transmission_bsdf_out, transmission_mix_bg_mul_out, transmission_mix_add_out);
+            BSDF specular_layer_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_layer_bsdf(closureData, specular_bsdf_out, transmission_mix_add_out, specular_layer_out);
+            BSDF metalness_mix_bg_mul_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_float(closureData, specular_layer_out, metalness_mix_mix_inv_out, metalness_mix_bg_mul_out);
+            BSDF metalness_mix_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, metal_bsdf_out, metalness_mix_bg_mul_out, metalness_mix_add_out);
+            BSDF thin_film_layer_attenuated_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_color3(closureData, metalness_mix_add_out, coat_attenuation_out, thin_film_layer_attenuated_out);
+            BSDF coat_layer_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_layer_bsdf(closureData, coat_bsdf_out, thin_film_layer_attenuated_out, coat_layer_out);
+
+            // Accumulate the light's contribution
+            shader_constructor_out.color += lightShader.intensity * coat_layer_out.response;
+
+            // Clear shadow factor for next light
+            occlusion = 1.0;
+        }
+
+        // Ambient occlusion
+        occlusion = 1.0;
+
+        // Add environment contribution
+        {
+            ClosureData closureData = makeClosureData(CLOSURE_TYPE_INDIRECT, L, V, N, P, occlusion);
+            BSDF coat_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_dielectric_bsdf(closureData, coat, vec3(1.000000, 1.000000, 1.000000), coat_IOR, coat_roughness_vector_out, false, 0.000000, 1.500000, coat_normal, coat_tangent_out, 0, 0, coat_bsdf_out);
+            BSDF metal_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_conductor_bsdf(closureData, metalness_mix_fg_weight_out, artistic_ior_ior, artistic_ior_extinction, main_roughness_out, false, thin_film_thickness, thin_film_IOR, normal, main_tangent_out, 0, metal_bsdf_out);
+            BSDF specular_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_dielectric_bsdf(closureData, specular, specular_color, specular_IOR, main_roughness_out, false, thin_film_thickness, thin_film_IOR, normal, main_tangent_out, 0, 0, specular_bsdf_out);
+            BSDF transmission_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_dielectric_bsdf(closureData, transmission_mix_fg_weight_out, transmission_color, specular_IOR, transmission_roughness_out, false, 0.000000, 1.500000, normal, main_tangent_out, 0, 1, transmission_bsdf_out);
+            BSDF sheen_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_sheen_bsdf(closureData, sheen, sheen_color, sheen_roughness, normal, 0, sheen_bsdf_out);
+            BSDF translucent_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_translucent_bsdf(closureData, selected_subsurface_bsdf_fg_weight_out, coat_affected_subsurface_color_out, normal, translucent_bsdf_out);
+            BSDF subsurface_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_subsurface_bsdf(closureData, selected_subsurface_bsdf_bg_weight_out, coat_affected_subsurface_color_out, subsurface_radius_scaled_out, subsurface_anisotropy, normal, subsurface_bsdf_out);
+            BSDF selected_subsurface_bsdf_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, translucent_bsdf_out, subsurface_bsdf_out, selected_subsurface_bsdf_add_out);
+            BSDF subsurface_mix_fg_mul_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_float(closureData, selected_subsurface_bsdf_add_out, subsurface, subsurface_mix_fg_mul_out);
+            BSDF diffuse_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_oren_nayar_diffuse_bsdf(closureData, subsurface_mix_bg_weight_out, coat_affected_diffuse_color_out, diffuse_roughness, normal, false, diffuse_bsdf_out);
+            BSDF subsurface_mix_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, subsurface_mix_fg_mul_out, diffuse_bsdf_out, subsurface_mix_add_out);
+            BSDF sheen_layer_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_layer_bsdf(closureData, sheen_bsdf_out, subsurface_mix_add_out, sheen_layer_out);
+            BSDF transmission_mix_bg_mul_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_float(closureData, sheen_layer_out, transmission_mix_mix_inv_out, transmission_mix_bg_mul_out);
+            BSDF transmission_mix_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, transmission_bsdf_out, transmission_mix_bg_mul_out, transmission_mix_add_out);
+            BSDF specular_layer_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_layer_bsdf(closureData, specular_bsdf_out, transmission_mix_add_out, specular_layer_out);
+            BSDF metalness_mix_bg_mul_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_float(closureData, specular_layer_out, metalness_mix_mix_inv_out, metalness_mix_bg_mul_out);
+            BSDF metalness_mix_add_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_add_bsdf(closureData, metal_bsdf_out, metalness_mix_bg_mul_out, metalness_mix_add_out);
+            BSDF thin_film_layer_attenuated_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_multiply_bsdf_color3(closureData, metalness_mix_add_out, coat_attenuation_out, thin_film_layer_attenuated_out);
+            BSDF coat_layer_out = BSDF(vec3(0.0),vec3(1.0));
+            mx_layer_bsdf(closureData, coat_bsdf_out, thin_film_layer_attenuated_out, coat_layer_out);
+
+            shader_constructor_out.color += occlusion * coat_layer_out.response;
+        }
+
+        // Add surface emission
+        {
+            ClosureData closureData = makeClosureData(CLOSURE_TYPE_EMISSION, L, V, N, P, occlusion);
+            EDF emission_edf_out = EDF(0.0);
+            mx_uniform_edf(closureData, emission_weight_out, emission_edf_out);
+            EDF coat_tinted_emission_edf_out = EDF(0.0);
+            mx_multiply_edf_color3(closureData, emission_edf_out, coat_color, coat_tinted_emission_edf_out);
+            EDF coat_emission_edf_out = EDF(0.0);
+            mx_generalized_schlick_edf(closureData, emission_color0_out, vec3(0.000000, 0.000000, 0.000000), 5.000000, coat_tinted_emission_edf_out, coat_emission_edf_out);
+            EDF blended_coat_emission_edf_out = EDF(0.0);
+            mx_mix_edf(closureData, coat_emission_edf_out, emission_edf_out, coat, blended_coat_emission_edf_out);
+            shader_constructor_out.color += blended_coat_emission_edf_out;
+        }
+
+        // Calculate the BSDF transmission for viewing direction
+        ClosureData closureData = makeClosureData(CLOSURE_TYPE_TRANSMISSION, L, V, N, P, occlusion);
         BSDF coat_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
         mx_dielectric_bsdf(closureData, coat, vec3(1.000000, 1.000000, 1.000000), coat_IOR, coat_roughness_vector_out, false, 0.000000, 1.500000, coat_normal, coat_tangent_out, 0, 0, coat_bsdf_out);
         BSDF metal_bsdf_out = BSDF(vec3(0.0),vec3(1.0));
@@ -2000,31 +2796,18 @@ void NG_standard_surface_surfaceshader_100(float base, vec3 base_color, float di
         mx_layer_bsdf(closureData, coat_bsdf_out, thin_film_layer_attenuated_out, coat_layer_out);
         shader_constructor_out.color += coat_layer_out.response;
 
-        if (g_ptEmitEmission != 0)
+        // Compute and apply surface opacity
         {
-            ClosureData closureData = makeClosureData(CLOSURE_TYPE_EMISSION, L, V, N, P, occlusion);
-            EDF emission_edf_out = EDF(0.0);
-            mx_uniform_edf(closureData, emission_weight_out, emission_edf_out);
-            EDF coat_tinted_emission_edf_out = EDF(0.0);
-            mx_multiply_edf_color3(closureData, emission_edf_out, coat_color, coat_tinted_emission_edf_out);
-            EDF coat_emission_edf_out = EDF(0.0);
-            mx_generalized_schlick_edf(closureData, emission_color0_out, vec3(0.000000, 0.000000, 0.000000), 5.000000, coat_tinted_emission_edf_out, coat_emission_edf_out);
-            EDF blended_coat_emission_edf_out = EDF(0.0);
-            mx_mix_edf(closureData, coat_emission_edf_out, emission_edf_out, coat, blended_coat_emission_edf_out);
-            shader_constructor_out.color += blended_coat_emission_edf_out;
+            shader_constructor_out.color *= surfaceOpacity;
+            shader_constructor_out.transparency = mix(vec3(1.000000, 1.000000, 1.000000), shader_constructor_out.transparency, surfaceOpacity);
         }
     }
 
-    out1 = shader_constructor_out;
+    mtlxRasterOut = shader_constructor_out;
 }
 
-
-surfaceshader mtlxHostEvalSurface()
+vec4 mtlxRasterMain()
 {
-    texcoord_0 = g_ptTexcoord;
-    normalWorld = g_ptN;
-    tangentWorld = g_ptTangent;
-    bitangentWorld = g_ptBitangent;
     vec2 geomprop_UV0_out1 = texcoord_0.xy;
     vec2 node_convert_1_out = vec2(0.0);
     NG_convert_float_vector2(3.000000, node_convert_1_out);
@@ -2080,175 +2863,109 @@ surfaceshader mtlxHostEvalSurface()
     vec3 node_clamp_0_out = clamp(node_mix_8_out, node_clamp_0_low_tmp, node_clamp_0_high_tmp);
     surfaceshader N_StandardSurface_out = surfaceshader(vec3(0.0),vec3(0.0));
     NG_standard_surface_surfaceshader_100(base, node_clamp_0_out, diffuse_roughness, metalness, specular, specular_color, node_multiply_1_out, specular_IOR, specular_anisotropy, specular_rotation, transmission, transmission_color, transmission_depth, transmission_scatter, transmission_scatter_anisotropy, transmission_dispersion, transmission_extra_roughness, subsurface, subsurface_color, subsurface_radius, subsurface_scale, subsurface_anisotropy, sheen, sheen_color, sheen_roughness, coat, coat_color, coat_roughness, coat_anisotropy, coat_rotation, coat_IOR, geomprop_Nworld_out1, coat_affect_color, coat_affect_roughness, thin_film_thickness, thin_film_IOR, emission, emission_color, opacity, thin_walled, node_normalmap_3_out, geomprop_Tworld_out1, N_StandardSurface_out);
-    return N_StandardSurface_out;
+    mtlxRasterOut = vec4(N_StandardSurface_out.color, 1.0);
+
+    return mtlxRasterOut;
 }
 
 
-// Generated pathtracer dispatch (feature 003). Model: standard_surface
-vec3 evaluateBsdf(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL, in int material, inout float pdf_woutputL)
-{
-    g_ptP = pW;
-    g_ptN = basis.nW;
-    g_ptTangent = basis.tW;
-    g_ptBitangent = basis.bW;
-    g_ptV = localToWorld(winputL, basis);
-    g_ptL = localToWorld(woutputL, basis);
-    g_ptOcclusion = 1.0;
-    g_ptEmitEmission = 0;
-    g_ptClosureType = CLOSURE_TYPE_REFLECTION;
-    pdf_woutputL = max(woutputL.z, 0.0) / PI;
-    return mtlxHostEvalSurface().color;
+void mtlx_openpbr_prepare(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed) {}
+vec3 mtlx_openpbr_raster_color(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL) {
+    texcoord_0 = basis.texCoord;
+    normalWorld = basis.nW;
+    tangentWorld = basis.tW;
+    bitangentWorld = basis.bW;
+    positionWorld = pW;
+
+    return mtlxRasterMain().rgb;
+}
+bool mtlx_openpbr_is_opaque(int materialSlot) {
+    return true;
+}
+bool mtlx_openpbr_is_thinwalled(int materialSlot) {
+    return false;
 }
 
-vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed, in int material, out vec3 woutputL, out float pdf_woutputL, out Volume internal_medium)
+/////////////////////////////////////////////////////////////////////////
+// MaterialX BVH raster route
+/////////////////////////////////////////////////////////////////////////
+
+void main()
 {
-    internal_medium.extinction = vec3(0.0);
-    internal_medium.albedo = vec3(0.0);
-    internal_medium.anisotropy = 0.0;
-    float m_metal = clamp(metalness, 0.0, 1.0);
-    float m_rough = clamp(0.2, 0.0, 1.0);
-    float m_aniso = clamp(specular_anisotropy, 0.0, 0.99);
-    vec3  m_base  = (vec3(0.8)) * (base);
-    vec3  m_specC = specular_color;
-    float m_specW = specular;
-    float m_ior   = max(specular_IOR, 1.0 + 1e-3);
-    float m_coatW = clamp(coat, 0.0, 1.0);
-    float m_coatRough = clamp(coat_roughness, 0.0, 1.0);
-    float m_coatAniso = clamp(coat_anisotropy, 0.0, 0.99);
-    float m_coatIor = max(coat_IOR, 1.0 + 1e-3);
+    vec2 pixel = gl_FragCoord.xy + vec2(0.5);
+    vec2 ndc = -1.0 + 2.0 * (pixel / resolution.xy);
 
-    vec3 V = winputL;
-    if (V.z < 0.0) V = -V;
-    float NdotV = max(V.z, 1e-4);
-    float alpha = clamp(m_rough * m_rough, 1e-4, 1.0);
-    float anisoAspect = max(1e-4, 1.0 - m_aniso);
-    vec2 sampleAlpha = clamp(vec2(alpha * sqrt(2.0 / (anisoAspect * anisoAspect + 1.0)), alpha * anisoAspect * sqrt(2.0 / (anisoAspect * anisoAspect + 1.0))), vec2(1e-4), vec2(1.0));
-    float coatAlpha = clamp(m_coatRough * m_coatRough, 1e-4, 1.0);
-    float coatAnisoAspect = max(1e-4, 1.0 - m_coatAniso);
-    vec2 coatSampleAlpha = clamp(vec2(coatAlpha * sqrt(2.0 / (coatAnisoAspect * coatAnisoAspect + 1.0)), coatAlpha * coatAnisoAspect * sqrt(2.0 / (coatAnisoAspect * coatAnisoAspect + 1.0))), vec2(1e-4), vec2(1.0));
-    float F0d = pow((m_ior - 1.0) / (m_ior + 1.0), 2.0);
-    vec3 F0 = mix(vec3(F0d) * max(m_specC, vec3(0.0)) * m_specW, m_base, m_metal);
-    float F0lum = max(F0.x, max(F0.y, F0.z));
-    float Fv = F0lum + (1.0 - F0lum) * pow(1.0 - NdotV, 5.0);
-    float coatFv = FresnelDielectricReflectance(NdotV, m_coatIor);
-    float pCoat = clamp(m_coatW * coatFv, 0.0, 0.75);
-    float xiLobe = rand(rndSeed);
-    float pTrans = 0.0;
-    float m_transW = clamp(transmission, 0.0, 1.0);
-    vec3  m_transC = transmission_color;
-    float m_transD = transmission_depth;
-    pTrans = clamp(m_transW * (1.0 - Fv), 0.0, 0.95);
-    if (xiLobe < pCoat)
-    {
-        vec3 Hc = ggx_ndf_sample(V, coatSampleAlpha.x, coatSampleAlpha.y, rndSeed);
-        woutputL = reflect(-V, Hc);
-        if (woutputL.z <= 1e-4)
-        {
-            pdf_woutputL = 0.0;
-            return vec3(0.0);
-        }
-        float pdfCoat = ggx_G1(V, coatSampleAlpha.x, coatSampleAlpha.y) * ggx_ndf_eval(normalize(V + woutputL), coatSampleAlpha.x, coatSampleAlpha.y) / (4.0 * NdotV);
-        float pdfBaseSpec = ggx_G1(V, sampleAlpha.x, sampleAlpha.y) * ggx_ndf_eval(normalize(V + woutputL), sampleAlpha.x, sampleAlpha.y) / (4.0 * NdotV);
-        float pdfBaseDiff = pdfHemisphereCosineWeighted(woutputL);
-        float diffLumCoat = (1.0 - m_metal) * dot(m_base, vec3(0.2126, 0.7152, 0.0722));
-        float pSpecCoat = clamp(Fv / (Fv + (1.0 - Fv) * diffLumCoat + 1e-3), 0.05, 0.95);
-        pdf_woutputL = max(pCoat * pdfCoat + (1.0 - pCoat) * (1.0 - pTrans) * (pSpecCoat * pdfBaseSpec + (1.0 - pSpecCoat) * pdfBaseDiff), PDF_EPSILON);
-        float ignorePdfCoat;
-        return evaluateBsdf(pW, basis, winputL, woutputL, material, ignorePdfCoat);
-    }
-    if (xiLobe < pCoat + (1.0 - pCoat) * pTrans)
-    {
-        bool externalTransmission = (winputL.z > 0.0);
-        float etaRatio = externalTransmission ? (1.0 / m_ior) : m_ior;
-        if (alpha <= 1e-3)
-        {
-            vec3 Hdelta = vec3(0.0, 0.0, externalTransmission ? 1.0 : -1.0);
-            float HdotWiDelta = dot(Hdelta, winputL);
-            float discrDelta = 1.0 - etaRatio * etaRatio * (1.0 - HdotWiDelta * HdotWiDelta);
-            if (discrDelta < 0.0)
-            {
-                woutputL = -winputL + 2.0 * dot(winputL, Hdelta) * Hdelta;
-                pdf_woutputL = max((1.0 - pCoat) * pTrans, PDF_EPSILON);
-                return vec3(m_transW * pdf_woutputL / max(abs(woutputL.z), DENOM_TOLERANCE));
-            }
-            vec3 beamIncidentDelta = etaRatio * winputL - Hdelta * sign(HdotWiDelta) * (etaRatio * abs(HdotWiDelta) - sqrt(discrDelta));
-            woutputL = -normalize(beamIncidentDelta);
-            if (winputL.z * woutputL.z >= -1e-4)
-            {
-                pdf_woutputL = 0.0;
-                return vec3(0.0);
-            }
-            if (m_transD > 0.0)
-            {
-                internal_medium.extinction = -log(max(vec3(1e-6), m_transC)) / m_transD;
-            }
-            float Tdelta = clamp(1.0 - FresnelDielectricReflectance(abs(HdotWiDelta), 1.0 / etaRatio), 0.0, 1.0);
-            vec3 tintDelta = (m_transD == 0.0) ? m_transC : vec3(1.0);
-            pdf_woutputL = max((1.0 - pCoat) * pTrans, PDF_EPSILON);
-            return m_transW * tintDelta * Tdelta * pdf_woutputL / max(abs(woutputL.z), DENOM_TOLERANCE);
-        }
-        vec3 Vsample = winputL;
-        if (Vsample.z < 0.0) Vsample.z *= -1.0;
-        vec3 Ht = ggx_ndf_sample(Vsample, sampleAlpha.x, sampleAlpha.y, rndSeed);
-        if (winputL.z < 0.0) Ht.z *= -1.0;
-        float HdotWi = dot(Ht, winputL);
-        float discr = 1.0 - etaRatio * etaRatio * (1.0 - HdotWi * HdotWi);
-        if (discr < 0.0)
-        {
-            pdf_woutputL = 0.0;
-            return vec3(0.0);
-        }
-        vec3 beamIncident = etaRatio * winputL - Ht * sign(HdotWi) * (etaRatio * abs(HdotWi) - sqrt(discr));
-        woutputL = -normalize(beamIncident);
-        if (winputL.z * woutputL.z >= -1e-4)
-        {
-            pdf_woutputL = 0.0;
-            return vec3(0.0);
-        }
-        if (m_transD > 0.0)
-        {
-            internal_medium.extinction = -log(max(vec3(1e-6), m_transC)) / m_transD;
-        }
-        vec3 Hr = normalize(-(V + m_ior * woutputL));
-        if (Hr.z < 0.0) Hr = -Hr;
-        float VoH = abs(dot(winputL, Ht));
-        float LoH = abs(dot(woutputL, Ht));
-        float denomT = LoH + etaRatio * VoH;
-        float jacT = (etaRatio * etaRatio) * VoH / max(denomT * denomT, 1e-8);
-        float DvT = ggx_G1(Vsample, sampleAlpha.x, sampleAlpha.y) * VoH * ggx_ndf_eval(abs(Ht.z) > 0.0 ? vec3(Ht.x, Ht.y, abs(Ht.z)) : Ht, sampleAlpha.x, sampleAlpha.y) / max(abs(winputL.z), 1e-4);
-        pdf_woutputL = max((1.0 - pCoat) * pTrans * DvT * jacT, PDF_EPSILON);
-        float D = ggx_ndf_eval(abs(Ht.z) > 0.0 ? vec3(Ht.x, Ht.y, abs(Ht.z)) : Ht, sampleAlpha.x, sampleAlpha.y);
-        float G2 = ggx_G2(winputL, woutputL, sampleAlpha.x, sampleAlpha.y);
-        float etaRefl = 1.0 / etaRatio;
-        float T = clamp(1.0 - FresnelDielectricReflectance(VoH, etaRefl), 0.0, 1.0);
-        vec3 tint = (m_transD == 0.0) ? m_transC : vec3(1.0);
-        return m_transW * tint * T * VoH * jacT * D * G2 / max(abs(woutputL.z) * abs(winputL.z), DENOM_TOLERANCE);
-    }
-    float diffLum = (1.0 - m_metal) * dot(m_base, vec3(0.2126, 0.7152, 0.0722));
-    float pSpec = clamp(Fv / (Fv + (1.0 - Fv) * diffLum + 1e-3), 0.05, 0.95);
+    vec3 pW;
+    vec3 dW;
+    ndcToCameraRay(ndc, invModelMatrix * cameraWorldMatrix, invProjectionMatrix, pW, dW);
+    dW = normalize(dW);
 
-    if (rand(rndSeed) < pSpec)
+    sunBasis = makeBasis(sunDir);
+
+    vec3 pW_hit;
+    vec3 NsW;
+    vec3 NgW;
+    vec3 TsW;
+    vec3 BsW;
+    vec3 baryCoord;
+    vec2 texCoord;
+    int materialSlot;
+    int material;
+    bool surface_hit = trace(pW, dW, HUGE_DIST, pW_hit, NsW, NgW, TsW, BsW, baryCoord, texCoord, materialSlot, material);
+
+    if (!surface_hit)
     {
-        vec3 H = ggx_ndf_sample(V, sampleAlpha.x, sampleAlpha.y, rndSeed);
-        woutputL = reflect(-V, H);
+        gl_FragColor.rgb = sunRadiance(dW) + skyRadiance(dW);
+        gl_FragColor.a = 1.0;
+        return;
     }
+
+    if (dot(NsW, dW) > 0.0) NsW *= -1.0;
+    if (dot(NgW, NsW) < 0.0) NgW *= -1.0;
+
+    Basis basis;
+    if (smooth_normals)
+        basis = makeBasis(NsW, TsW, BsW, baryCoord, texCoord, materialSlot);
     else
+        basis = makeBasis(NgW, TsW, BsW, baryCoord, texCoord, materialSlot);
+
+    vec3 winputW = -dW;
+    vec3 winputL = worldToLocal(winputW, basis);
+
+    if (debug_material_slots && material == MATERIAL_OPENPBR)
     {
-        float pdfTmp;
-        woutputL = sampleHemisphereCosineWeighted(rndSeed, pdfTmp);
+        vec3 slotColor = vec3(0.9, 0.1, 0.1);
+        if (basis.materialSlot == 1) slotColor = vec3(0.1, 0.8, 0.2);
+        else if (basis.materialSlot == 2) slotColor = vec3(0.1, 0.35, 1.0);
+        else if (basis.materialSlot == 3) slotColor = vec3(1.0, 0.75, 0.1);
+        gl_FragColor.rgb = slotColor;
+        gl_FragColor.a = 1.0;
+        return;
     }
 
-    if (woutputL.z <= 1e-4)
+    if (abs(winputL.z) < 1.0e-3)
     {
-        pdf_woutputL = 0.0;
-        return vec3(0.0);
+        gl_FragColor.rgb = vec3(0.0);
+        gl_FragColor.a = 1.0;
+        return;
     }
-    vec3 Hh = normalize(V + woutputL);
-    float pdfSpec = ggx_G1(V, sampleAlpha.x, sampleAlpha.y) * ggx_ndf_eval(Hh, sampleAlpha.x, sampleAlpha.y) / (4.0 * NdotV);
-    float pdfDiff = pdfHemisphereCosineWeighted(woutputL);
-    float pdfCoat = ggx_G1(V, coatSampleAlpha.x, coatSampleAlpha.y) * ggx_ndf_eval(Hh, coatSampleAlpha.x, coatSampleAlpha.y) / (4.0 * NdotV);
-    pdf_woutputL = max(pCoat * pdfCoat + (1.0 - pCoat) * (1.0 - pTrans) * (pSpec * pdfSpec + (1.0 - pSpec) * pdfDiff), PDF_EPSILON);
 
-    float ignorePdf;
-    return evaluateBsdf(pW, basis, winputL, woutputL, material, ignorePdf);
+    uint rndSeed = 0u;
+    if (material == MATERIAL_OPENPBR)
+        mtlx_openpbr_prepare(pW_hit, basis, winputL, rndSeed);
+
+    vec3 viewReflectW = reflect(dW, basis.nW);
+    vec3 viewReflectL = worldToLocal(viewReflectW, basis);
+    if (viewReflectL.z <= 0.0) viewReflectL = vec3(0.0, 0.0, 1.0);
+
+    vec3 L;
+    if (material == MATERIAL_OPENPBR)
+        L = mtlx_openpbr_raster_color(pW_hit, basis, winputL, viewReflectL);
+    else if (material == MATERIAL_GROUND)
+        L = ground_albedo(pW_hit);
+    else
+        L = neutral_color;
+
+    gl_FragColor.rgb = clamp(L, vec3(0.0), vec3(firefly_clamp));
+    gl_FragColor.a = 1.0;
 }
