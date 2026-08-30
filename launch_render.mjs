@@ -375,6 +375,11 @@ if (startServer) {
 const BASE_URL = `http://localhost:${port}/OpenPBR-viewer/`;
 if (mtlxPublicUrl) options.mtlx_url = mtlxPublicUrl;
 if (mtlxScenePublicUrl) options.mtlx_scene_url = mtlxScenePublicUrl;
+// Le viewer désactive le path tracer GPU par défaut ; un rendu non-Rasterizer
+// (pathtracer) doit l'activer explicitement via le paramètre d'URL ?gpu=true.
+if (options.renderer_mode && options.renderer_mode !== 'Rasterizer' && !('gpu' in options)) {
+    options.gpu = 'true';
+}
 const query = Object.entries(options)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join('&');
@@ -598,7 +603,8 @@ try {
 
     if (!headless) {
         console.log('Navigateur ouvert. Fermez la fenêtre pour terminer.');
-        await page.waitForEvent('close').catch(() => {});
+        // timeout: 0 -> pas de limite (le défaut Playwright de 30 s fermait Vite tout seul).
+        await page.waitForEvent('close', { timeout: 0 }).catch(() => {});
     }
 } finally {
     await browser.close().catch(() => {});

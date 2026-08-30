@@ -244,6 +244,19 @@ const legacyComparisonEnabled = (() => {
     return LEGACY_COMPARISON_ENABLED_BY_DEFAULT;
 })();
 
+// GPU path tracer is opt-in: by default the viewer stays on the lightweight
+// Rasterizer route and never compiles the heavy path-tracing shaders. Enable it
+// explicitly with ?gpu=true (or ?gpu=1).
+const GPU_PATHTRACER_ENABLED_BY_DEFAULT = false;
+const gpuPathtracerEnabled = (() => {
+    const search = new URLSearchParams(window.location.search);
+    if (search.has('gpu')) {
+        const v = search.get('gpu');
+        return v === 'true' || v === '1';
+    }
+    return GPU_PATHTRACER_ENABLED_BY_DEFAULT;
+})();
+
 var substitutionRuntimeState = {
     strictFailureEnabled: true,
     contractStatus: 'unknown',
@@ -670,11 +683,13 @@ async function validateGeneratedShadingContract(generatedGlsl, search)
 
 function getRendererModes()
 {
+    if (!gpuPathtracerEnabled) return ['Rasterizer'];
     return ['Rasterizer', 'Pathtracer', 'Pathtracer MTLX', 'Pathtracer legacy'];
 }
 
 function getRendererModeOptions()
 {
+    if (!gpuPathtracerEnabled) return { Rasterizer: 'Rasterizer' };
     return {
         Rasterizer: 'Rasterizer',
         Pathtracer: 'Pathtracer',
@@ -1280,6 +1295,55 @@ async function applyMtlxMaterialFromLibrary(value)
     }
 }
 
+// Regenerate the MTLX route dispatch GLSL for the current renderer route. The
+// dispatch is generated at startup only for the startup route (default
+// 'Rasterizer'), so switching into an MTLX route at runtime would otherwise find
+// mtlxRouteDispatchGlsl empty and assemble_mtlx_route_dispatch() would throw.
+async function ensureMtlxRouteDispatch()
+{
+    if (!uses_mtlx_fullscreen_shader()) return;
+
+    if (mtlxRouteScene && Array.isArray(mtlxRouteScene.materials)) {
+        mtlxRouteDispatches = [];
+        mtlxRouteTextureBindings = [];
+        mtlxRouteLights = [];
+        mtlxRouteMaterialSummaries = [];
+        for (const material of mtlxRouteScene.materials) {
+            const slot = Number(material.slot ?? 0);
+            const materialUrl = resolveViewerAssetUrl(material.mtlx_url || '');
+            const materialBaseUrl = new URL(materialUrl, window.location.origin).toString().replace(/[^/]*$/, '');
+            const resp = await fetch(materialUrl);
+            if (!resp.ok) throw new Error(`[mtlx-scene] material fetch failed: ${resp.status} ${materialUrl}`);
+            const materialText = await resp.text();
+            const result = is_mtlx_bvh_raster_route()
+                ? await generateMtlxRasterDispatch(materialText)
+                : await generateMtlxRouteDispatch(materialText);
+            mtlxRouteDispatches.push({ slot, glsl: result.glsl, mtlxParams: result.mtlxParams });
+            mtlxRouteMaterialSummaries[slot] = summarizeMtlxRouteMaterialParams(result.mtlxParams);
+            const prefix = slot === 0 ? '' : `mtlxMat${slot}_`;
+            mtlxRouteTextureBindings.push(...extractMtlxTextureBindings(materialText, materialBaseUrl).map(binding => ({
+                ...binding, sampler: prefix + binding.sampler, materialSlot: slot
+            })));
+            mtlxRouteLights.push(...extractMtlxLights(materialText));
+        }
+        mtlxRouteDispatchGlsl = composeMtlxRouteDispatches(mtlxRouteDispatches);
+        materialDefines.MAX_MTLX_LIGHTS = Math.max(1, mtlxRouteLights.length);
+        const p0 = mtlxRouteDispatches[0]?.mtlxParams || {};
+        const hasTransmission = p0.transmissionWeight > 0;
+        materialDefines.VOLUME_ENABLED       = hasTransmission && p0.transmissionDepth > 0 && !p0.geometry_thin_walled;
+        materialDefines.TRANSMISSION_ENABLED = hasTransmission && p0.dispersionScale > 0;
+        materialDefines.THIN_FILM_ENABLED    = p0.thinFilmWeight > 0;
+        substitutionRuntimeState.contractStatus = 'valid';
+        substitutionRuntimeState.contractValidationStep = 'mtlx-route-switch-regeneration';
+        substitutionRuntimeState.failureCause = '';
+        return;
+    }
+
+    const material = mtlxMaterialLibrary.find(item => item.url === params.mtlx_material || item.name === params.mtlx_material);
+    const materialId = material?.name || 'default-material';
+    await configureSingleMtlxMaterial(params.mtlx_material || '', materialId);
+}
+
 var mesh_loader;
 var renderer, camera, orbitControls, scene, gui, stats;
 var pathtracedQuad, pathtracedFinalQuad, pathtracingRenderTarget;
@@ -1363,6 +1427,10 @@ var scene_names = {
     if (!legacyComparisonEnabled && params.renderer_mode === 'Pathtracer legacy') {
         console.warn('[substitution] Pathtracer legacy mode disabled by default; forcing Pathtracer. Use ?legacy_comparison=true to enable manual comparison mode.');
         params.renderer_mode = 'Pathtracer';
+    }
+    if (!gpuPathtracerEnabled && is_pathtracing_route()) {
+        console.warn('[no-gpu] GPU path tracer disabled by default; forcing Rasterizer. Use ?gpu=true to enable the GPU path tracer.');
+        params.renderer_mode = 'Rasterizer';
     }
 
     // Generate GLSL from .mtlx before building the first shader.
@@ -2430,7 +2498,11 @@ function setup_gui()
 
     ///// Renderer folder /////////////////////////////////////
     const renderer_folder = gui.addFolder('Renderer');
-    renderer_folder.add(params, 'renderer_mode', getRendererModeOptions()).onChange(                    v => { load_scene(params.scene_name); });
+    renderer_folder.add(params, 'renderer_mode', getRendererModeOptions()).onChange(              async v => {
+        try { await ensureMtlxRouteDispatch(); }
+        catch (e) { showMtlxLibraryError(e); return; }
+        load_scene(params.scene_name);
+    });
     renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => { load_scene(v); });
     renderer_folder.add( params, 'smooth_normals' ).onChange(                                         v => { resetSamples(); });
     renderer_folder.add( params, 'wireframe' ).onChange(                                              v => { resetSamples(); });
