@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "scene_name": "multi-material-smoke",
+  "materials": [
+    {
+      "slot": 0,
+      "id": "marble",
+      "materialId": "multi-material-smoke_scene_0_marble",
+      "mtlx_url": "/mtlx-input/multi-material-smoke_scene_0_marble/marble_solid.mtlx",
+      "objects": [
+        "marble_object"
+      ]
+    },
+    {
+      "slot": 1,
+      "id": "brick",
+      "materialId": "multi-material-smoke_scene_1_brick",
+      "mtlx_url": "/mtlx-input/multi-material-smoke_scene_1_brick/brick_procedural.mtlx",
+      "objects": [
+        "brick_object"
+      ]
+    },
+    {
+      "slot": 2,
+      "id": "soapbubble",
+      "materialId": "multi-material-smoke_scene_2_soapbubble",
+      "mtlx_url": "/mtlx-input/multi-material-smoke_scene_2_soapbubble/open_pbr_soapbubble.mtlx",
+      "objects": [
+        "soapbubble_object"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "materialId": "default-material",
+  "wasmGenerationVersion": "unknown",
+  "requiredFunctions": [
+    "pt_InitMaterialSummary",
+    "EvalMtlxClosure",
+    "SampleMtlxClosure"
+  ],
+  "requiredSignatures": {},
+  "optionalFunctions": []
+}
