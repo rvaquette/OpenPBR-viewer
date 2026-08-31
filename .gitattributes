@@ -1,0 +1,5 @@
+# Deployed assets must be committed verbatim (no EOL conversion).
+# With core.autocrlf=true, git would strip CR bytes from binary files
+# such as the MaterialX .data package, corrupting it and causing
+# "XML parse error / Start-end tags mismatch" at runtime.
+* -text
