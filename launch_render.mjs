@@ -28,8 +28,9 @@
  *   --oidn=path             Chemin vers oidnDenoise.exe (défaut: oidnDenoise dans PATH)
  *
  * Options rendu :
- *   --mode=Rasterizer|Pathtracer|Pathtracer MTLX|Pathtracer legacy
- *                                (alias: --mode=mtlx pour la route MTLX générée,
+ *   --mode=Rasterizer legacy|Rasterizer MTLX|Pathtracer MTLX|Pathtracer legacy
+ *                                (alias: --mode=mtlx pour la route MTLX pathtracer,
+ *                                        --mode=raster-mtlx pour la route MTLX rasterizer,
  *                                        --mode=legacy pour le pathtracer manuel)
  *   --gpu=true|false              false = rendu logiciel SwiftShader (défaut: true)
  *   --scene=standard-shader-ball|glavenus|terrain|bearded-man
@@ -268,19 +269,12 @@ const screenshotPath = options.output ?? options.screenshot ?? defaultOutputPath
 const waitSamples   = parseInt(options['spp'] ?? options['wait-samples'] ?? '16', 10);
 // Normalize friendly mode aliases to canonical renderer_mode strings.
 const MODE_ALIASES = {
-    'mtlx':              'Pathtracer MTLX',
     'pathtracer-mtlx':   'Pathtracer MTLX',
-    'pathtracer_mtlx':   'Pathtracer MTLX',
-    'pathtracer mtlx':   'Pathtracer MTLX',
     'raster-mtlx':       'Rasterizer MTLX',
-    'rasterizer-mtlx':   'Rasterizer MTLX',
-    'rasterizer_mtlx':   'Rasterizer MTLX',
-    'rasterizer mtlx':   'Rasterizer MTLX',
-    'legacy':            'Pathtracer legacy',
+    'rasterizer-legacy': 'Rasterizer legacy',
     'pathtracer-legacy': 'Pathtracer legacy',
-    'pathtracer_legacy': 'Pathtracer legacy'
 };
-const rawMode       = options.mode ?? 'Pathtracer';
+const rawMode       = options.mode ?? 'Rasterizer legacy';
 const mode          = MODE_ALIASES[rawMode.toLowerCase()] ?? rawMode;
 const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').map(Number);
 
@@ -377,8 +371,13 @@ if (mtlxPublicUrl) options.mtlx_url = mtlxPublicUrl;
 if (mtlxScenePublicUrl) options.mtlx_scene_url = mtlxScenePublicUrl;
 // Le viewer désactive le path tracer GPU par défaut ; un rendu non-Rasterizer
 // (pathtracer) doit l'activer explicitement via le paramètre d'URL ?gpu=true.
-if (options.renderer_mode && options.renderer_mode !== 'Rasterizer' && !('gpu' in options)) {
+if (options.renderer_mode && options.renderer_mode !== 'Rasterizer legacy' && !('gpu' in options)) {
     options.gpu = 'true';
+}
+// Le viewer démarre en pause par défaut ; un rendu automatisé doit accumuler,
+// donc on force paused=false sauf si l'appelant l'a explicitement fixé.
+if (!('paused' in options)) {
+    options.paused = 'false';
 }
 const query = Object.entries(options)
     .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)

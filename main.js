@@ -18,7 +18,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import Stats from 'stats.js';
+//import Stats from 'stats.js';
 
 import {
 MeshBVH, MeshBVHUniformStruct, FloatVertexAttributeTexture,
@@ -123,8 +123,9 @@ var params =
     //////////////////////////////////////////////////////
 
     scene_name:                         'standard-shader-ball',
-    renderer_mode:                      'Rasterizer',
+    renderer_mode:                      'Rasterizer legacy',
     mtlx_material:                      '',
+    paused:                             true,   // pathtracer accumulation starts paused; toggle in GUI or ?paused=false
     smooth_normals:                     true,
     bounces:                            6,
     max_samples:                        512,
@@ -683,18 +684,16 @@ async function validateGeneratedShadingContract(generatedGlsl, search)
 
 function getRendererModes()
 {
-    if (!gpuPathtracerEnabled) return ['Rasterizer'];
-    return ['Rasterizer', 'Pathtracer', 'Pathtracer MTLX', 'Pathtracer legacy'];
+    return ['Rasterizer legacy', 'Rasterizer MTLX', 'Pathtracer MTLX', 'Pathtracer legacy'];
 }
 
 function getRendererModeOptions()
 {
-    if (!gpuPathtracerEnabled) return { Rasterizer: 'Rasterizer' };
     return {
-        Rasterizer: 'Rasterizer',
-        Pathtracer: 'Pathtracer',
-        mtlx: 'Pathtracer MTLX',
-        legacy: 'Pathtracer legacy'
+        'Rasterizer legacy': 'Rasterizer legacy',
+        'Rasterizer MTLX':   'Rasterizer MTLX',
+        'Pathtracer MTLX':   'Pathtracer MTLX',
+        'Pathtracer legacy': 'Pathtracer legacy'
     };
 }
 
@@ -704,8 +703,7 @@ function uses_mtlx_fullscreen_shader() { return is_mtlx_route() || is_mtlx_bvh_r
 
 function is_pathtracing_route()
 {
-    return params.renderer_mode === 'Pathtracer' ||
-           params.renderer_mode === 'Pathtracer MTLX' ||
+    return params.renderer_mode === 'Pathtracer MTLX' ||
            params.renderer_mode === 'Pathtracer legacy';
 }
 
@@ -1295,6 +1293,7 @@ async function applyMtlxMaterialFromLibrary(value)
         const materialId = material?.name || 'default-material';
         params.mtlx_material = url;
         params.renderer_mode = 'Pathtracer MTLX';
+        setPaused(true);
         await configureSingleMtlxMaterial(url, materialId);
         load_scene(params.scene_name);
     } catch (e) {
@@ -1352,7 +1351,7 @@ async function ensureMtlxRouteDispatch()
 }
 
 var mesh_loader;
-var renderer, camera, orbitControls, scene, gui, stats;
+var renderer, camera, orbitControls, scene, gui;//, stats;
 var pathtracedQuad, pathtracedFinalQuad, pathtracingRenderTarget;
 var pathtracedMaterial = null;
 var pathtracedMaterial_legacy = null;
@@ -1375,9 +1374,10 @@ var LOADED;
 var COMPILING;
 var FULLSCREEN_BVH_ROUTE;
 var samples = 0;
+var pauseController = null;
 
 function is_legacy_pt() { return params.renderer_mode === 'Pathtracer legacy'; }
-function uses_legacy_pathtracer_shader() { return params.renderer_mode === 'Pathtracer' || is_legacy_pt(); }
+function uses_legacy_pathtracer_shader() { return params.renderer_mode === 'Pathtracer legacy'; }
 function active_pathtrace_material() { return uses_legacy_pathtracer_shader() ? pathtracedMaterial_legacy : pathtracedMaterial; }
 function get_pathtrace_materials() { return [pathtracedMaterial, pathtracedMaterial_legacy].filter(Boolean); }
 
@@ -1430,14 +1430,6 @@ var scene_names = {
     }
     if (search.has('renderer_mode')) {
         console.log('[URL params] renderer_mode =', params.renderer_mode);
-    }
-    if (!legacyComparisonEnabled && params.renderer_mode === 'Pathtracer legacy') {
-        console.warn('[substitution] Pathtracer legacy mode disabled by default; forcing Pathtracer. Use ?legacy_comparison=true to enable manual comparison mode.');
-        params.renderer_mode = 'Pathtracer';
-    }
-    if (!gpuPathtracerEnabled && is_pathtracing_route()) {
-        console.warn('[no-gpu] GPU path tracer disabled by default; forcing Rasterizer. Use ?gpu=true to enable the GPU path tracer.');
-        params.renderer_mode = 'Rasterizer';
     }
 
     // Generate GLSL from .mtlx before building the first shader.
@@ -2074,10 +2066,10 @@ function init()
 
     FULLSCREEN_BVH_ROUTE = is_fullscreen_bvh_route();
 
-    // stats setup
-    stats = new Stats();
-    stats.dom.id = 'stats-panel';
-    document.body.appendChild( stats.dom );
+    //// stats setup
+    //stats = new Stats();
+    //stats.dom.id = 'stats-panel';
+    //document.body.appendChild( stats.dom );
 
     // Samples count text
     let samples_txt = document.getElementById('samples');
@@ -2411,6 +2403,9 @@ function setup_gui()
         gui.destroy()
     gui = new GUI({ width: 300 });
 
+    // Top-level pause toggle (freeze/resume the pathtracer accumulation).
+    pauseController = gui.add(params, 'paused').name('pause (arrêt / relance)');
+
     ///// Material folder /////////////////////////////////////
     const material_folder = gui.addFolder('Material');
     const mtlx_library_folder = material_folder.addFolder('MaterialX Library');
@@ -2506,11 +2501,12 @@ function setup_gui()
     ///// Renderer folder /////////////////////////////////////
     const renderer_folder = gui.addFolder('Renderer');
     renderer_folder.add(params, 'renderer_mode', getRendererModeOptions()).onChange(              async v => {
+        setPaused(true);
         try { await ensureMtlxRouteDispatch(); }
         catch (e) { showMtlxLibraryError(e); return; }
         load_scene(params.scene_name);
     });
-    renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => { load_scene(v); });
+    renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => { setPaused(true); load_scene(v); });
     renderer_folder.add( params, 'smooth_normals' ).onChange(                                         v => { resetSamples(); });
     renderer_folder.add( params, 'wireframe' ).onChange(                                              v => { resetSamples(); });
     renderer_folder.addColor(params, 'neutral_color').onChange(                                       v => { resetSamples(); });
@@ -2707,6 +2703,13 @@ function resetSamples()
     samples = 0;
 }
 
+// Force the render into (or out of) pause and keep the GUI toggle in sync.
+function setPaused(state)
+{
+    params.paused = state;
+    if (pauseController) pauseController.updateDisplay();
+}
+
 function fadeOutProgressBar(time_ms)
 {
     let progress_overlay = document.getElementById('progress_overlay');
@@ -2811,6 +2814,21 @@ function render()
 
     if (samples >= params.max_samples)
     {
+        requestAnimationFrame( render );
+        return;
+    }
+
+    // Paused: freeze the pathtracer accumulation, keep the last frame on screen.
+    // The rasterizer route is single-pass/cheap and keeps rendering normally.
+    if (params.paused && FULLSCREEN_BVH_ROUTE)
+    {
+        if (pathtracedFinalQuad) {
+            renderer.setRenderTarget( null );
+            renderer.autoClear = true;
+            pathtracedFinalQuad.render( renderer );
+        }
+        let samples_txt = document.getElementById('samples');
+        if (samples_txt) { samples_txt.style.visibility = 'visible'; samples_txt.innerText = `samples: ${ samples } (paused)`; }
         requestAnimationFrame( render );
         return;
     }
@@ -2924,7 +2942,7 @@ function render()
         }
     }
 
-    stats.update();
+    //stats.update();
 
     requestAnimationFrame( render );
 }
@@ -2954,8 +2972,8 @@ document.onkeydown = function (event)
         case 72: // H key: toggle hide/show gui
         {
             gui.show( gui._hidden );
-            if (document.body.contains(stats.dom)) document.body.removeChild( stats.dom );
-            else                                   document.body.appendChild( stats.dom );
+            //if (document.body.contains(stats.dom)) document.body.removeChild( stats.dom );
+            //else                                   document.body.appendChild( stats.dom );
             let info_txt = document.getElementById('info');
             if (info_txt.style.visibility == 'visible') info_txt.style.visibility = 'hidden';
             else                                        info_txt.style.visibility = 'visible';
@@ -3049,6 +3067,7 @@ document.onkeydown = function (event)
             const modes = getRendererModes();
             params.renderer_mode = modes[(modes.indexOf(params.renderer_mode) + 1) % modes.length];
             FULLSCREEN_BVH_ROUTE = is_fullscreen_bvh_route();
+            setPaused(true);
             load_scene(params.scene_name);
             break;
         }
