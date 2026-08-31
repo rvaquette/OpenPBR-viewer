@@ -926,7 +926,7 @@ const DEFAULT_MTLX = `<?xml version="1.0"?>
 // Load (and cache) the MaterialX WASM generator module.
 // Bump on every republish of the public/mtlx bundle so clients never mix a cached
 // .js offset table with a differently-versioned .data payload.
-const MTLX_RUNTIME_VERSION = '2026-08-23';
+const MTLX_RUNTIME_VERSION = '2026-08-31';
 let _mtlxModulePromise = null;
 async function loadMtlxModule() {
     if (_mtlxModulePromise) return _mtlxModulePromise;

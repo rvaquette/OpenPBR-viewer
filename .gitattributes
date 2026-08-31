@@ -1,1 +1,10 @@
 *.gltf filter=lfs diff=lfs merge=lfs -text
+
+# Binary package/assets: never apply EOL (autocrlf) conversion, which
+# would strip CR bytes and corrupt them (e.g. MaterialX .data package).
+*.data binary
+*.wasm binary
+*.hdr binary
+*.exr binary
+*.bin binary
+

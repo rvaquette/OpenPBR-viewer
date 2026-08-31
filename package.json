@@ -21,7 +21,7 @@
   "main": "main.js",
   "scripts": {
     "predeploy": "npm run build",
-    "deploy": "gh-pages -d dist",
+    "deploy": "gh-pages -d dist --dotfiles",
     "build": "vite build",
     "preview": "vite preview --port 8080",
     "test": "echo \"Error: no test specified\" && exit 1",
