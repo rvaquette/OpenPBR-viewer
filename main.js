@@ -712,6 +712,34 @@ function is_fullscreen_bvh_route()
     return is_pathtracing_route() || is_mtlx_bvh_raster_route();
 }
 
+// three-mesh-bvh's GLSL passes the sampler-containing `BVH` struct by value into
+// functions, which is illegal on many mobile GPUs (Adreno/Mali) even though desktop
+// ANGLE tolerates it (symptom on mobile: "'_ubvh' : undeclared identifier"). Rewrite
+// the shader so the four BVH sampler members are passed individually instead. The
+// `uniform BVH bvh_surface/props;` declarations are kept intact so MeshBVHUniformStruct
+// uploads still work. Applied on every platform so desktop compiles what mobile runs.
+function makeBvhPortable(glsl)
+{
+    if (!/\bBVH\s+bvh\s*,/.test(glsl)) return glsl;
+    // struct parameter -> four individual sampler parameters
+    glsl = glsl.replace(/\bBVH\s+bvh\s*,/g,
+        'usampler2D bvh_index, sampler2D bvh_position, sampler2D bvh_bvhBounds, usampler2D bvh_bvhContents,');
+    // member access `bvh.<member>` -> flat parameter name
+    glsl = glsl.replace(/\bbvh\.(index|position|bvhBounds|bvhContents)\b/g, 'bvh_$1');
+    // call argument passing the local `bvh` param -> the four flat params
+    glsl = glsl.replace(/([(,]\s*)bvh\b(\s*,)/g,
+        '$1bvh_index, bvh_position, bvh_bvhBounds, bvh_bvhContents$2');
+    // call argument passing a `bvh_surface`/`bvh_props` uniform -> its four members
+    glsl = glsl.replace(/([(,]\s*)(bvh_surface|bvh_props)\b(\s*,)/g,
+        '$1$2.index, $2.position, $2.bvhBounds, $2.bvhContents$3');
+    return glsl;
+}
+
+function bvhPortableHook(shader)
+{
+    shader.fragmentShader = makeBvhPortable(shader.fragmentShader);
+}
+
 function stripGlslMain(source)
 {
     const match = source.match(/\bvoid\s+main\s*\(\s*\)\s*\{/);
@@ -1832,6 +1860,7 @@ function create_materials()
         fragmentShader: mtlxFragmentShader
 
             } );
+            pathtracedMaterial.onBeforeCompile = bvhPortableHook;
         }
         else {
             pathtracedMaterial = null;
@@ -1964,6 +1993,7 @@ function create_materials()
                         + glsl_legacy_pathtracer
 
         } );
+        pathtracedMaterial_legacy.onBeforeCompile = bvhPortableHook;
     }
 }
 
@@ -2063,6 +2093,14 @@ function init()
                   `compile vertex=${vertOK} fragment=${fragOK} link=${linked}`;
             console.error('[GLSL shader error] ' + msg);
         }
+        // Dump the full GLSL source (line-numbered) so the failing program can be inspected.
+        const numberLines = (src) => (src || '').split('\n')
+            .map((line, i) => String(i + 1).padStart(4, ' ') + ' | ' + line).join('\n');
+        const vertSrc = gl.getShaderSource(vertexShader) || '';
+        const fragSrc = gl.getShaderSource(fragmentShader) || '';
+        window.__openpbrShaderSource = { vertex: vertSrc, fragment: fragSrc };
+        console.error('[GLSL vertex shader source]\n' + numberLines(vertSrc));
+        console.error('[GLSL fragment shader source]\n' + numberLines(fragSrc));
         window.__openpbrShaderError = msg;
         const overlay = document.getElementById('shader-error');
         document.getElementById('shader-error-content').textContent = msg;
