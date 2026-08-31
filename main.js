@@ -2652,6 +2652,7 @@ function trigger_recompile()
         clearTimeout(warnTimer);
         clearTimeout(abortTimer);
         console.log('shader compilation error: ' + err);
+        finishCompilationProgress();
     });
 }
 
@@ -2664,6 +2665,7 @@ function startCompilationProgress()
     let progress_overlay = document.getElementById('progress_overlay');
     progress_overlay.style.display = 'block';
     progress_overlay.style.opacity = 1;
+    _progressFading = false;
     progress_bar.set(0.0);
     progress_bar.setText('shaders compiling...');
     COMPILING = true;
@@ -2710,8 +2712,11 @@ function setPaused(state)
     if (pauseController) pauseController.updateDisplay();
 }
 
+let _progressFading = false;
 function fadeOutProgressBar(time_ms)
 {
+    if (_progressFading) return;   // avoid stacking intervals when called every frame
+    _progressFading = true;
     let progress_overlay = document.getElementById('progress_overlay');
     var fadeOutEffect = setInterval(function () {
     if (!progress_overlay.style.opacity) {
@@ -2723,8 +2728,29 @@ function fadeOutProgressBar(time_ms)
         progress_overlay.style.display = 'none';
         progress_overlay.style.opacity = 0;
         clearInterval(fadeOutEffect);
+        _progressFading = false;
     }
     }, time_ms);
+}
+
+// Drives the shader-compilation overlay: spin while COMPILING, fade out once done.
+// Called both in the normal render path and in the paused branch (which returns early).
+function updateProgressOverlay()
+{
+    if (COMPILING)
+    {
+        if (progress_bar.value() < 0.01)
+            progress_bar.animate(1.0);
+        else if (progress_bar.value() > 0.99)
+        {
+            progress_bar.set(0.0);
+            progress_bar.animate(1.0);
+        }
+        return;
+    }
+    const progress_overlay = document.getElementById('progress_overlay');
+    if (progress_overlay.style.display != 'none' && performance.now() - progress_finished_timer > 300.0)
+        fadeOutProgressBar(300);
 }
 
 function sync_shader_uniforms(uniforms)
@@ -2829,6 +2855,7 @@ function render()
         }
         let samples_txt = document.getElementById('samples');
         if (samples_txt) { samples_txt.style.visibility = 'visible'; samples_txt.innerText = `samples: ${ samples } (paused)`; }
+        updateProgressOverlay();
         requestAnimationFrame( render );
         return;
     }
@@ -2919,28 +2946,7 @@ function render()
     }
 
     // Progress spinner update
-    if (!COMPILING)
-    {
-        let progress_overlay = document.getElementById('progress_overlay');
-        let progress_bar_visible = progress_overlay.style.display != 'none';
-        if (progress_bar_visible)
-        {
-            let time_since_progress_finished_ms = performance.now() - progress_finished_timer;
-            if (time_since_progress_finished_ms > 300.0)
-                fadeOutProgressBar(300);
-        }
-    }
-    if (COMPILING)
-    {
-        console.log('COMPILING...');
-        if (progress_bar.value() < 0.01)
-            progress_bar.animate(1.0);
-        else if (progress_bar.value() > 0.99)
-        {
-            progress_bar.set(0.0);
-            progress_bar.animate(1.0);
-        }
-    }
+    updateProgressOverlay();
 
     //stats.update();
 
