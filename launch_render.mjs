@@ -546,6 +546,7 @@ if (isPathtracing && waitSamples > 0) {
     console.log(`${waitSamples} spp atteints.`);
 }
 try {
+  if (waitSamples > 0) {
     await sleep(500); // let GPU compositor finish before screenshot
     await hideUiForScreenshot();
     await page.screenshot({ path: screenshotPath, fullPage: false, timeout: 60_000 });
@@ -599,6 +600,9 @@ try {
             try { unlinkSync(pfmOut); } catch {}
         }
     }
+  } else {
+    console.log('spp=0 : aucune capture générée (mode aperçu).');
+  }
 
     if (!headless) {
         console.log('Navigateur ouvert. Fermez la fenêtre pour terminer.');

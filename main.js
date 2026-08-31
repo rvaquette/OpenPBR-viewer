@@ -2026,31 +2026,47 @@ function init()
     renderer.shadowMap.type = PCFSoftShadowMap; // default THREE.PCFShadowMap
     renderer.physicallyBasedShading = true;
 
-    // Intercept GLSL compilation errors with full driver log + line numbers
+    // Intercept GLSL compilation errors with full driver log + line numbers.
+    // Mobile GPUs often fail at link time (uniform/varying/instruction limits,
+    // highp precision), whose message lives in the PROGRAM info log, not the
+    // shader logs -- and some drivers omit the word "ERROR" or return empty logs.
     renderer.debug.onShaderError = function(gl, program, vertexShader, fragmentShader) {
-        const vertLog = gl.getShaderInfoLog(vertexShader);
-        const fragLog = gl.getShaderInfoLog(fragmentShader);
-        const hasError = /\bERROR\b/i.test(vertLog || '') || /\bERROR\b/i.test(fragLog || '');
-        if (!hasError) {
-            const warningLog = [vertLog, fragLog].filter(log => log && log.trim().length > 0).join('\n');
+        const vertLog = gl.getShaderInfoLog(vertexShader) || '';
+        const fragLog = gl.getShaderInfoLog(fragmentShader) || '';
+        const progLog = gl.getProgramInfoLog(program) || '';
+        const vertOK  = gl.getShaderParameter(vertexShader, gl.COMPILE_STATUS);
+        const fragOK  = gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS);
+        const linked  = gl.getProgramParameter(program, gl.LINK_STATUS);
+        const failed  = vertOK === false || fragOK === false || linked === false
+                     || /\bERROR\b/i.test(vertLog) || /\bERROR\b/i.test(fragLog) || /\bERROR\b/i.test(progLog);
+        if (!failed) {
+            const warningLog = [progLog, vertLog, fragLog].filter(log => log.trim().length > 0).join('\n');
             if (warningLog) console.warn('[GLSL shader warning]\n' + warningLog);
             return;
         }
         let msg = '';
-        if (vertLog && vertLog.trim().length > 0) {
+        if (progLog.trim().length > 0) {
+            console.error('[GLSL program/link error]\n' + progLog);
+            msg += '── PROGRAM / LINK ──\n' + progLog.trim() + '\n\n';
+        }
+        if (vertLog.trim().length > 0) {
             console.error('[GLSL vertex shader error]\n' + vertLog);
             msg += '── VERTEX SHADER ──\n' + vertLog.trim() + '\n\n';
         }
-        if (fragLog && fragLog.trim().length > 0) {
+        if (fragLog.trim().length > 0) {
             console.error('[GLSL fragment shader error]\n' + fragLog);
-            msg += '── FRAGMENT SHADER ──\n' + fragLog.trim();
+            msg += '── FRAGMENT SHADER ──\n' + fragLog.trim() + '\n\n';
         }
-        if (msg.length > 0) {
-            window.__openpbrShaderError = msg;
-            const overlay = document.getElementById('shader-error');
-            document.getElementById('shader-error-content').textContent = msg;
-            overlay.style.display = 'block';
+        if (msg.trim().length === 0) {
+            // Driver reported a failure but gave no log (common on mobile).
+            msg = 'Shader program failed to compile/link but the GPU driver returned no log.\n' +
+                  `compile vertex=${vertOK} fragment=${fragOK} link=${linked}`;
+            console.error('[GLSL shader error] ' + msg);
         }
+        window.__openpbrShaderError = msg;
+        const overlay = document.getElementById('shader-error');
+        document.getElementById('shader-error-content').textContent = msg;
+        overlay.style.display = 'block';
     };
 
     // Enable parallel shader compilation if available
@@ -2651,7 +2667,11 @@ function trigger_recompile()
     }).catch((err) => {
         clearTimeout(warnTimer);
         clearTimeout(abortTimer);
-        console.log('shader compilation error: ' + err);
+        console.error('shader compilation error: ' + err);
+        const overlay = document.getElementById('shader-error');
+        document.getElementById('shader-error-content').textContent =
+            'Shader compilation error:\n' + (err && err.stack ? err.stack : String(err));
+        overlay.style.display = 'block';
         finishCompilationProgress();
     });
 }
