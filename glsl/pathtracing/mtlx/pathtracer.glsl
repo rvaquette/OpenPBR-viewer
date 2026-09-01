@@ -430,9 +430,9 @@ float LiPDF(in vec3 shadowW, in Basis basis)
 
 vec3 evaluateEdf(in vec3 pW, in Basis basis, in vec3 winputL)
 {
-    // Emission is provided by the material-layer hook so the route stays
-    // model-agnostic (the generated dispatch folds per-model emission params).
-    return mtlx_openpbr_emission(basis.materialSlot);
+    // Spatial emission: evaluate the generated surface's emission at this hit point so
+    // graph-driven (masked) emission renders correctly, not just a per-material constant.
+    return mtlx_openpbr_emission_at(pW, basis);
 }
 
 vec3 evaluateThinFilmEnvironmentReflection(in Basis basis, in vec3 winputL)

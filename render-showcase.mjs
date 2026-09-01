@@ -20,6 +20,8 @@
  *   --spp=N            Samples path-tracing (défaut: 16)
  *   --size=WxH         Résolution (défaut: 256x256)
  *   --gpu=true|false   GPU réel ou SwiftShader (défaut: false = logiciel)
+ *   --firefly_clamp=N  Clamp anti-firefly (défaut viewer: 10). Augmenter pour des
+ *                      émissions/lumières intenses non écrêtées (ex: --firefly_clamp=20000)
  *   --port=5173        Port Vite (défaut: 5173)
  *   --start-server=auto|true|false  Démarrage serveur (défaut: auto = démarre si absent)
  *   --modes=a,b,...    Sous-ensemble de modes (folders) à rendre (défaut: les 4)
@@ -47,6 +49,7 @@ const outDir      = resolve(__dirname, opts.out ?? 'artifacts');
 const spp         = opts.spp  ?? '16';
 const size        = opts.size ?? '256x256';
 const gpu         = (opts.gpu ?? 'false') !== 'false' ? 'true' : 'false';
+const fireflyClamp = opts['firefly_clamp'] ?? null;
 const port        = opts.port ?? '5173';
 const startServer = (opts['start-server'] ?? 'auto').toLowerCase();
 const BASE_URL    = `http://localhost:${port}/OpenPBR-viewer/`;
@@ -138,6 +141,7 @@ function renderOne(mtlxFile, modeSpec, name) {
         `--port=${port}`,
         `--screenshot=${screenshot}`,
     ];
+    if (fireflyClamp !== null) args.push(`--firefly_clamp=${fireflyClamp}`);
     const r = spawnSync(process.execPath, args, { cwd: __dirname, encoding: 'utf8' });
     const ok = r.status === 0 && existsSync(screenshot);
     if (!ok) {

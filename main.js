@@ -978,10 +978,12 @@ function assemble_mtlx_route_dispatch()
     const evalRoutes = [];
     const sampleRoutes = [];
     const rasterRoutes = [];
+    const emissionRoutes = [];
     for (let slot = 1; slot < mtlxRouteDispatches.length; ++slot) {
         evalRoutes.push(`    if (basis.materialSlot == ${slot}) return mtlxMat${slot}_mtlxGenEvaluateBsdf(pW, basis, winputL, woutputL, MATERIAL_OPENPBR, pdf_woutputL);`);
         sampleRoutes.push(`    if (basis.materialSlot == ${slot}) return mtlxMat${slot}_mtlxGenSampleBsdf(pW, basis, winputL, rndSeed, MATERIAL_OPENPBR, woutputL, pdf_woutputL, internal_medium);`);
         rasterRoutes.push(`    if (basis.materialSlot == ${slot}) {\n${emitRasterGeneratedInputAssignments(`mtlxMat${slot}_`)}\n        return mtlxMat${slot}_mtlxRasterMain().rgb;\n    }`);
+        emissionRoutes.push(`    if (basis.materialSlot == ${slot}) return mtlxMat${slot}_mtlxHostEvalSurface().color;`);
     }
     const bridge = is_mtlx_bvh_raster_route() ? `
 void mtlx_openpbr_prepare(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed) {}
@@ -1016,6 +1018,22 @@ vec3 mtlx_openpbr_raster_color(in vec3 pW, in Basis basis, in vec3 winputL, in v
 ${rasterRoutes.join('\n')}
     return mtlxHostEvalSurface().color;
 }
+// Spatial emission: evaluate the generated surface with the EMISSION closure so only
+// the (possibly graph-driven) emission term contributes -> per-hit emissive bands.
+vec3 mtlx_openpbr_emission_at(in vec3 pW, in Basis basis) {
+    g_ptP = pW;
+    g_ptN = basis.nW;
+    g_ptTangent = basis.tW;
+    g_ptBitangent = basis.bW;
+    g_ptTexcoord = basis.texCoord;
+    g_ptV = basis.nW;
+    g_ptL = basis.nW;
+    g_ptOcclusion = 1.0;
+    g_ptEmitEmission = 1;
+    g_ptClosureType = CLOSURE_TYPE_EMISSION;
+${emissionRoutes.join('\n')}
+    return mtlxHostEvalSurface().color;
+}
 ${emitMtlxSlotBoolFunction('mtlx_openpbr_is_opaque', 'opaque', true)}
 ${emitMtlxSlotBoolFunction('mtlx_openpbr_is_thinwalled', 'thinWalled', false)}
 ${emitMtlxSlotVec3Function('mtlx_openpbr_emission', 'emission', [0, 0, 0])}
@@ -1032,6 +1050,7 @@ ${emitMtlxSlotScalarFunction('mtlx_openpbr_transmission_weight', 'transmissionWe
     const routeBody = is_mtlx_bvh_raster_route()
         ? glsl_rasterization_mtlx_rasterizer
         : glsl_mtlx_route_pathtracer;
+    if (typeof window !== 'undefined') window.__openpbrMtlxDispatch = mtlxRouteDispatchGlsl;
     return dispatchBody + bridge + routeBody;
 }
 
