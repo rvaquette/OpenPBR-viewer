@@ -15,21 +15,17 @@ uniform vec2 resolution;
 //////////////////////////////////////////////////////
 
 uniform BVH bvh_surface;
-uniform BVH bvh_props;
 
-uniform sampler2D normalAttribute_surface;
-uniform sampler2D normalAttribute_props;
-uniform sampler2D tangentAttribute_surface;
-uniform sampler2D tangentAttribute_props;
-uniform sampler2D uvAttribute_surface;
-uniform sampler2D uvAttribute_props;
-uniform sampler2D materialSlotAttribute_surface;
+// Packed per-vertex attributes, kept under MAX_TEXTURE_IMAGE_UNITS(16):
+//   geomN_surface = vec4(normal.xyz, uv.x)
+//   geomT_surface = vec4(tangent.xyz, uv.y)
+//   geomS_surface = vec4(materialSlot, 0, 0, 0)
+uniform sampler2D geomN_surface;
+uniform sampler2D geomT_surface;
+uniform sampler2D geomS_surface;
 uniform bool has_normals_surface;
 uniform bool has_tangents_surface;
 uniform bool has_uvs_surface;
-uniform bool has_normals_props;
-uniform bool has_tangents_props;
-uniform bool has_uvs_props;
 
 uniform sampler2D ground_texture;
 
@@ -127,33 +123,6 @@ vec3 normalToTangent(in vec3 N)
         T = vec3(0.0, N.z, -N.y);
     T = safe_normalize(T);
     return T;
-}
-
-void triangleUvFrame(in BVH bvh, in uvec3 faceIndices, in vec3 N, in sampler2D uvAttribute, out vec3 T, out vec3 B)
-{
-    vec3 p0 = texelFetch1D(bvh.position, faceIndices.x).xyz;
-    vec3 p1 = texelFetch1D(bvh.position, faceIndices.y).xyz;
-    vec3 p2 = texelFetch1D(bvh.position, faceIndices.z).xyz;
-    vec2 uv0 = texelFetch1D(uvAttribute, faceIndices.x).xy;
-    vec2 uv1 = texelFetch1D(uvAttribute, faceIndices.y).xy;
-    vec2 uv2 = texelFetch1D(uvAttribute, faceIndices.z).xy;
-
-    vec3 dp1 = p1 - p0;
-    vec3 dp2 = p2 - p0;
-    vec2 duv1 = uv1 - uv0;
-    vec2 duv2 = uv2 - uv0;
-    float det = duv1.x * duv2.y - duv1.y * duv2.x;
-    if (abs(det) < DENOM_TOLERANCE)
-    {
-        T = normalToTangent(N);
-        B = cross(N, T);
-        return;
-    }
-
-    T = (dp1 * duv2.y - dp2 * duv1.y) / det;
-    B = (dp2 * duv1.x - dp1 * duv2.x) / det;
-    T = safe_normalize(T - N * dot(N, T));
-    B = safe_normalize(B - N * dot(N, B) - T * dot(T, B));
 }
 
 Basis makeBasis(in vec3 nW)
@@ -265,17 +234,8 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
     float dist_surface = HUGE_DIST;
     bool hit_surface = bvhIntersectFirstHitWithinDistance(bvh_surface, rayOrigin, rayDir, maxDistance,
                                                           faceIndices_surface, faceNormal_surface, barycoord_surface, side_surface, dist_surface);
-    uvec4 faceIndices_props = uvec4(0u);
-    vec3 faceNormal_props = vec3(0.0, 0.0, 1.0);
-    vec3 barycoord_props = vec3(0.0);
-    float side_props = 1.0;
-    float dist_props = HUGE_DIST;
-    bool hit_props = bvhIntersectFirstHitWithinDistance(bvh_props, rayOrigin, rayDir, min(dist_surface, maxDistance),
-                                                        faceIndices_props, faceNormal_props, barycoord_props, side_props, dist_props);
-
     float dist_closest = HUGE_DIST;
     if (hit_surface) dist_closest = min(dist_closest, dist_surface);
-    if (hit_props)   dist_closest = min(dist_closest, dist_props);
 
     const float GROUND_Y = 0.01;
     float dist_ground = HUGE_DIST;
@@ -290,52 +250,22 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
         }
     }
 
-    bool hit = hit_surface || hit_props || hit_ground;
+    bool hit = hit_surface || hit_ground;
     if (!hit) return false;
 
-    if (hit_surface && (!hit_props || (dist_surface <= dist_props)) && (!hit_ground || (dist_surface <= dist_ground)))
+    if (hit_surface && (!hit_ground || (dist_surface <= dist_ground)))
     {
         P = rayOrigin + dist_surface*rayDir;
         material = MATERIAL_OPENPBR;
         baryCoord = barycoord_surface;
         Ng = safe_normalize(faceNormal_surface);
-        texCoord = has_uvs_surface ? textureSampleBarycoord(uvAttribute_surface, barycoord_surface, faceIndices_surface.xyz).xy : barycoord_surface.xy;
-        Ns = has_normals_surface ? textureSampleBarycoord(normalAttribute_surface, barycoord_surface, faceIndices_surface.xyz).xyz : Ng;
-        if (has_tangents_surface)
-        {
-            Ts = textureSampleBarycoord(tangentAttribute_surface, barycoord_surface, faceIndices_surface.xyz).xyz;
-            Bs = cross(safe_normalize(Ns), safe_normalize(Ts));
-        }
-        else if (has_uvs_surface)
-            triangleUvFrame(bvh_surface, faceIndices_surface.xyz, safe_normalize(Ns), uvAttribute_surface, Ts, Bs);
-        else
-        {
-            Ts = normalToTangent(Ns);
-            Bs = cross(safe_normalize(Ns), safe_normalize(Ts));
-        }
-        materialSlot = int(floor(textureSampleBarycoord(materialSlotAttribute_surface, barycoord_surface, faceIndices_surface.xyz).x + 0.5));
-    }
-    else if (hit_props && (!hit_ground || (dist_props <= dist_ground)))
-    {
-        P = rayOrigin + dist_props*rayDir;
-        material = MATERIAL_PROPS;
-        baryCoord = barycoord_props;
-        Ng = safe_normalize(faceNormal_props);
-        texCoord = has_uvs_props ? textureSampleBarycoord(uvAttribute_props, barycoord_props, faceIndices_props.xyz).xy : barycoord_props.xy;
-        Ns = has_normals_props ? textureSampleBarycoord(normalAttribute_props, barycoord_props, faceIndices_props.xyz).xyz : Ng;
-        if (has_tangents_props)
-        {
-            Ts = textureSampleBarycoord(tangentAttribute_props, barycoord_props, faceIndices_props.xyz).xyz;
-            Bs = cross(safe_normalize(Ns), safe_normalize(Ts));
-        }
-        else if (has_uvs_props)
-            triangleUvFrame(bvh_props, faceIndices_props.xyz, safe_normalize(Ns), uvAttribute_props, Ts, Bs);
-        else
-        {
-            Ts = normalToTangent(Ns);
-            Bs = cross(safe_normalize(Ns), safe_normalize(Ts));
-        }
-        materialSlot = 0;
+        vec4 gN = textureSampleBarycoord(geomN_surface, barycoord_surface, faceIndices_surface.xyz);
+        vec4 gT = textureSampleBarycoord(geomT_surface, barycoord_surface, faceIndices_surface.xyz);
+        Ns = has_normals_surface ? gN.xyz : Ng;
+        texCoord = has_uvs_surface ? vec2(gN.w, gT.w) : barycoord_surface.xy;
+        Ts = has_tangents_surface ? gT.xyz : normalToTangent(Ns);
+        Bs = cross(safe_normalize(Ns), safe_normalize(Ts));
+        materialSlot = int(floor(textureSampleBarycoord(geomS_surface, barycoord_surface, faceIndices_surface.xyz).x + 0.5));
     }
     else if (hit_ground)
     {

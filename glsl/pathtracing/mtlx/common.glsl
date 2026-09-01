@@ -15,21 +15,17 @@ uniform vec2 resolution;
 //////////////////////////////////////////////////////
 
 uniform BVH bvh_surface;
-uniform BVH bvh_props;
 
-uniform sampler2D normalAttribute_surface;
-uniform sampler2D normalAttribute_props;
-uniform sampler2D tangentAttribute_surface;
-uniform sampler2D tangentAttribute_props;
-uniform sampler2D uvAttribute_surface;
-uniform sampler2D uvAttribute_props;
-uniform sampler2D materialSlotAttribute_surface;
+// Packed per-vertex attributes, kept under MAX_TEXTURE_IMAGE_UNITS(16):
+//   geomN_surface = vec4(normal.xyz, uv.x)
+//   geomT_surface = vec4(tangent.xyz, uv.y)
+//   geomS_surface = vec4(materialSlot, 0, 0, 0)
+uniform sampler2D geomN_surface;
+uniform sampler2D geomT_surface;
+uniform sampler2D geomS_surface;
 uniform bool has_normals_surface;
 uniform bool has_tangents_surface;
 uniform bool has_uvs_surface;
-uniform bool has_normals_props;
-uniform bool has_tangents_props;
-uniform bool has_uvs_props;
 
 uniform sampler2D ground_texture;
 

@@ -129,6 +129,7 @@ var params =
     smooth_normals:                     true,
     bounces:                            6,
     max_samples:                        512,
+    render_size:                        '256x256',   // render-target size for fullscreen BVH routes; final quad upscales to screen
     max_volume_steps:                   64,
     firefly_clamp:                      10.0,
     wireframe:                          false,
@@ -740,6 +741,40 @@ function bvhPortableHook(shader)
     shader.fragmentShader = makeBvhPortable(shader.fragmentShader);
 }
 
+// Pack per-vertex attributes into 3 RGBA textures for the MTLX fullscreen route,
+// keeping the sampler count under MAX_TEXTURE_IMAGE_UNITS(16):
+//   geomN = (normal.xyz, uv.x), geomT = (tangent.xyz, uv.y), geomS = (materialSlot, 0,0,0)
+function packSurfaceGeom(geometry)
+{
+    const pos  = geometry.attributes.position;
+    const N    = pos.count;
+    const nrm  = geometry.attributes.normal || null;
+    const tan  = geometry.attributes.tangent || null;
+    const uv   = geometry.attributes.uv || null;
+    const slot = geometry.attributes.mtlxMaterialSlot || null;
+    const gN = new Float32Array(N * 4);
+    const gT = new Float32Array(N * 4);
+    const gS = new Float32Array(N * 4);
+    for (let i = 0; i < N; i++)
+    {
+        gN[4*i+0] = nrm ? nrm.getX(i) : 0.0;
+        gN[4*i+1] = nrm ? nrm.getY(i) : 0.0;
+        gN[4*i+2] = nrm ? nrm.getZ(i) : 1.0;
+        gN[4*i+3] = uv  ? uv.getX(i)  : 0.0;
+        gT[4*i+0] = tan ? tan.getX(i) : 1.0;
+        gT[4*i+1] = tan ? tan.getY(i) : 0.0;
+        gT[4*i+2] = tan ? tan.getZ(i) : 0.0;
+        gT[4*i+3] = uv  ? uv.getY(i)  : 0.0;
+        gS[4*i+0] = slot ? slot.getX(i) : 0.0;
+    }
+    return {
+        gN: new Float32BufferAttribute(gN, 4),
+        gT: new Float32BufferAttribute(gT, 4),
+        gS: new Float32BufferAttribute(gS, 4),
+        has_normals: !!nrm, has_tangents: !!tan, has_uvs: !!uv,
+    };
+}
+
 function stripGlslMain(source)
 {
     const match = source.match(/\bvoid\s+main\s*\(\s*\)\s*\{/);
@@ -1081,7 +1116,7 @@ async function generateMtlxRasterDispatch(mtlxText) {
         'mat4 mtlxEnvMatrix() {\n' +
         '    float a = 1.57079632679;\n' +
         '    float c = cos(a), s = sin(a);\n' +
-        '    return mat4(c,0.,-s,0., 0.,1.,0.,0., s,0.,c,0., 0.,0.,0.,1.);\n' +
+        '    return mat4(c,0.,-s,0., 0.,-1.,0.,0., s,0.,c,0., 0.,0.,0.,1.);\n' +
         '}\n' +
         '#define u_envMatrix    mtlxEnvMatrix()\n' +
         '#define u_envRadiance  envMapLatLong\n' +
@@ -1780,21 +1815,12 @@ function create_materials()
             UniformsUtils.clone(ShaderLib.phong.uniforms),
             {
                 bvh_surface:             { value: new MeshBVHUniformStruct() },
-                normalAttribute_surface: { value: new FloatVertexAttributeTexture() },
-                tangentAttribute_surface:{ value: new FloatVertexAttributeTexture() },
-                uvAttribute_surface:     { value: new FloatVertexAttributeTexture() },
-                materialSlotAttribute_surface: { value: new FloatVertexAttributeTexture() },
+                geomN_surface:           { value: new FloatVertexAttributeTexture() },
+                geomT_surface:           { value: new FloatVertexAttributeTexture() },
+                geomS_surface:           { value: new FloatVertexAttributeTexture() },
                 has_normals_surface:     { value: 1 },
                 has_tangents_surface:    { value: 0 },
                 has_uvs_surface:         { value: 0 },
-
-                bvh_props:             { value: new MeshBVHUniformStruct() },
-                normalAttribute_props: { value: new FloatVertexAttributeTexture() },
-                tangentAttribute_props:{ value: new FloatVertexAttributeTexture() },
-                uvAttribute_props:     { value: new FloatVertexAttributeTexture() },
-                has_normals_props:     { value: 1 },
-                has_tangents_props:    { value: 0 },
-                has_uvs_props:         { value: 0 },
 
                 ground_texture:        { value: null },
 
@@ -2193,6 +2219,7 @@ function load_geometry(scene_name)
             // Set up mesh properties for pathtracing
             BVH_PROPS  = mesh_loader.result.bvh;
                 for (const pm of get_pathtrace_materials()) {
+                if (!pm.uniforms.bvh_props) continue; // MTLX route dropped the props BVH
                 pm.uniforms.bvh_props.value.updateFrom( BVH_PROPS );
                 pm.uniforms.has_normals_props.value = false;
                 pm.uniforms.has_tangents_props.value = false;
@@ -2250,6 +2277,18 @@ function load_geometry(scene_name)
                 BVH_SURFACE  = mesh_loader.result.bvh;
                 for (const pm of get_pathtrace_materials()) {
                     pm.uniforms.bvh_surface.value.updateFrom( BVH_SURFACE );
+                    if (pm.uniforms.geomN_surface)
+                    {
+                        // MTLX route: packed per-vertex attributes (fewer samplers)
+                        const packed = packSurfaceGeom(MESH_SURFACE.geometry);
+                        pm.uniforms.geomN_surface.value.updateFrom( packed.gN );
+                        pm.uniforms.geomT_surface.value.updateFrom( packed.gT );
+                        pm.uniforms.geomS_surface.value.updateFrom( packed.gS );
+                        pm.uniforms.has_normals_surface.value  = packed.has_normals;
+                        pm.uniforms.has_tangents_surface.value = packed.has_tangents;
+                        pm.uniforms.has_uvs_surface.value      = packed.has_uvs;
+                        continue;
+                    }
                     pm.uniforms.has_normals_surface.value = false;
                     pm.uniforms.has_tangents_surface.value = false;
                     if (pm.uniforms.has_uvs_surface) pm.uniforms.has_uvs_surface.value = false;
@@ -2566,6 +2605,7 @@ function setup_gui()
     renderer_folder.addColor(params, 'neutral_color').onChange(                                       v => { resetSamples(); });
     renderer_folder.add( params, 'bounces', 0, 100, 1 ).onChange(                                     v => { resetSamples(); } );
     renderer_folder.add( params, 'max_samples' ).onChange(                                            v => { load_scene(params.scene_name); });
+    renderer_folder.add( params, 'render_size', ['256x256', '512x512', 'max'] ).name('render size').onChange( v => { resize(); });
     renderer_folder.add( params, 'max_volume_steps', 1, 100, 1 ).onChange(                            v => { resetSamples(); } );
     renderer_folder.add( params, 'firefly_clamp', 1, 1000 ).onChange(                                v => { resetSamples(); } );
     renderer_folder.close();
@@ -2740,6 +2780,17 @@ function finishCompilationProgress()
     window.__openpbrSamples = 0;
 }
 
+// Render-target size for fullscreen BVH routes, capped per params.render_size
+// while preserving the window aspect ratio (never upscaled beyond the window).
+function getRenderDimensions()
+{
+    const W = window.innerWidth, H = window.innerHeight;
+    if (params.render_size === 'max') return { w: W, h: H };
+    const cap = params.render_size === '512x512' ? 512 : 256;
+    const scale = Math.min(1.0, cap / Math.max(W, H));
+    return { w: Math.max(1, Math.round(W * scale)), h: Math.max(1, Math.round(H * scale)) };
+}
+
 function resize()
 {
     camera.aspect = window.innerWidth / window.innerHeight;
@@ -2749,7 +2800,10 @@ function resize()
     renderer.setSize( w, h );
     renderer.setPixelRatio(1.0);
     if (FULLSCREEN_BVH_ROUTE)
-        pathtracingRenderTarget.setSize(w, h);
+    {
+        const rd = getRenderDimensions();
+        pathtracingRenderTarget.setSize(rd.w, rd.h);
+    }
     resetSamples();
 }
 
@@ -2813,8 +2867,9 @@ function updateProgressOverlay()
 
 function sync_shader_uniforms(uniforms)
 {
-    const w = window.innerWidth;
-    const h = window.innerHeight;
+    // Resolution must match the render target the shader draws into.
+    const rd = FULLSCREEN_BVH_ROUTE ? getRenderDimensions()
+                                    : { w: window.innerWidth, h: window.innerHeight };
 
     // sync camera
     uniforms.cameraWorldMatrix.value.copy( camera.matrixWorld );
@@ -2822,7 +2877,7 @@ function sync_shader_uniforms(uniforms)
     uniforms.invModelMatrix.value.copy( scene.matrixWorld ).invert();
 
     // sync renderer params
-    let resolution = new Vector2(w, h);
+    let resolution = new Vector2(rd.w, rd.h);
     uniforms.resolution.value.copy(resolution);
     uniforms.accumulation_weight.value                    = 1.0 / (samples + 1.0); // implements Monte-Carlo accumulation
     uniforms.samples.value                                = samples;

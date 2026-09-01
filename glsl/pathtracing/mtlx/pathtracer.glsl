@@ -88,18 +88,9 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
     float        dist_surface = HUGE_DIST;
     bool hit_surface = bvhIntersectFirstHitWithinDistance( bvh_surface, rayOrigin, rayDir, maxDistance,
                                                            faceIndices_surface, faceNormal_surface, barycoord_surface, side_surface, dist_surface );
-    uvec4 faceIndices_props = uvec4(0u);
-    vec3   faceNormal_props = vec3(0.0, 0.0, 1.0);
-    vec3    barycoord_props = vec3(0.0);
-    float        side_props = 1.0;
-    float        dist_props = HUGE_DIST;
-    bool hit_props = bvhIntersectFirstHitWithinDistance( bvh_props, rayOrigin, rayDir, min(dist_surface, maxDistance),
-                                                         faceIndices_props, faceNormal_props, barycoord_props, side_props, dist_props );
-
     // Find closest BVH hit distance
     float dist_closest = HUGE_DIST;
     if (hit_surface) dist_closest = min(dist_closest, dist_surface);
-    if (hit_props)   dist_closest = min(dist_closest, dist_props);
 
     // Analytical ground plane intersection at y = 0.01 (matching rasterizer)
     const float GROUND_Y = 0.01;
@@ -115,60 +106,22 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
         }
     }
 
-    bool hit = hit_surface || hit_props || hit_ground;
+    bool hit = hit_surface || hit_ground;
     if (!hit)
         return false;
 
-    if (hit_surface && (!hit_props || (dist_surface <= dist_props)) && (!hit_ground || (dist_surface <= dist_ground)))
+    if (hit_surface && (!hit_ground || (dist_surface <= dist_ground)))
     {
         P = rayOrigin + dist_surface*rayDir;
         material = MATERIAL_OPENPBR;
         baryCoord = barycoord_surface;
         Ng = safe_normalize(faceNormal_surface);
-        if (has_normals_surface)
-        {
-            Ns = textureSampleBarycoord(normalAttribute_surface, barycoord_surface, faceIndices_surface.xyz).xyz;
-            const bool flip_normals = false;
-            if (flip_normals)
-                Ns *= -1.0;
-        }
-        else
-            Ns = Ng;
-        if (has_tangents_surface)
-            Ts = textureSampleBarycoord(tangentAttribute_surface, barycoord_surface, faceIndices_surface.xyz).xyz;
-        else
-            Ts = normalToTangent(Ns);
-        if (has_uvs_surface)
-            texCoord = textureSampleBarycoord(uvAttribute_surface, barycoord_surface, faceIndices_surface.xyz).xy;
-        else
-            texCoord = barycoord_surface.xy;
-        materialSlot = int(floor(textureSampleBarycoord(materialSlotAttribute_surface, barycoord_surface, faceIndices_surface.xyz).x + 0.5));
-    }
-
-    else if (hit_props && (!hit_ground || (dist_props <= dist_ground)))
-    {
-        P = rayOrigin + dist_props*rayDir;
-        material = MATERIAL_PROPS;
-        baryCoord = barycoord_props;
-        Ng = safe_normalize(faceNormal_props);
-        if (has_normals_props)
-        {
-            Ns = textureSampleBarycoord(normalAttribute_props, barycoord_props, faceIndices_props.xyz).xyz;
-            const bool flip_normals = false;
-            if (flip_normals)
-                Ns *= -1.0;
-        }
-        else
-            Ns = Ng;
-        if (has_tangents_props)
-            Ts = textureSampleBarycoord(tangentAttribute_props, barycoord_props, faceIndices_props.xyz).xyz;
-        else
-            Ts = normalToTangent(Ns);
-        if (has_uvs_props)
-            texCoord = textureSampleBarycoord(uvAttribute_props, barycoord_props, faceIndices_props.xyz).xy;
-        else
-            texCoord = barycoord_props.xy;
-        materialSlot = 0;
+        vec4 gN = textureSampleBarycoord(geomN_surface, barycoord_surface, faceIndices_surface.xyz);
+        vec4 gT = textureSampleBarycoord(geomT_surface, barycoord_surface, faceIndices_surface.xyz);
+        Ns = has_normals_surface ? gN.xyz : Ng;
+        texCoord = has_uvs_surface ? vec2(gN.w, gT.w) : barycoord_surface.xy;
+        Ts = has_tangents_surface ? gT.xyz : normalToTangent(Ns);
+        materialSlot = int(floor(textureSampleBarycoord(geomS_surface, barycoord_surface, faceIndices_surface.xyz).x + 0.5));
     }
 
     else if (hit_ground)
