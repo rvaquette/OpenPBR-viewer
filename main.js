@@ -2780,30 +2780,37 @@ function finishCompilationProgress()
     window.__openpbrSamples = 0;
 }
 
-// Render-target size for fullscreen BVH routes, capped per params.render_size
-// while preserving the window aspect ratio (never upscaled beyond the window).
+// Canvas size for the selected render_size. '256x256'/'512x512' are literal pixel
+// sizes (square, centered), 'max' fills the window at its native resolution.
 function getRenderDimensions()
 {
     const W = window.innerWidth, H = window.innerHeight;
     if (params.render_size === 'max') return { w: W, h: H };
-    const cap = params.render_size === '512x512' ? 512 : 256;
-    const scale = Math.min(1.0, cap / Math.max(W, H));
-    return { w: Math.max(1, Math.round(W * scale)), h: Math.max(1, Math.round(H * scale)) };
+    const side = params.render_size === '512x512' ? 512 : 256;
+    return { w: Math.min(side, W), h: Math.min(side, H) };
 }
 
 function resize()
 {
-    camera.aspect = window.innerWidth / window.innerHeight;
+    // render_size drives the actual canvas size. updateStyle=true makes three set the
+    // canvas CSS size in px to match the drawing buffer, so the render is shown 1:1 at
+    // its real size (a 256x256 / 512x512 square) instead of being stretched to the window.
+    const rd = getRenderDimensions();
+    camera.aspect = rd.w / rd.h;
     camera.updateProjectionMatrix();
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    renderer.setSize( w, h );
     renderer.setPixelRatio(1.0);
-    if (FULLSCREEN_BVH_ROUTE)
-    {
-        const rd = getRenderDimensions();
-        pathtracingRenderTarget.setSize(rd.w, rd.h);
+    renderer.setSize( rd.w, rd.h, true );          // true: set inline px style = buffer size
+    if (params.render_size === 'max') {
+        renderer.domElement.style.width  = '100%';
+        renderer.domElement.style.height = '100%';
     }
+    // Center the (possibly small) canvas in the window.
+    renderer.domElement.style.position = 'absolute';
+    renderer.domElement.style.top = '50%';
+    renderer.domElement.style.left = '50%';
+    renderer.domElement.style.transform = 'translate(-50%, -50%)';
+    if (FULLSCREEN_BVH_ROUTE)
+        pathtracingRenderTarget.setSize(rd.w, rd.h);
     resetSamples();
 }
 
@@ -2867,9 +2874,8 @@ function updateProgressOverlay()
 
 function sync_shader_uniforms(uniforms)
 {
-    // Resolution must match the render target the shader draws into.
-    const rd = FULLSCREEN_BVH_ROUTE ? getRenderDimensions()
-                                    : { w: window.innerWidth, h: window.innerHeight };
+    // Resolution must match the canvas / render target the shader draws into.
+    const rd = getRenderDimensions();
 
     // sync camera
     uniforms.cameraWorldMatrix.value.copy( camera.matrixWorld );
