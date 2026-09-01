@@ -77,7 +77,7 @@ void main()
     else if (material == MATERIAL_GROUND)
         L = ground_albedo(pW_hit);
     else
-        L = neutral_color;
+        L = neutral_color * skyRadiance(basis.nW);   // neutral props: environment-lit lambert
 
     gl_FragColor.rgb = clamp(L, vec3(0.0), vec3(firefly_clamp));
     gl_FragColor.a = 1.0;

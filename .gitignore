@@ -3,6 +3,7 @@ node_modules
 dist
 /legacy/
 /legacy-mtlx/
+/artifacts/
 .github/
 .specify/
 *.log

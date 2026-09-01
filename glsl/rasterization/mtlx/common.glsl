@@ -256,16 +256,17 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
     if (hit_surface && (!hit_ground || (dist_surface <= dist_ground)))
     {
         P = rayOrigin + dist_surface*rayDir;
-        material = MATERIAL_OPENPBR;
         baryCoord = barycoord_surface;
         Ng = safe_normalize(faceNormal_surface);
         vec4 gN = textureSampleBarycoord(geomN_surface, barycoord_surface, faceIndices_surface.xyz);
         vec4 gT = textureSampleBarycoord(geomT_surface, barycoord_surface, faceIndices_surface.xyz);
+        vec4 gS = textureSampleBarycoord(geomS_surface, barycoord_surface, faceIndices_surface.xyz);
         Ns = has_normals_surface ? gN.xyz : Ng;
         texCoord = has_uvs_surface ? vec2(gN.w, gT.w) : barycoord_surface.xy;
         Ts = has_tangents_surface ? gT.xyz : normalToTangent(Ns);
         Bs = cross(safe_normalize(Ns), safe_normalize(Ts));
-        materialSlot = int(floor(textureSampleBarycoord(geomS_surface, barycoord_surface, faceIndices_surface.xyz).x + 0.5));
+        materialSlot = int(floor(gS.x + 0.5));
+        material = (gS.y > 0.5) ? MATERIAL_PROPS : MATERIAL_OPENPBR;   // neutral objects merged into surface BVH
     }
     else if (hit_ground)
     {

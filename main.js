@@ -3,7 +3,7 @@
 import { Scene,
     Vector2, Vector3, Matrix4, Box3, Color,
     Mesh, MeshBasicMaterial, MeshStandardMaterial, MeshLambertMaterial, ShaderMaterial,
-    Float32BufferAttribute,
+    Float32BufferAttribute, BufferGeometry,
     PlaneGeometry,
     PerspectiveCamera, OrthographicCamera,
     DirectionalLight, AmbientLight, DoubleSide,
@@ -302,28 +302,37 @@ function resolveMtlxTextureUrl(fileValue, materialBaseUrl)
 
 function extractMtlxTextureBindings(mtlxText, materialBaseUrl)
 {
+    // Type-agnostic: bind every <input type="filename"> to its enclosing node,
+    // whatever that node is (image, tiledimage, hextiledimage, triplanar, custom...).
+    // Walk the document keeping an element stack so nested nodegraphs resolve the
+    // correct parent name; the generated sampler uniform is `${parentName}_file`.
     const bindings = [];
-    const nodeRe = /<(tiledimage|image)\b([^>]*)>([\s\S]*?)<\/\1>|<(tiledimage|image)\b([^>]*)\/>/g;
-    let nodeMatch;
-    while ((nodeMatch = nodeRe.exec(mtlxText)) !== null) {
-        const attrs = nodeMatch[2] || nodeMatch[5] || '';
-        const inner = nodeMatch[3] || '';
-        const nodeName = readXmlAttr(attrs, 'name');
-        const nodeType = readXmlAttr(attrs, 'type');
-        if (!nodeName) continue;
-        const inputRe = /<input\b([^>]*)\/>/g;
-        let inputMatch;
-        while ((inputMatch = inputRe.exec(inner)) !== null) {
-            const inputAttrs = inputMatch[1];
-            if (readXmlAttr(inputAttrs, 'name') !== 'file') continue;
-            const fileValue = readXmlAttr(inputAttrs, 'value');
-            if (!fileValue) continue;
-            bindings.push({
-                sampler: `${nodeName}_file`,
-                url: resolveMtlxTextureUrl(fileValue, materialBaseUrl),
-                source: fileValue,
-                type: nodeType
-            });
+    const stack = [];
+    const tagRe = /<(\/?)([A-Za-z_][\w.\-]*)\b([^>]*?)(\/?)>/g;
+    let m;
+    while ((m = tagRe.exec(mtlxText)) !== null) {
+        const closing = m[1] === '/';
+        const tag = m[2];
+        const attrs = m[3];
+        const selfClose = m[4] === '/';
+        if (closing) { stack.pop(); continue; }
+        if (tag === 'input') {
+            if (readXmlAttr(attrs, 'type') === 'filename') {
+                const fileValue = readXmlAttr(attrs, 'value');
+                const parent = stack[stack.length - 1];
+                if (fileValue && parent && parent.name) {
+                    bindings.push({
+                        sampler: `${parent.name}_file`,
+                        url: resolveMtlxTextureUrl(fileValue, materialBaseUrl),
+                        source: fileValue,
+                        type: parent.type
+                    });
+                }
+            }
+            continue; // <input> is always self-closing
+        }
+        if (!selfClose) {
+            stack.push({ tag, name: readXmlAttr(attrs, 'name'), type: readXmlAttr(attrs, 'type') });
         }
     }
     return bindings;
@@ -346,7 +355,10 @@ function createMtlxRouteTextureUniforms()
         texture.wrapS = RepeatWrapping;
         texture.wrapT = RepeatWrapping;
         texture.flipY = false;
-        if (isMtlxColorTexture(binding)) texture.colorSpace = SRGBColorSpace;
+        // Keep textures raw (no hardware sRGB decode): the MaterialX-generated GLSL
+        // applies its own colorspace conversion per the .mtlx (srgb_texture), so tagging
+        // SRGBColorSpace here would double-decode and darken color textures.
+        texture.colorSpace = LinearSRGBColorSpace;
         uniforms[binding.sampler] = { value: texture };
     }
     return uniforms;
@@ -743,7 +755,7 @@ function bvhPortableHook(shader)
 
 // Pack per-vertex attributes into 3 RGBA textures for the MTLX fullscreen route,
 // keeping the sampler count under MAX_TEXTURE_IMAGE_UNITS(16):
-//   geomN = (normal.xyz, uv.x), geomT = (tangent.xyz, uv.y), geomS = (materialSlot, 0,0,0)
+//   geomN = (normal.xyz, uv.x), geomT = (tangent.xyz, uv.y), geomS = (materialSlot, neutralFlag, 0, 0)
 function packSurfaceGeom(geometry)
 {
     const pos  = geometry.attributes.position;
@@ -752,6 +764,7 @@ function packSurfaceGeom(geometry)
     const tan  = geometry.attributes.tangent || null;
     const uv   = geometry.attributes.uv || null;
     const slot = geometry.attributes.mtlxMaterialSlot || null;
+    const neutral = geometry.attributes.neutralFlag || null;
     const gN = new Float32Array(N * 4);
     const gT = new Float32Array(N * 4);
     const gS = new Float32Array(N * 4);
@@ -766,6 +779,7 @@ function packSurfaceGeom(geometry)
         gT[4*i+2] = tan ? tan.getZ(i) : 0.0;
         gT[4*i+3] = uv  ? uv.getY(i)  : 0.0;
         gS[4*i+0] = slot ? slot.getX(i) : 0.0;
+        gS[4*i+1] = neutral ? neutral.getX(i) : 0.0;
     }
     return {
         gN: new Float32BufferAttribute(gN, 4),
@@ -773,6 +787,53 @@ function packSurfaceGeom(geometry)
         gS: new Float32BufferAttribute(gS, 4),
         has_normals: !!nrm, has_tangents: !!tan, has_uvs: !!uv,
     };
+}
+
+// Merge the neutral (props) and openpbr (surface) geometries into a single
+// non-indexed BufferGeometry for the MTLX route, tagging each vertex with a
+// neutralFlag (1 = neutral/default material, 0 = openpbr). This lets one BVH
+// cover both object sets so neutral objects render with the default material,
+// without adding any texture samplers (flag rides in geomS.y).
+function buildCombinedSurfaceGeometry(neutralGeom, surfaceGeom)
+{
+    const toNI = g => (g && g.index) ? g.toNonIndexed() : g;
+    const A = neutralGeom ? toNI(neutralGeom) : null;   // neutral -> flag 1
+    const B = toNI(surfaceGeom);                        // openpbr -> flag 0
+    const countA = A ? A.attributes.position.count : 0;
+    const countB = B.attributes.position.count;
+    const N = countA + countB;
+    const pos  = new Float32Array(N * 3);
+    const nrm  = new Float32Array(N * 3);
+    const tan  = new Float32Array(N * 4);
+    const uv   = new Float32Array(N * 2);
+    const slot = new Float32Array(N);
+    const neu  = new Float32Array(N);
+    let hasN = false, hasT = false, hasU = false;
+    const copy = (G, base, flag) => {
+        if (!G) return;
+        const p = G.attributes.position, n = G.attributes.normal, t = G.attributes.tangent,
+              u = G.attributes.uv, s = G.attributes.mtlxMaterialSlot;
+        if (n) hasN = true; if (t) hasT = true; if (u) hasU = true;
+        for (let i = 0; i < p.count; i++) {
+            const j = base + i;
+            pos[j*3+0] = p.getX(i); pos[j*3+1] = p.getY(i); pos[j*3+2] = p.getZ(i);
+            if (n) { nrm[j*3+0] = n.getX(i); nrm[j*3+1] = n.getY(i); nrm[j*3+2] = n.getZ(i); }
+            if (t) { tan[j*4+0] = t.getX(i); tan[j*4+1] = t.getY(i); tan[j*4+2] = t.getZ(i); tan[j*4+3] = t.itemSize > 3 ? t.getW(i) : 1.0; }
+            if (u) { uv[j*2+0] = u.getX(i); uv[j*2+1] = u.getY(i); }
+            slot[j] = s ? s.getX(i) : 0.0;
+            neu[j] = flag;
+        }
+    };
+    copy(A, 0, 1.0);
+    copy(B, countA, 0.0);
+    const g = new BufferGeometry();
+    g.setAttribute('position', new Float32BufferAttribute(pos, 3));
+    if (hasN) g.setAttribute('normal', new Float32BufferAttribute(nrm, 3));
+    if (hasT) g.setAttribute('tangent', new Float32BufferAttribute(tan, 4));
+    if (hasU) g.setAttribute('uv', new Float32BufferAttribute(uv, 2));
+    g.setAttribute('mtlxMaterialSlot', new Float32BufferAttribute(slot, 1));
+    g.setAttribute('neutralFlag', new Float32BufferAttribute(neu, 1));
+    return g;
 }
 
 function stripGlslMain(source)
@@ -1228,6 +1289,12 @@ async function generateMtlxRouteDispatch(mtlxText) {
         .replace(/\bsampleBsdf\b/g, 'mtlxGenSampleBsdf');
     glsl = glsl.replace(/(g_ptBitangent[ \t]*=[ \t]*basis\.bW;\r?\n)/g, '$1    g_ptTexcoord = basis.texCoord;\n');
 
+    // Floor folded roughness literals: a perfectly smooth metal/specular (roughness 0)
+    // makes the host GGX BSDF near-delta, which is unsampleable against IBL in the
+    // pathtracer -> black/high-variance. A small minimum keeps it clean and metallic.
+    glsl = glsl.replace(/\b(specular_roughness|coat_roughness)(\s*=\s*)([0-9]*\.?[0-9]+)(\s*;)/g,
+        (m, name, eq, num, semi) => `${name}${eq}${Math.max(parseFloat(num), 0.02).toFixed(6)}${semi}`);
+
     const extractParam = (name, fallback) => {
         const m = glsl.match(new RegExp(`\\b(?:float|bool)\\s+${name}\\s*=\\s*([^;]+);`));
         if (!m) return fallback;
@@ -1616,7 +1683,7 @@ var scene_names = {
 
 function create_materials()
 {
-    renderer.outputColorSpace = LinearSRGBColorSpace;
+    renderer.outputColorSpace = SRGBColorSpace;
 
     if (openpbrMaterial)
         openpbrMaterial.dispose();
@@ -1864,7 +1931,9 @@ function create_materials()
                 // Raw equirectangular env map for MaterialX IBL (sampler2D, not samplerCube).
                 envMapLatLong:                       { value: null },
                 envMapIrradiance:                    { value: null },
-                ...createMtlxRouteTextureUniforms(),
+                // MTLX material textures are assigned AFTER construction (see below):
+                // UniformsUtils.merge clones texture uniforms, which decouples them from
+                // the async TextureLoader (needsUpdate lands on the original, not the clone).
 
                 // Material params are now folded as globals by the MaterialX WASM generator.
                 // No per-parameter uniforms needed.
@@ -1886,6 +1955,9 @@ function create_materials()
         fragmentShader: mtlxFragmentShader
 
             } );
+            // Assign texture uniforms directly (not via UniformsUtils.merge, which would
+            // clone them and miss async TextureLoader updates -> black samplers).
+            Object.assign(pathtracedMaterial.uniforms, createMtlxRouteTextureUniforms());
             pathtracedMaterial.onBeforeCompile = bvhPortableHook;
         }
         else {
@@ -2076,7 +2148,7 @@ function init()
     renderer.setPixelRatio( window.devicePixelRatio );
     renderer.setClearColor( 0x09141a );
     renderer.setSize( window.innerWidth, window.innerHeight );
-    renderer.outputColorSpace = LinearSRGBColorSpace;
+    renderer.outputColorSpace = SRGBColorSpace;
     renderer.shadowMap.enabled = true;
     renderer.shadowMapSoft = true;
     renderer.shadowMap.type = PCFSoftShadowMap; // default THREE.PCFShadowMap
@@ -2275,20 +2347,28 @@ function load_geometry(scene_name)
             {
                 // Set up mesh properties for pathtracing
                 BVH_SURFACE  = mesh_loader.result.bvh;
+                let combinedSurface = null;   // MTLX route: neutral+openpbr merged BVH (cached)
                 for (const pm of get_pathtrace_materials()) {
-                    pm.uniforms.bvh_surface.value.updateFrom( BVH_SURFACE );
                     if (pm.uniforms.geomN_surface)
                     {
-                        // MTLX route: packed per-vertex attributes (fewer samplers)
-                        const packed = packSurfaceGeom(MESH_SURFACE.geometry);
-                        pm.uniforms.geomN_surface.value.updateFrom( packed.gN );
-                        pm.uniforms.geomT_surface.value.updateFrom( packed.gT );
-                        pm.uniforms.geomS_surface.value.updateFrom( packed.gS );
-                        pm.uniforms.has_normals_surface.value  = packed.has_normals;
-                        pm.uniforms.has_tangents_surface.value = packed.has_tangents;
-                        pm.uniforms.has_uvs_surface.value      = packed.has_uvs;
+                        // MTLX route: merge neutral (props) + openpbr into one BVH so neutral
+                        // objects render with the default material, staying under the 16-sampler
+                        // limit (neutral flag packed into geomS.y, no extra samplers).
+                        if (!combinedSurface)
+                        {
+                            const geom = buildCombinedSurfaceGeometry(MESH_PROPS ? MESH_PROPS.geometry : null, MESH_SURFACE.geometry);
+                            combinedSurface = { bvh: new MeshBVH(geom, { strategy: SAH, maxLeafTris: 1 }), packed: packSurfaceGeom(geom) };
+                        }
+                        pm.uniforms.bvh_surface.value.updateFrom( combinedSurface.bvh );
+                        pm.uniforms.geomN_surface.value.updateFrom( combinedSurface.packed.gN );
+                        pm.uniforms.geomT_surface.value.updateFrom( combinedSurface.packed.gT );
+                        pm.uniforms.geomS_surface.value.updateFrom( combinedSurface.packed.gS );
+                        pm.uniforms.has_normals_surface.value  = combinedSurface.packed.has_normals;
+                        pm.uniforms.has_tangents_surface.value = combinedSurface.packed.has_tangents;
+                        pm.uniforms.has_uvs_surface.value      = combinedSurface.packed.has_uvs;
                         continue;
                     }
+                    pm.uniforms.bvh_surface.value.updateFrom( BVH_SURFACE );
                     pm.uniforms.has_normals_surface.value = false;
                     pm.uniforms.has_tangents_surface.value = false;
                     if (pm.uniforms.has_uvs_surface) pm.uniforms.has_uvs_surface.value = false;
@@ -2804,11 +2884,11 @@ function resize()
         renderer.domElement.style.width  = '100%';
         renderer.domElement.style.height = '100%';
     }
-    // Center the (possibly small) canvas in the window.
+    // Anchor the (possibly small) canvas to the top-left of the window.
     renderer.domElement.style.position = 'absolute';
-    renderer.domElement.style.top = '50%';
-    renderer.domElement.style.left = '50%';
-    renderer.domElement.style.transform = 'translate(-50%, -50%)';
+    renderer.domElement.style.top = '0';
+    renderer.domElement.style.left = '0';
+    renderer.domElement.style.transform = 'none';
     if (FULLSCREEN_BVH_ROUTE)
         pathtracingRenderTarget.setSize(rd.w, rd.h);
     resetSamples();
