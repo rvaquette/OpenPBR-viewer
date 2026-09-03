@@ -22,9 +22,8 @@ void main()
     vec3 BsW;
     vec3 baryCoord;
     vec2 texCoord;
-    int materialSlot;
     int material;
-    bool surface_hit = trace(pW, dW, HUGE_DIST, pW_hit, NsW, NgW, TsW, BsW, baryCoord, texCoord, materialSlot, material);
+    bool surface_hit = trace(pW, dW, HUGE_DIST, pW_hit, NsW, NgW, TsW, BsW, baryCoord, texCoord, material);
 
     if (!surface_hit)
     {
@@ -38,23 +37,12 @@ void main()
 
     Basis basis;
     if (smooth_normals)
-        basis = makeBasis(NsW, TsW, BsW, baryCoord, texCoord, materialSlot);
+        basis = makeBasis(NsW, TsW, BsW, baryCoord, texCoord);
     else
-        basis = makeBasis(NgW, TsW, BsW, baryCoord, texCoord, materialSlot);
+        basis = makeBasis(NgW, TsW, BsW, baryCoord, texCoord);
 
     vec3 winputW = -dW;
     vec3 winputL = worldToLocal(winputW, basis);
-
-    if (debug_material_slots && material == MATERIAL_OPENPBR)
-    {
-        vec3 slotColor = vec3(0.9, 0.1, 0.1);
-        if (basis.materialSlot == 1) slotColor = vec3(0.1, 0.8, 0.2);
-        else if (basis.materialSlot == 2) slotColor = vec3(0.1, 0.35, 1.0);
-        else if (basis.materialSlot == 3) slotColor = vec3(1.0, 0.75, 0.1);
-        gl_FragColor.rgb = slotColor;
-        gl_FragColor.a = 1.0;
-        return;
-    }
 
     if (abs(winputL.z) < 1.0e-3)
     {

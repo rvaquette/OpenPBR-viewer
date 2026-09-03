@@ -1,8 +1,22 @@
 <!DOCTYPE html>
-<html>
+<html lang="fr">
 <head>
+    <meta charset="UTF-8">
     <title>OpenPBR viewer</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon" href="data:,">
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "/node_modules/three/build/three.module.js",
+            "three/addons/": "/node_modules/three/examples/jsm/",
+            "three/examples/jsm/": "/node_modules/three/examples/jsm/",
+            "three-mesh-bvh": "/node_modules/three-mesh-bvh/build/index.module.js",
+            "lil-gui": "/node_modules/lil-gui/dist/lil-gui.esm.js",
+            "progressbar.js": "/public/progressbar-esm.js"
+        }
+    }
+    </script>
     <style type="text/css">
         html, body {
             padding: 0;

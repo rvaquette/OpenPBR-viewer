@@ -19,7 +19,7 @@ uniform BVH bvh_surface;
 // Packed per-vertex attributes, kept under MAX_TEXTURE_IMAGE_UNITS(16):
 //   geomN_surface = vec4(normal.xyz, uv.x)
 //   geomT_surface = vec4(tangent.xyz, uv.y)
-//   geomS_surface = vec4(materialSlot, 0, 0, 0)
+//   geomS_surface = vec4(neutralFlag, 0, 0, 0)
 uniform sampler2D geomN_surface;
 uniform sampler2D geomT_surface;
 uniform sampler2D geomS_surface;
@@ -36,7 +36,6 @@ uniform sampler2D ground_texture;
 uniform float accumulation_weight;
 uniform float samples;
 uniform bool wireframe;
-uniform bool debug_material_slots;
 uniform vec3 neutral_color;
 uniform bool smooth_normals;
 uniform int bounces;
@@ -111,7 +110,6 @@ struct Basis
     vec3 bW;
     vec3 baryCoord;
     vec2 texCoord;
-    int materialSlot;
 };
 
 vec3 normalToTangent(in vec3 N)
@@ -133,11 +131,10 @@ Basis makeBasis(in vec3 nW)
     basis.bW = cross(basis.nW, basis.tW);
     basis.baryCoord = vec3(0.0);
     basis.texCoord = vec2(0.0);
-    basis.materialSlot = 0;
     return basis;
 }
 
-Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 baryCoord, in vec2 texCoord, in int materialSlot)
+Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 baryCoord, in vec2 texCoord)
 {
     Basis basis;
     basis.nW = safe_normalize(nW);
@@ -145,11 +142,10 @@ Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 baryCoord, in vec2 texCoord, in 
     basis.bW = cross(basis.nW, basis.tW);
     basis.baryCoord = baryCoord;
     basis.texCoord = texCoord;
-    basis.materialSlot = materialSlot;
     return basis;
 }
 
-Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 bW, in vec3 baryCoord, in vec2 texCoord, in int materialSlot)
+Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 bW, in vec3 baryCoord, in vec2 texCoord)
 {
     Basis basis;
     basis.nW = safe_normalize(nW);
@@ -157,7 +153,6 @@ Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 bW, in vec3 baryCoord, in vec2 t
     basis.bW = safe_normalize(bW);
     basis.baryCoord = baryCoord;
     basis.texCoord = texCoord;
-    basis.materialSlot = materialSlot;
     return basis;
 }
 
@@ -225,7 +220,7 @@ bool bvhIntersectFirstHitWithinDistance(
 }
 
 bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
-           out vec3 P, out vec3 Ns, out vec3 Ng, out vec3 Ts, out vec3 Bs, out vec3 baryCoord, out vec2 texCoord, out int materialSlot, out int material)
+           out vec3 P, out vec3 Ns, out vec3 Ng, out vec3 Ts, out vec3 Bs, out vec3 baryCoord, out vec2 texCoord, out int material)
 {
     uvec4 faceIndices_surface = uvec4(0u);
     vec3 faceNormal_surface = vec3(0.0, 0.0, 1.0);
@@ -265,8 +260,7 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
         texCoord = has_uvs_surface ? vec2(gN.w, gT.w) : barycoord_surface.xy;
         Ts = has_tangents_surface ? gT.xyz : normalToTangent(Ns);
         Bs = cross(safe_normalize(Ns), safe_normalize(Ts));
-        materialSlot = int(floor(gS.x + 0.5));
-        material = (gS.y > 0.5) ? MATERIAL_PROPS : MATERIAL_OPENPBR;   // neutral objects merged into surface BVH
+        material = (gS.x > 0.5) ? MATERIAL_PROPS : MATERIAL_OPENPBR;
     }
     else if (hit_ground)
     {
@@ -278,7 +272,6 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
         Ts = vec3(1.0, 0.0, 0.0);
         Bs = vec3(0.0, 0.0, -1.0);
         texCoord = vec2(P.x, -P.z) / 200.0 * 2.0 + 0.5;
-        materialSlot = 0;
     }
     return true;
 }

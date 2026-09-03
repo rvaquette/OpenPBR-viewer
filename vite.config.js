@@ -5,6 +5,7 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   base: "/OpenPBR-viewer/",
   build: {
+    target: "esnext",
     sourcemap: true,
     rollupOptions: {
       // The MaterialX WASM module is served as a static asset from public/mtlx/

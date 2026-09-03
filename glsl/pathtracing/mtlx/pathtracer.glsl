@@ -78,7 +78,7 @@ bool bvhIntersectFirstHitWithinDistance(
 }
 
 bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
-            out vec3 P, out vec3 Ns, out vec3 Ng, out vec3 Ts, out vec3 baryCoord, out vec2 texCoord, out int materialSlot, out int material)
+            out vec3 P, out vec3 Ns, out vec3 Ng, out vec3 Ts, out vec3 baryCoord, out vec2 texCoord, out int material)
 {
     // hit results
     uvec4 faceIndices_surface = uvec4(0u);
@@ -117,12 +117,10 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
         Ng = safe_normalize(faceNormal_surface);
         vec4 gN = textureSampleBarycoord(geomN_surface, barycoord_surface, faceIndices_surface.xyz);
         vec4 gT = textureSampleBarycoord(geomT_surface, barycoord_surface, faceIndices_surface.xyz);
-        vec4 gS = textureSampleBarycoord(geomS_surface, barycoord_surface, faceIndices_surface.xyz);
         Ns = has_normals_surface ? gN.xyz : Ng;
         texCoord = has_uvs_surface ? vec2(gN.w, gT.w) : barycoord_surface.xy;
         Ts = has_tangents_surface ? gT.xyz : normalToTangent(Ns);
-        materialSlot = int(floor(gS.x + 0.5));
-        material = (gS.y > 0.5) ? MATERIAL_PROPS : MATERIAL_OPENPBR;   // neutral objects merged into surface BVH
+        material = (textureSampleBarycoord(geomS_surface, barycoord_surface, faceIndices_surface.xyz).x > 0.5) ? MATERIAL_PROPS : MATERIAL_OPENPBR;
     }
 
     else if (hit_ground)
@@ -134,7 +132,6 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
         Ns = Ng;
         Ts = vec3(1.0, 0.0, 0.0);
         texCoord = vec2(P.x, -P.z) / 200.0 * 2.0 + 0.5;
-        materialSlot = 0;
     }
     return true;
 }
@@ -143,12 +140,11 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
 float TraceShadow(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance)
 {
     int material;
-    int materialSlot;
     vec3 pW, nsW, ngW, TsW, baryCoord;
     vec2 texCoord;
     bool hit = trace(rayOrigin, rayDir, maxDistance,
-                     pW, nsW, ngW, TsW, baryCoord, texCoord, materialSlot, material);
-    if (hit && material == MATERIAL_OPENPBR && !mtlx_openpbr_is_opaque(materialSlot) && mtlx_openpbr_is_thinwalled(materialSlot))
+                     pW, nsW, ngW, TsW, baryCoord, texCoord, material);
+    if (hit && material == MATERIAL_OPENPBR && !mtlx_openpbr_is_opaque() && mtlx_openpbr_is_thinwalled())
         return 1.0;
     return hit ? 0.0 : 1.0;
 }
@@ -437,18 +433,17 @@ vec3 evaluateEdf(in vec3 pW, in Basis basis, in vec3 winputL)
 
 vec3 evaluateThinFilmEnvironmentReflection(in Basis basis, in vec3 winputL)
 {
-    int materialSlot = basis.materialSlot;
-    if (!mtlx_openpbr_is_thinwalled(materialSlot)) return vec3(0.0);
-    if (mtlx_openpbr_transmission_weight(materialSlot) <= 0.0) return vec3(0.0);
-    if (mtlx_openpbr_thin_film_weight(materialSlot) <= 0.0) return vec3(0.0);
-    if (mtlx_openpbr_specular_roughness(materialSlot) > 0.02) return vec3(0.0);
+    if (!mtlx_openpbr_is_thinwalled()) return vec3(0.0);
+    if (mtlx_openpbr_transmission_weight() <= 0.0) return vec3(0.0);
+    if (mtlx_openpbr_thin_film_weight() <= 0.0) return vec3(0.0);
+    if (mtlx_openpbr_specular_roughness() > 0.02) return vec3(0.0);
 
     float cosI = clamp(abs(winputL.z), 1.0e-4, 1.0);
     FresnelData fd = mx_init_fresnel_dielectric(
-        max(mtlx_openpbr_specular_ior(materialSlot), 1.0 + 1.0e-3),
-        mtlx_openpbr_thin_film_thickness_nm(materialSlot),
-        mtlx_openpbr_thin_film_ior(materialSlot));
-    vec3 F = mtlx_openpbr_thin_film_weight(materialSlot) * mx_compute_fresnel(cosI, fd);
+        max(mtlx_openpbr_specular_ior(), 1.0 + 1.0e-3),
+        mtlx_openpbr_thin_film_thickness_nm(),
+        mtlx_openpbr_thin_film_ior());
+    vec3 F = mtlx_openpbr_thin_film_weight() * mx_compute_fresnel(cosI, fd);
 
     vec3 reflectedL = reflect(-winputL, vec3(0.0, 0.0, 1.0));
     if (reflectedL.z <= 0.0) return vec3(0.0);
@@ -493,7 +488,6 @@ bool trace_volumetric(in vec3 pW, in vec3 dW, inout uint rndSeed,
                       out vec3 TsW_hit,
                       out vec3 baryCoord_hit,
                       out vec2 texCoord_hit,
-                      out int materialSlot_hit,
                       out int material_hit)
 {
     // Do an "analogue random-walk" in the scattering medium, i.e. following the physical path of a photon.
@@ -508,7 +502,7 @@ bool trace_volumetric(in vec3 pW, in vec3 dW, inout uint rndSeed,
         int channel = sample_channel(volume.albedo, volume_throughput, rndSeed, channel_probs);
         float walk_step = -log(rand(rndSeed)) * mfp[channel];
         bool surface_hit = trace(pWalk, dWalk, walk_step,
-                                 pW_hit, NsW_hit, NgW_hit, TsW_hit, baryCoord_hit, texCoord_hit, materialSlot_hit, material_hit);
+                                 pW_hit, NsW_hit, NgW_hit, TsW_hit, baryCoord_hit, texCoord_hit, material_hit);
         if (surface_hit)
         {
             // ray hits surface within walk_step, walk terminates.
@@ -605,7 +599,6 @@ void main()
         vec3 TsW_next;
         vec3 baryCoord_next;
         vec2 texCoord_next;
-        int materialSlot_next;
         int material_next;
 
         // Check for presence of volume
@@ -622,7 +615,7 @@ void main()
         {
             // Raycast along current propagation direction dW, from current vertex pW
             surface_hit = trace(pW, dW, HUGE_DIST,
-                                pW_next, NsW_next, NgW_next, TsW_next, baryCoord_next, texCoord_next, materialSlot_next, material_next);
+                                pW_next, NsW_next, NgW_next, TsW_next, baryCoord_next, texCoord_next, material_next);
 
 #ifdef VOLUME_ENABLED
             // Apply Beer-Lambert law for absorption
@@ -641,7 +634,7 @@ void main()
             vec3 volume_throughput;
             vec3 dW_next;
             surface_hit = trace_volumetric(pW, dW, rndSeed, current_medium, volume_throughput,
-                                           pW_next, dW_next, NsW_next, NgW_next, TsW_next, baryCoord_next, texCoord_next, materialSlot_next, material_next);
+                                           pW_next, dW_next, NsW_next, NgW_next, TsW_next, baryCoord_next, texCoord_next, material_next);
             dW = dW_next;
             throughput *= volume_throughput;
             // Clamp throughput after volume RR amplification to prevent fireflies
@@ -679,7 +672,6 @@ void main()
         vec3 TsW       = TsW_next;
         vec3 baryCoord = baryCoord_next;
         vec2 texCoord  = texCoord_next;
-        int materialSlot = materialSlot_next;
         int material   = material_next;
 
         if (material == MATERIAL_OPENPBR)
@@ -705,12 +697,12 @@ void main()
             // If the surface is opaque, but the incident ray lies below the hemisphere of the normal,
             // which can occur due to shading normals, apply the "Flipping hack" to prevent artifacts
             // (see Schüßler, "Microfacet-based Normal Mapping for Robust Monte Carlo Path Tracing")
-            if (material == MATERIAL_OPENPBR && mtlx_openpbr_is_opaque(materialSlot) && dot(NsW, dW) > 0.0)
+            if (material == MATERIAL_OPENPBR && mtlx_openpbr_is_opaque() && dot(NsW, dW) > 0.0)
                 NsW = 2.0*NgW*dot(NgW, NsW) - NsW;
-            basis = makeBasis(NsW, TsW_next, baryCoord, texCoord, materialSlot);
+            basis = makeBasis(NsW, TsW_next, baryCoord, texCoord);
         }
         else
-            basis = makeBasis(NgW, TsW_next, baryCoord, texCoord, materialSlot);
+            basis = makeBasis(NgW, TsW_next, baryCoord, texCoord);
 
         vec3 winputW = -dW; // winputW, points *towards* the incident direction (parallel to photon)
         vec3 winputL = worldToLocal(winputW, basis);
@@ -719,22 +711,12 @@ void main()
         // Use abs() because inside a dielectric winputL.z is negative (z points interior→exterior by convention).
         if (abs(winputL.z) < 1.0e-3) break;
 
-        if (debug_material_slots && material == MATERIAL_OPENPBR)
-        {
-            vec3 slotColor = vec3(0.9, 0.1, 0.1);
-            if (basis.materialSlot == 1) slotColor = vec3(0.1, 0.8, 0.2);
-            else if (basis.materialSlot == 2) slotColor = vec3(0.1, 0.35, 1.0);
-            else if (basis.materialSlot == 3) slotColor = vec3(1.0, 0.75, 0.1);
-            L += throughput * slotColor;
-            break;
-        }
-
         // Prepare OpenPBR if that material is used at the current vertex
         bool thin_walled = false;
         if (material == MATERIAL_OPENPBR)
         {
             mtlx_openpbr_prepare(pW, basis, winputL, rndSeed);
-            thin_walled = mtlx_openpbr_is_thinwalled(materialSlot);
+            thin_walled = mtlx_openpbr_is_thinwalled();
         }
 
         if (material == MATERIAL_OPENPBR)

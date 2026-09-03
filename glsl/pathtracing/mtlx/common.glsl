@@ -19,7 +19,7 @@ uniform BVH bvh_surface;
 // Packed per-vertex attributes, kept under MAX_TEXTURE_IMAGE_UNITS(16):
 //   geomN_surface = vec4(normal.xyz, uv.x)
 //   geomT_surface = vec4(tangent.xyz, uv.y)
-//   geomS_surface = vec4(materialSlot, 0, 0, 0)
+//   geomS_surface = vec4(neutralFlag, 0, 0, 0)
 uniform sampler2D geomN_surface;
 uniform sampler2D geomT_surface;
 uniform sampler2D geomS_surface;
@@ -36,7 +36,6 @@ uniform sampler2D ground_texture;
 uniform float accumulation_weight;
 uniform float samples;
 uniform bool wireframe;
-uniform bool debug_material_slots;
 uniform vec3 neutral_color;
 uniform bool smooth_normals;
 uniform int bounces;
@@ -157,7 +156,6 @@ struct Basis
     vec3 bW; // aligned with the y-axis in local space
     vec3 baryCoord;
     vec2 texCoord;
-    int materialSlot;
 };
 
 vec3 normalToTangent(in vec3 N)
@@ -179,11 +177,10 @@ Basis makeBasis(in vec3 nW)
     basis.bW = cross(basis.nW, basis.tW);
     basis.baryCoord = vec3(0.0);
     basis.texCoord = vec2(0.0);
-    basis.materialSlot = 0;
     return basis;
 }
 
-Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 baryCoord, in vec2 texCoord, in int materialSlot)
+Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 baryCoord, in vec2 texCoord)
 {
     Basis basis;
     basis.nW = safe_normalize(nW);
@@ -191,7 +188,6 @@ Basis makeBasis(in vec3 nW, in vec3 tW, in vec3 baryCoord, in vec2 texCoord, in 
     basis.bW = cross(basis.nW, basis.tW);
     basis.baryCoord = baryCoord;
     basis.texCoord = texCoord;
-    basis.materialSlot = materialSlot;
     return basis;
 }
 
