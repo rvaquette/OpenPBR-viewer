@@ -301,13 +301,19 @@ if (startServer) {
     // Attendre que Vite soit prêt
     await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('Vite timeout')), 300000);
-        viteProcess.stdout.on('data', data => {
-            if (data.toString().includes('localhost:')) {
+        const onServerOutput = data => {
+            const text = data.toString();
+            if (/Local:|localhost:|127\.0\.0\.1:/i.test(text)) {
                 clearTimeout(timeout);
                 resolve();
             }
-        });
+        };
+        viteProcess.stdout.on('data', onServerOutput);
+        viteProcess.stderr.on('data', onServerOutput);
         viteProcess.on('error', reject);
+        viteProcess.on('exit', code => {
+            if (code !== 0) reject(new Error(`Vite exited before ready (code ${code})`));
+        });
     });
     console.log('Serveur Vite prêt.');
     await sleep(500); // Délai supplémentaire pour initialisation complète
