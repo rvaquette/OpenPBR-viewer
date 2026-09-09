@@ -56,9 +56,7 @@ const BASE_URL    = `http://localhost:${port}/OpenPBR-viewer/`;
 
 // mode -> dossier de sortie
 const ALL_MODES = [
-    { mode: 'Rasterizer legacy', folder: 'rasterizer-legacy' },
     { mode: 'Rasterizer MTLX',   folder: 'rasterizer-mtlx'   },
-    { mode: 'Pathtracer legacy', folder: 'pathtracer-legacy' },
     { mode: 'Pathtracer MTLX',   folder: 'pathtracer-mtlx'   },
 ];
 const modeFilter = opts.modes ? new Set(opts.modes.split(',').map(s => s.trim())) : null;

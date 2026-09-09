@@ -9,61 +9,13 @@
 /////////////////////////////////////////////////////////////////////////
 
 bool bvhIntersectFirstHitWithinDistance(
-	BVH bvh, vec3 rayOrigin, vec3 rayDirection, in float maxDistance,
+    sampler2D nodes, sampler2D indices, sampler2D positions, vec3 rayOrigin, vec3 rayDirection, in float maxDistance,
 	// output variables
 	inout uvec4 faceIndices, inout vec3 faceNormal, inout vec3 barycoord,
 	inout float side, inout float dist)
 {
-	// stack needs to be twice as long as the deepest tree we expect because
-	// we push both the left and right child onto the stack every traversal
-	int ptr = 0;
-	uint stack[ 32 ];
-	stack[ 0 ] = 0u;
-	float triangleDistance = 1e20;
-	bool found = false;
-	while (ptr > - 1 && ptr < 32)
-    {
-		uint currNodeIndex = stack[ ptr ];
-		ptr --;
-		// check if we intersect the current bounds
-		float boundsHitDistance = intersectsBVHNodeBounds( rayOrigin, rayDirection, bvh, currNodeIndex );
-		if (boundsHitDistance == INFINITY ||
-            boundsHitDistance > triangleDistance ||
-            boundsHitDistance > maxDistance)
-		        continue;
-		uvec2 boundsInfo = uTexelFetch1D( bvh.bvhContents, currNodeIndex ).xy;
-		bool isLeaf = bool( boundsInfo.x & 0xffff0000u );
-		if (isLeaf)
-        {
-			uint count = boundsInfo.x & 0x0000ffffu;
-			uint offset = boundsInfo.y;
-            float minDistance = min(maxDistance, triangleDistance);
-            bool found_intersection = intersectTriangles(bvh, rayOrigin, rayDirection, offset, count, minDistance,
-				                                         faceIndices, faceNormal, barycoord, side, dist);
-            if (found_intersection)
-            {
-                triangleDistance = minDistance;
-                found = true;
-            }
-		}
-        else
-        {
-			uint leftIndex = currNodeIndex + 1u;
-			uint splitAxis = boundsInfo.x & 0x0000ffffu;
-			uint rightIndex = boundsInfo.y;
-			bool leftToRight = rayDirection[ splitAxis ] >= 0.0;
-			uint c1 = leftToRight ? leftIndex : rightIndex;
-			uint c2 = leftToRight ? rightIndex : leftIndex;
-			// set c2 in the stack so we traverse it later. We need to keep track of a pointer in
-			// the stack while we traverse. The second pointer added is the one that will be
-			// traversed first
-			ptr ++;
-			stack[ ptr ] = c2;
-			ptr ++;
-			stack[ ptr ] = c1;
-		}
-	}
-	return found;
+    return nativeBvhIntersectFirstHitWithinDistance(nodes, indices, positions, rayOrigin, rayDirection, maxDistance,
+                                                    faceIndices, faceNormal, barycoord, side, dist);
 }
 
 bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
@@ -75,14 +27,14 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
     vec3    barycoord_surface = vec3(0.0);
     float        side_surface = 1.0;
     float        dist_surface = HUGE_DIST;
-    bool hit_surface = bvhIntersectFirstHitWithinDistance( bvh_surface, rayOrigin, rayDir, maxDistance,
+    bool hit_surface = bvhIntersectFirstHitWithinDistance( bvh_surface_nodes, bvh_surface_indices, bvh_surface_positions, rayOrigin, rayDir, maxDistance,
                                                            faceIndices_surface, faceNormal_surface, barycoord_surface, side_surface, dist_surface );
     uvec4 faceIndices_props = uvec4(0u);
     vec3   faceNormal_props = vec3(0.0, 0.0, 1.0);
     vec3    barycoord_props = vec3(0.0);
     float        side_props = 1.0;
     float        dist_props = HUGE_DIST;
-    bool hit_props = bvhIntersectFirstHitWithinDistance( bvh_props, rayOrigin, rayDir, min(dist_surface, maxDistance),
+    bool hit_props = bvhIntersectFirstHitWithinDistance( bvh_props_nodes, bvh_props_indices, bvh_props_positions, rayOrigin, rayDir, min(dist_surface, maxDistance),
                                                          faceIndices_props, faceNormal_props, barycoord_props, side_props, dist_props );
 
     // Find closest BVH hit distance

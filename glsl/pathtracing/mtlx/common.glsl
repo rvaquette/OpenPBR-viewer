@@ -14,7 +14,9 @@ uniform vec2 resolution;
 // geometry uniforms
 //////////////////////////////////////////////////////
 
-uniform BVH bvh_surface;
+uniform sampler2D bvh_surface_nodes;
+uniform sampler2D bvh_surface_indices;
+uniform sampler2D bvh_surface_positions;
 
 // Packed per-vertex attributes, kept under MAX_TEXTURE_IMAGE_UNITS(16):
 //   geomN_surface = vec4(normal.xyz, uv.x)
@@ -61,15 +63,20 @@ uniform vec3 sunColor;
 uniform vec3 sunDir;
 uniform bool mtlxDisableSun;
 
+// Dedicated raw-orientation env map + luminance CDF for NEE importance sampling
+// (feature 004, Phase 5 "envmap" alignment with GLSL-PathTracer-JS's skeleton.glsl).
+// Independent of three.js's envMap/envMapLatLong (flipY=true convention) above.
+uniform sampler2D envMapEquirect;
+uniform sampler2D envMapCDFTex;
+uniform vec2 envMapRes;
+uniform float envMapTotalSum;
+uniform bool has_env_cdf;
+
+// MaterialX document lights, texture-backed (feature 004, Phase 5 "lights"
+// alignment): (6 x N) RGBA float texture, one row per light, read via
+// GetMtlxLight(i) in pathtracer.glsl. No shader recompile on light-count change.
 uniform int mtlxLightCount;
-uniform int mtlxLightType[MAX_MTLX_LIGHTS];
-uniform vec3 mtlxLightPosition[MAX_MTLX_LIGHTS];
-uniform vec3 mtlxLightDirection[MAX_MTLX_LIGHTS];
-uniform vec3 mtlxLightColor[MAX_MTLX_LIGHTS];
-uniform float mtlxLightIntensity[MAX_MTLX_LIGHTS];
-uniform float mtlxLightDecayRate[MAX_MTLX_LIGHTS];
-uniform float mtlxLightInnerCone[MAX_MTLX_LIGHTS];
-uniform float mtlxLightOuterCone[MAX_MTLX_LIGHTS];
+uniform sampler2D mtlxLightsTex;
 
 //////////////////////////////////////////////////////
 // UVs

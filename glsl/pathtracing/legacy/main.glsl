@@ -14,8 +14,12 @@ uniform vec2 resolution;
 // geometry uniforms
 //////////////////////////////////////////////////////
 
-uniform BVH bvh_surface;
-uniform BVH bvh_props;
+uniform sampler2D bvh_surface_nodes;
+uniform sampler2D bvh_surface_indices;
+uniform sampler2D bvh_surface_positions;
+uniform sampler2D bvh_props_nodes;
+uniform sampler2D bvh_props_indices;
+uniform sampler2D bvh_props_positions;
 
 uniform sampler2D normalAttribute_surface;
 uniform sampler2D normalAttribute_props;

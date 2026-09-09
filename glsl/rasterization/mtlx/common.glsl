@@ -14,7 +14,9 @@ uniform vec2 resolution;
 // geometry uniforms
 //////////////////////////////////////////////////////
 
-uniform BVH bvh_surface;
+uniform sampler2D bvh_surface_nodes;
+uniform sampler2D bvh_surface_indices;
+uniform sampler2D bvh_surface_positions;
 
 // Packed per-vertex attributes, kept under MAX_TEXTURE_IMAGE_UNITS(16):
 //   geomN_surface = vec4(normal.xyz, uv.x)
@@ -169,54 +171,12 @@ vec3 localToWorld(in vec3 vLocal, in Basis basis)
 }
 
 bool bvhIntersectFirstHitWithinDistance(
-    BVH bvh, vec3 rayOrigin, vec3 rayDirection, in float maxDistance,
+    sampler2D nodes, sampler2D indices, sampler2D positions, vec3 rayOrigin, vec3 rayDirection, in float maxDistance,
     inout uvec4 faceIndices, inout vec3 faceNormal, inout vec3 barycoord,
     inout float side, inout float dist)
 {
-    int ptr = 0;
-    uint stack[32];
-    stack[0] = 0u;
-    float triangleDistance = HUGE_DIST;
-    bool found = false;
-    while (ptr > -1 && ptr < 32)
-    {
-        uint currNodeIndex = stack[ptr];
-        ptr--;
-        float boundsHitDistance = intersectsBVHNodeBounds(rayOrigin, rayDirection, bvh, currNodeIndex);
-        if (boundsHitDistance == INFINITY ||
-            boundsHitDistance > triangleDistance ||
-            boundsHitDistance > maxDistance)
-            continue;
-        uvec2 boundsInfo = uTexelFetch1D(bvh.bvhContents, currNodeIndex).xy;
-        bool isLeaf = bool(boundsInfo.x & 0xffff0000u);
-        if (isLeaf)
-        {
-            uint count = boundsInfo.x & 0x0000ffffu;
-            uint offset = boundsInfo.y;
-            float minDistance = min(maxDistance, triangleDistance);
-            bool foundIntersection = intersectTriangles(bvh, rayOrigin, rayDirection, offset, count, minDistance,
-                                                        faceIndices, faceNormal, barycoord, side, dist);
-            if (foundIntersection)
-            {
-                triangleDistance = minDistance;
-                found = true;
-            }
-        }
-        else
-        {
-            uint leftIndex = currNodeIndex + 1u;
-            uint splitAxis = boundsInfo.x & 0x0000ffffu;
-            uint rightIndex = boundsInfo.y;
-            bool leftToRight = rayDirection[splitAxis] >= 0.0;
-            uint c1 = leftToRight ? leftIndex : rightIndex;
-            uint c2 = leftToRight ? rightIndex : leftIndex;
-            ptr++;
-            stack[ptr] = c2;
-            ptr++;
-            stack[ptr] = c1;
-        }
-    }
-    return found;
+    return nativeBvhIntersectFirstHitWithinDistance(nodes, indices, positions, rayOrigin, rayDirection, maxDistance,
+                                                    faceIndices, faceNormal, barycoord, side, dist);
 }
 
 bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
@@ -227,7 +187,7 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
     vec3 barycoord_surface = vec3(0.0);
     float side_surface = 1.0;
     float dist_surface = HUGE_DIST;
-    bool hit_surface = bvhIntersectFirstHitWithinDistance(bvh_surface, rayOrigin, rayDir, maxDistance,
+    bool hit_surface = bvhIntersectFirstHitWithinDistance(bvh_surface_nodes, bvh_surface_indices, bvh_surface_positions, rayOrigin, rayDir, maxDistance,
                                                           faceIndices_surface, faceNormal_surface, barycoord_surface, side_surface, dist_surface);
     float dist_closest = HUGE_DIST;
     if (hit_surface) dist_closest = min(dist_closest, dist_surface);

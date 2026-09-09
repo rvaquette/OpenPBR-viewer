@@ -8,22 +8,36 @@ import { Scene,
     PerspectiveCamera, OrthographicCamera,
     DirectionalLight, AmbientLight, DoubleSide,
     LinearSRGBColorSpace, SRGBColorSpace, RGBAFormat, FloatType,
-    WebGLRenderer, WebGLRenderTarget, TextureLoader, RepeatWrapping,
+    WebGLRenderer, WebGLRenderTarget, RepeatWrapping,
     EquirectangularReflectionMapping, CubeReflectionMapping,
     UniformsUtils, UniformsLib, ShaderLib,
+    DataTexture, NearestFilter,
     PCFSoftShadowMap, CameraHelper  } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { loadEnvironmentTexture } from './src/envmap/envLoader.js';
+import { loadNativeTexture } from './src/textures/textureLoader.js';
 //import Stats from 'stats.js';
 
 import {
-MeshBVH, MeshBVHUniformStruct, FloatVertexAttributeTexture,
-shaderStructs, shaderIntersectFunction, SAH, StaticGeometryGenerator
-} from 'three-mesh-bvh';
+    Bvh,
+} from './src/bvh/bvh.js';
+import {
+    NativeAttributeTexture,
+    assignNativeBvhUniforms,
+    createNativeBvhUniforms,
+} from './src/bvh/gpu.js';
+import { nativeBvhShader } from './src/bvh/shader.js';
+import {
+    MeshBVH,
+    MeshBVHUniformStruct,
+    shaderStructs,
+    shaderIntersectFunction,
+    SAH,
+} from './src/bvh-compat.js';
 
 import { GUI } from './node_modules/lil-gui/dist/lil-gui.esm.js';
 
@@ -34,6 +48,7 @@ import {
     glsl_mtlx_route_pathtracer,
     glsl_rasterization_mtlx_common,
     glsl_rasterization_mtlx_rasterizer,
+    glsl_rasterization_legacy_bvh_rasterizer,
     glsl_legacy_main,
     glsl_legacy_fuzz_brdf,
     glsl_legacy_coat_brdf,
@@ -52,6 +67,72 @@ import {
 } from './glsl-sources.js';
 
 import { Circle } from 'progressbar.js'
+
+// BVH engine selection (params.bvh_engine): 'threejs' (default, three-mesh-bvh)
+// or 'native' (src/bvh/* port). Both expose the same GLSL call site
+// (bvhIntersectFirstHitWithinDistance), so only construction/uniforms/prelude differ.
+function is_threejs_bvh_engine() { return params.bvh_engine !== 'native'; }
+
+function buildBvh(geometry)
+{
+    return is_threejs_bvh_engine()
+        ? new MeshBVH(geometry, { strategy: SAH })
+        : new Bvh(geometry);
+}
+
+function createBvhUniforms(prefix)
+{
+    return is_threejs_bvh_engine()
+        ? { [prefix]: { value: new MeshBVHUniformStruct() } }
+        : createNativeBvhUniforms(prefix);
+}
+
+function assignBvhUniforms(uniforms, prefix, bvh)
+{
+    if (is_threejs_bvh_engine()) uniforms[prefix].value.updateFrom(bvh);
+    else assignNativeBvhUniforms(uniforms, prefix, bvh);
+}
+
+// Rewrites the native-engine GLSL (3 sampler2D uniforms + nativeBvhShader) into
+// the three-mesh-bvh GLSL interface (one `BVH` struct uniform + shaderStructs/
+// shaderIntersectFunction), or returns the source unchanged for the native engine.
+// The bvhIntersectFirstHitWithinDistance(...) call site is identical text in every
+// *.glsl file, so a single pair of regexes covers all of them.
+function adaptBvhGlslForEngine(source)
+{
+    if (!is_threejs_bvh_engine()) return source;
+    return source
+        .replace(
+            /uniform sampler2D (\w+)_nodes;\s*\nuniform sampler2D \1_indices;\s*\nuniform sampler2D \1_positions;/g,
+            'uniform BVH $1;'
+        )
+        .replace(
+            /bool bvhIntersectFirstHitWithinDistance\(\s*sampler2D nodes, sampler2D indices, sampler2D positions, vec3 rayOrigin, vec3 rayDirection, in float maxDistance,[\s\S]*?\n\}/,
+            `bool bvhIntersectFirstHitWithinDistance(
+    BVH bvh, vec3 rayOrigin, vec3 rayDirection, in float maxDistance,
+    inout uvec4 faceIndices, inout vec3 faceNormal, inout vec3 barycoord,
+    inout float side, inout float dist)
+{
+    uvec4 localFaceIndices; vec3 localFaceNormal; vec3 localBarycoord; float localSide; float localDist;
+    bool found = bvhIntersectFirstHit(bvh, rayOrigin, rayDirection, localFaceIndices, localFaceNormal, localBarycoord, localSide, localDist);
+    if (found && localDist < maxDistance) {
+        faceIndices = localFaceIndices; faceNormal = localFaceNormal; barycoord = localBarycoord; side = localSide; dist = localDist;
+        return true;
+    }
+    return false;
+}`
+        )
+        .replace(
+            /bvhIntersectFirstHitWithinDistance\(\s*(\w+)_nodes,\s*\1_indices,\s*\1_positions,/g,
+            'bvhIntersectFirstHitWithinDistance( $1,'
+        );
+}
+
+// GLSL prelude providing the BVH struct/intersection primitives, chosen per engine.
+function bvhGlslPrelude()
+{
+    return is_threejs_bvh_engine() ? (shaderStructs + shaderIntersectFunction) : nativeBvhShader;
+}
 
 class MeshLoader
 {
@@ -87,14 +168,12 @@ class MeshLoader
 
         if (meshes.length > 0)
         {
-            const generator = new StaticGeometryGenerator(meshes);
-            generator.attributes = [ 'position', 'color', 'normal', 'tangent', 'uv', 'uv2' ];
-            generator.applyWorldTransforms = false;
-            const mergedGeometry = generator.generate();
+            const mergedGeometry = mergeGeometries(meshes.map(mesh => mesh.geometry.clone()), false);
+            if (!mergedGeometry) throw new Error('Unable to merge mesh geometries for BVH construction.');
             mergedGeometry.clearGroups();
             let merged_mesh = new Mesh(mergedGeometry, new MeshStandardMaterial());
 
-            let bvh = new MeshBVH( merged_mesh.geometry, { strategy: SAH, maxLeafTris: 1 } );
+            let bvh = buildBvh(merged_mesh.geometry);
             this.result = {scene:gltf.scene, bvh:bvh, mesh:merged_mesh};
             console.log("==> loaded mesh ", path);
         }
@@ -116,6 +195,10 @@ var params =
 
     scene_name:                         'standard-shader-ball',
     renderer_mode:                      'Rasterizer legacy',
+    // 'threejs' = three-mesh-bvh (battle-tested, kept as the default); 'native'
+    // = the local src/bvh/* port (feature 004). Same GLSL traversal call site
+    // either way; see adaptBvhGlslForEngine()/buildBvh()/createBvhUniforms().
+    bvh_engine:                          'threejs',
     mtlx_material:                      '',
     paused:                             true,   // pathtracer accumulation starts paused; toggle in GUI or ?paused=false
     smooth_normals:                     true,
@@ -136,6 +219,10 @@ var params =
     env_map_path:                        'textures/envmaps/etzwihl_16k.jpg',
     env_map_provided:                    false,
     env_irradiance_path:                 '',
+    // Envmap CDF importance sampling (feature 004, Phase 5): opt-in, default off.
+    // Known bug: produces a blown-out/white render, not yet root-caused. Cosine-
+    // hemisphere sampling (previous behaviour) is used whenever this is false.
+    env_cdf_sampling:                    false,
     sunPower:                            0.25,
     sunAngularSize:                      5.0,
     sunLatitude:                         40.0,
@@ -336,9 +423,8 @@ function createMtlxRouteTextureUniforms()
 {
     const uniforms = {};
     if (mtlxRouteTextureBindings.length === 0) return uniforms;
-    const loader = new TextureLoader();
     for (const binding of mtlxRouteTextureBindings) {
-        const texture = loader.load(binding.url);
+        const texture = loadNativeTexture(binding.url);
         texture.wrapS = RepeatWrapping;
         texture.wrapT = RepeatWrapping;
         texture.flipY = false;
@@ -391,16 +477,40 @@ function normalizeVec3(values, fallback)
 function extractMtlxLights(mtlxText)
 {
     const lights = [];
-    const lightRe = /<(point_light|directional_light|spot_light)\b([^>]*)>([\s\S]*?)<\/\1>|<(point_light|directional_light|spot_light)\b([^>]*)\/>/g;
+    const lightRe = /<(point_light|directional_light|spot_light|quad_light)\b([^>]*)>([\s\S]*?)<\/\1>|<(point_light|directional_light|spot_light|quad_light)\b([^>]*)\/>/g;
     let lightMatch;
     while ((lightMatch = lightRe.exec(mtlxText || '')) !== null) {
         const kind = lightMatch[1] || lightMatch[4];
         const attrs = lightMatch[2] || lightMatch[5] || '';
         const inner = lightMatch[3] || '';
         const inputs = parseLightInputMap(inner);
+        const name = readXmlAttr(attrs, 'name') || kind;
+        if (kind === 'quad_light') {
+            // Best-effort MaterialX quad_light convention (position=center, normal,
+            // width, height); untested against a real generated fixture (none of the
+            // mtlx-input/* materials currently define a light node) -- prefer the
+            // ?mtlx_lights_json= override (corner/u/v, unambiguous) for testing.
+            const normal = normalizeVec3(parseNumberList(inputs.get('normal'), [0, -1, 0], 3), [0, -1, 0]);
+            const width = Number.parseFloat(inputs.get('width') ?? '1') || 1;
+            const height = Number.parseFloat(inputs.get('height') ?? '1') || 1;
+            const center = parseNumberList(inputs.get('position'), [0, 5, 0], 3);
+            const tangent = normalToTangentJs(normal);
+            const bitangent = crossJs(normal, tangent);
+            const corner = center.map((c, i) => c - 0.5 * width * tangent[i] - 0.5 * height * bitangent[i]);
+            lights.push({
+                name, type: 3,
+                position: corner,
+                direction: [0, -1, 0],
+                color: parseNumberList(inputs.get('color'), [1, 1, 1], 3),
+                intensity: Number.parseFloat(inputs.get('intensity') ?? '1') || 0,
+                decayRate: 0, innerCone: 1, outerCone: 1,
+                u: tangent.map(v => v * width), v: bitangent.map(v => v * height),
+            });
+            continue;
+        }
         const type = kind === 'directional_light' ? 1 : kind === 'spot_light' ? 2 : 0;
         lights.push({
-            name: readXmlAttr(attrs, 'name') || kind,
+            name,
             type,
             position: parseNumberList(inputs.get('position'), [0, 5, 0], 3),
             direction: normalizeVec3(parseNumberList(inputs.get('direction'), [0, -1, 0], 3), [0, -1, 0]),
@@ -414,48 +524,87 @@ function extractMtlxLights(mtlxText)
     return lights;
 }
 
+// Minimal vec3 helpers (kept separate from THREE.Vector3 so extractMtlxLights can
+// build plain-array light records the same way whether parsed from XML or JSON).
+function normalToTangentJs(n)
+{
+    const t = Math.abs(n[2]) < Math.abs(n[0]) ? [n[2], 0, -n[0]] : [0, n[2], -n[1]];
+    const len = Math.hypot(t[0], t[1], t[2]) || 1;
+    return t.map(v => v / len);
+}
+function crossJs(a, b)
+{
+    return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+}
+
 function extractMtlxLightOverrides(search)
 {
     if (!search.has('mtlx_lights_json')) return [];
     try {
         const raw = JSON.parse(search.get('mtlx_lights_json'));
         if (!Array.isArray(raw)) return [];
-        return raw.map(light => ({
-            name: String(light.name || 'cli_light'),
-            type: light.type === 'directional' || light.type === 1 ? 1 : light.type === 'spot' || light.type === 2 ? 2 : 0,
-            position: Array.isArray(light.position) ? parseNumberList(light.position.join(','), [0, 5, 0], 3) : [0, 5, 0],
-            direction: normalizeVec3(Array.isArray(light.direction) ? parseNumberList(light.direction.join(','), [0, -1, 0], 3) : [0, -1, 0], [0, -1, 0]),
-            color: Array.isArray(light.color) ? parseNumberList(light.color.join(','), [1, 1, 1], 3) : [1, 1, 1],
-            intensity: Number.parseFloat(light.intensity ?? '1') || 0,
-            decayRate: Number.parseFloat(light.decay_rate ?? light.decayRate ?? '2') || 0,
-            innerCone: angleInputToCos(String(light.inner_angle ?? light.innerCone ?? ''), Math.cos(20.0 * Math.PI / 180.0)),
-            outerCone: angleInputToCos(String(light.outer_angle ?? light.outerCone ?? ''), Math.cos(30.0 * Math.PI / 180.0)),
-        }));
+        return raw.map(light => {
+            const isQuad = light.type === 'quad' || light.type === 3;
+            const type = isQuad ? 3 : (light.type === 'directional' || light.type === 1 ? 1 : light.type === 'spot' || light.type === 2 ? 2 : 0);
+            const corner = Array.isArray(light.corner) ? parseNumberList(light.corner.join(','), [0, 5, 0], 3) : [0, 5, 0];
+            return {
+                name: String(light.name || 'cli_light'),
+                type,
+                position: isQuad ? corner : (Array.isArray(light.position) ? parseNumberList(light.position.join(','), [0, 5, 0], 3) : [0, 5, 0]),
+                direction: normalizeVec3(Array.isArray(light.direction) ? parseNumberList(light.direction.join(','), [0, -1, 0], 3) : [0, -1, 0], [0, -1, 0]),
+                color: Array.isArray(light.color) ? parseNumberList(light.color.join(','), [1, 1, 1], 3) : [1, 1, 1],
+                intensity: Number.parseFloat(light.intensity ?? '1') || 0,
+                decayRate: Number.parseFloat(light.decay_rate ?? light.decayRate ?? '2') || 0,
+                innerCone: angleInputToCos(String(light.inner_angle ?? light.innerCone ?? ''), Math.cos(20.0 * Math.PI / 180.0)),
+                outerCone: angleInputToCos(String(light.outer_angle ?? light.outerCone ?? ''), Math.cos(30.0 * Math.PI / 180.0)),
+                u: Array.isArray(light.u) ? parseNumberList(light.u.join(','), [1, 0, 0], 3) : [1, 0, 0],
+                v: Array.isArray(light.v) ? parseNumberList(light.v.join(','), [0, 0, 1], 3) : [0, 0, 1],
+            };
+        });
     } catch (e) {
         console.warn('[mtlx-route] invalid mtlx_lights_json:', e?.message || e);
         return [];
     }
 }
 
+// Packs the light list into a (6 x N) RGBA float texture read via GetMtlxLight(i)
+// in glsl/pathtracing/mtlx/pathtracer.glsl -- replaces the old fixed-size
+// mtlxLight*[MAX_MTLX_LIGHTS] uniform arrays (feature 004, Phase 5 "lights"
+// alignment with GLSL-PathTracer-JS's lightsTex). No shader recompile needed
+// when the light count changes; only mtlxLightCount (scalar) still uses defines.
+const MTLX_LIGHT_TEXELS_PER_LIGHT = 6;
+
+function createMtlxLightsTexture()
+{
+    const lights = mtlxRouteLights;
+    const height = Math.max(1, lights.length);
+    const data = new Float32Array(MTLX_LIGHT_TEXELS_PER_LIGHT * height * 4);
+    lights.forEach((l, i) => {
+        const base = i * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
+        data[base + 0] = l.position[0]; data[base + 1] = l.position[1]; data[base + 2] = l.position[2]; data[base + 3] = l.decayRate;
+        data[base + 4] = l.direction[0]; data[base + 5] = l.direction[1]; data[base + 6] = l.direction[2]; data[base + 7] = l.type;
+        data[base + 8] = l.color[0]; data[base + 9] = l.color[1]; data[base + 10] = l.color[2]; data[base + 11] = l.intensity;
+        data[base + 12] = l.innerCone; data[base + 13] = l.outerCone; data[base + 14] = 0; data[base + 15] = 0;
+        const u = l.u || [0, 0, 0]; const v = l.v || [0, 0, 0];
+        data[base + 16] = u[0]; data[base + 17] = u[1]; data[base + 18] = u[2]; data[base + 19] = 0;
+        data[base + 20] = v[0]; data[base + 21] = v[1]; data[base + 22] = v[2]; data[base + 23] = 0;
+    });
+    const texture = new DataTexture(data, MTLX_LIGHT_TEXELS_PER_LIGHT, height, RGBAFormat, FloatType);
+    texture.minFilter = NearestFilter;
+    texture.magFilter = NearestFilter;
+    texture.generateMipmaps = false;
+    texture.needsUpdate = true;
+    return texture;
+}
+
 function createMtlxLightUniforms()
 {
-    const maxLights = Math.max(1, Number(materialDefines.MAX_MTLX_LIGHTS) || 1);
-    const padded = [...mtlxRouteLights];
-    while (padded.length < maxLights) {
-        padded.push({ type: 0, position: [0, 0, 0], direction: [0, -1, 0], color: [0, 0, 0], intensity: 0, decayRate: 2, innerCone: 1, outerCone: 1 });
-    }
     return {
-        mtlxLightCount:      { value: Math.min(mtlxRouteLights.length, maxLights) },
-        mtlxLightType:       { value: padded.slice(0, maxLights).map(l => l.type) },
-        mtlxLightPosition:   { value: padded.slice(0, maxLights).map(l => array_to_vector3(l.position)) },
-        mtlxLightDirection:  { value: padded.slice(0, maxLights).map(l => array_to_vector3(l.direction)) },
-        mtlxLightColor:      { value: padded.slice(0, maxLights).map(l => array_to_vector3(l.color)) },
-        mtlxLightIntensity:  { value: padded.slice(0, maxLights).map(l => l.intensity) },
-        mtlxLightDecayRate:  { value: padded.slice(0, maxLights).map(l => l.decayRate) },
-        mtlxLightInnerCone:  { value: padded.slice(0, maxLights).map(l => l.innerCone) },
-        mtlxLightOuterCone:  { value: padded.slice(0, maxLights).map(l => l.outerCone) },
+        mtlxLightCount: { value: mtlxRouteLights.length },
+        mtlxLightsTex:  { value: createMtlxLightsTexture() },
     };
 }
+
 
 function escapeRegExp(text)
 {
@@ -602,6 +751,7 @@ function getRendererModeOptions()
 
 function is_mtlx_route() { return params.renderer_mode === 'Pathtracer MTLX'; }
 function is_mtlx_bvh_raster_route() { return params.renderer_mode === 'Rasterizer MTLX'; }
+function is_legacy_bvh_raster_route() { return params.renderer_mode === 'Rasterizer legacy'; }
 function uses_mtlx_fullscreen_shader() { return is_mtlx_route() || is_mtlx_bvh_raster_route(); }
 
 function is_pathtracing_route()
@@ -612,35 +762,7 @@ function is_pathtracing_route()
 
 function is_fullscreen_bvh_route()
 {
-    return is_pathtracing_route() || is_mtlx_bvh_raster_route();
-}
-
-// three-mesh-bvh's GLSL passes the sampler-containing `BVH` struct by value into
-// functions, which is illegal on many mobile GPUs (Adreno/Mali) even though desktop
-// ANGLE tolerates it (symptom on mobile: "'_ubvh' : undeclared identifier"). Rewrite
-// the shader so the four BVH sampler members are passed individually instead. The
-// `uniform BVH bvh_surface/props;` declarations are kept intact so MeshBVHUniformStruct
-// uploads still work. Applied on every platform so desktop compiles what mobile runs.
-function makeBvhPortable(glsl)
-{
-    if (!/\bBVH\s+bvh\s*,/.test(glsl)) return glsl;
-    // struct parameter -> four individual sampler parameters
-    glsl = glsl.replace(/\bBVH\s+bvh\s*,/g,
-        'usampler2D bvh_index, sampler2D bvh_position, sampler2D bvh_bvhBounds, usampler2D bvh_bvhContents,');
-    // member access `bvh.<member>` -> flat parameter name
-    glsl = glsl.replace(/\bbvh\.(index|position|bvhBounds|bvhContents)\b/g, 'bvh_$1');
-    // call argument passing the local `bvh` param -> the four flat params
-    glsl = glsl.replace(/([(,]\s*)bvh\b(\s*,)/g,
-        '$1bvh_index, bvh_position, bvh_bvhBounds, bvh_bvhContents$2');
-    // call argument passing a `bvh_surface`/`bvh_props` uniform -> its four members
-    glsl = glsl.replace(/([(,]\s*)(bvh_surface|bvh_props)\b(\s*,)/g,
-        '$1$2.index, $2.position, $2.bvhBounds, $2.bvhContents$3');
-    return glsl;
-}
-
-function bvhPortableHook(shader)
-{
-    shader.fragmentShader = makeBvhPortable(shader.fragmentShader);
+    return is_pathtracing_route() || is_mtlx_bvh_raster_route() || is_legacy_bvh_raster_route();
 }
 
 // Pack per-vertex attributes into 3 RGBA textures for the MTLX fullscreen route,
@@ -1309,6 +1431,7 @@ var directionalLight, ambientLight;
 var camera_initialized = false;
 var env_map_texture = null;
 var env_irradiance_texture = null;
+var env_map_importance = null; // { equirectTexture, cdfTexture, totalSum, width, height } | null
 
 var MESH_SURFACE;
 var MESH_PROPS;
@@ -1325,8 +1448,8 @@ var samples = 0;
 var pauseController = null;
 
 function is_legacy_pt() { return params.renderer_mode === 'Pathtracer legacy'; }
-function uses_legacy_pathtracer_shader() { return params.renderer_mode === 'Pathtracer legacy'; }
-function active_pathtrace_material() { return uses_legacy_pathtracer_shader() ? pathtracedMaterial_legacy : pathtracedMaterial; }
+function uses_legacy_fullscreen_shader() { return is_legacy_pt() || is_legacy_bvh_raster_route(); }
+function active_pathtrace_material() { return uses_legacy_fullscreen_shader() ? pathtracedMaterial_legacy : pathtracedMaterial; }
 function get_pathtrace_materials() { return [pathtracedMaterial, pathtracedMaterial_legacy].filter(Boolean); }
 
 function updateSunDir()
@@ -1640,11 +1763,9 @@ function create_materials()
             const mtlxFragmentShader = `precision highp isampler2D;
                             precision highp usampler2D;
                             precision highp int;
-                            ${ shaderStructs }
-                            ${ shaderIntersectFunction }
+                            ${ bvhGlslPrelude() }
                         `
-                        + mtlxRouteCommon + '\n'
-                        + assemble_mtlx_route_dispatch();
+                        + adaptBvhGlslForEngine(mtlxRouteCommon + '\n' + assemble_mtlx_route_dispatch());
 
             if (is_mtlx_bvh_raster_route()) {
                 console.log('[mtlx-raster] fragment shader lines', mtlxFragmentShader.split('\n').length);
@@ -1659,10 +1780,10 @@ function create_materials()
 
             UniformsUtils.clone(ShaderLib.phong.uniforms),
             {
-                bvh_surface:             { value: new MeshBVHUniformStruct() },
-                geomN_surface:           { value: new FloatVertexAttributeTexture() },
-                geomT_surface:           { value: new FloatVertexAttributeTexture() },
-                geomS_surface:           { value: new FloatVertexAttributeTexture() },
+                ...createBvhUniforms('bvh_surface'),
+                geomN_surface:           { value: new NativeAttributeTexture() },
+                geomT_surface:           { value: new NativeAttributeTexture() },
+                geomS_surface:           { value: new NativeAttributeTexture() },
                 has_normals_surface:     { value: 1 },
                 has_tangents_surface:    { value: 0 },
                 has_uvs_surface:         { value: 0 },
@@ -1708,6 +1829,15 @@ function create_materials()
                 // Raw equirectangular env map for MaterialX IBL (sampler2D, not samplerCube).
                 envMapLatLong:                       { value: null },
                 envMapIrradiance:                    { value: null },
+
+                // Dedicated raw-orientation env map + luminance CDF for NEE importance
+                // sampling (feature 004, Phase 5 "envmap" alignment). Independent of
+                // envMapLatLong/envMap above: those keep three.js's flipY=true convention.
+                envMapEquirect:                      { value: null },
+                envMapCDFTex:                        { value: null },
+                envMapRes:                           { value: new Vector2(1, 1) },
+                envMapTotalSum:                      { value: 0.0 },
+                has_env_cdf:                          { value: false },
                 // MTLX material textures are assigned AFTER construction (see below):
                 // UniformsUtils.merge clones texture uniforms, which decouples them from
                 // the async TextureLoader (needsUpdate lands on the original, not the clone).
@@ -1735,7 +1865,6 @@ function create_materials()
             // Assign texture uniforms directly (not via UniformsUtils.merge, which would
             // clone them and miss async TextureLoader updates -> black samplers).
             Object.assign(pathtracedMaterial.uniforms, createMtlxRouteTextureUniforms());
-            pathtracedMaterial.onBeforeCompile = bvhPortableHook;
         }
         else {
             pathtracedMaterial = null;
@@ -1765,14 +1894,14 @@ function create_materials()
         uniforms: UniformsUtils.merge( [
             UniformsUtils.clone(ShaderLib.phong.uniforms),
             {
-                bvh_surface:             { value: new MeshBVHUniformStruct() },
-                normalAttribute_surface: { value: new FloatVertexAttributeTexture() },
-                tangentAttribute_surface:{ value: new FloatVertexAttributeTexture() },
+                ...createBvhUniforms('bvh_surface'),
+                normalAttribute_surface: { value: new NativeAttributeTexture() },
+                tangentAttribute_surface:{ value: new NativeAttributeTexture() },
                 has_normals_surface:     { value: 1 },
                 has_tangents_surface:    { value: 0 },
-                bvh_props:             { value: new MeshBVHUniformStruct() },
-                normalAttribute_props: { value: new FloatVertexAttributeTexture() },
-                tangentAttribute_props:{ value: new FloatVertexAttributeTexture() },
+                ...createBvhUniforms('bvh_props'),
+                normalAttribute_props: { value: new NativeAttributeTexture() },
+                tangentAttribute_props:{ value: new NativeAttributeTexture() },
                 has_normals_props:     { value: 1 },
                 has_tangents_props:    { value: 0 },
                 ground_texture:        { value: null },
@@ -1852,23 +1981,23 @@ function create_materials()
         fragmentShader: `precision highp isampler2D;
                             precision highp usampler2D;
                             precision highp int;
-                            ${ shaderStructs }
-                            ${ shaderIntersectFunction }
+                            ${ bvhGlslPrelude() }
                         `
-                        + glsl_legacy_main
-                        + glsl_legacy_fuzz_brdf
-                        + glsl_legacy_coat_brdf
-                        + glsl_legacy_thin_film
-                        + glsl_legacy_specular_brdf
-                        + glsl_legacy_specular_btdf
-                        + glsl_legacy_metal_brdf
-                        + glsl_legacy_diffuse_brdf
-                        + glsl_legacy_diffuse_btdf
-                        + glsl_legacy_openpbr_surface
-                        + glsl_legacy_pathtracer
+                        + adaptBvhGlslForEngine(
+                            glsl_legacy_main
+                            + glsl_legacy_fuzz_brdf
+                            + glsl_legacy_coat_brdf
+                            + glsl_legacy_thin_film
+                            + glsl_legacy_specular_brdf
+                            + glsl_legacy_specular_btdf
+                            + glsl_legacy_metal_brdf
+                            + glsl_legacy_diffuse_brdf
+                            + glsl_legacy_diffuse_btdf
+                            + glsl_legacy_openpbr_surface
+                            + (is_legacy_bvh_raster_route() ? glsl_rasterization_legacy_bvh_rasterizer : glsl_legacy_pathtracer)
+                        )
 
         } );
-        pathtracedMaterial_legacy.onBeforeCompile = bvhPortableHook;
     }
 }
 
@@ -2039,6 +2168,17 @@ function load_geometry(scene_name)
             pm.uniforms.envMap.value = env_map_texture;
             if (pm.uniforms.envMapLatLong) pm.uniforms.envMapLatLong.value = env_map_texture;
             if (pm.uniforms.envMapIrradiance) pm.uniforms.envMapIrradiance.value = env_irradiance_texture || env_map_texture;
+            if (pm.uniforms.has_env_cdf) {
+                const importance = env_map_importance;
+                // Gated behind an explicit opt-in (default off): the CDF importance-sampling
+                // path has a known bug (blown-out/white render) not yet root-caused -- see
+                // specs/004-threejs-bvh-removal/plan.md Phase 5 "envmap".
+                pm.uniforms.has_env_cdf.value = params.env_cdf_sampling === true && !!importance;
+                pm.uniforms.envMapEquirect.value = importance ? importance.equirectTexture : null;
+                pm.uniforms.envMapCDFTex.value = importance ? importance.cdfTexture : null;
+                pm.uniforms.envMapRes.value.set(importance ? importance.width : 1, importance ? importance.height : 1);
+                pm.uniforms.envMapTotalSum.value = importance ? importance.totalSum : 0.0;
+            }
         }
     }
 
@@ -2069,7 +2209,7 @@ function load_geometry(scene_name)
             BVH_PROPS  = mesh_loader.result.bvh;
                 for (const pm of get_pathtrace_materials()) {
                 if (!pm.uniforms.bvh_props) continue; // MTLX route dropped the props BVH
-                pm.uniforms.bvh_props.value.updateFrom( BVH_PROPS );
+                assignBvhUniforms(pm.uniforms, 'bvh_props', BVH_PROPS);
                 pm.uniforms.has_normals_props.value = false;
                 pm.uniforms.has_tangents_props.value = false;
                 if (pm.uniforms.has_uvs_props) pm.uniforms.has_uvs_props.value = false;
@@ -2130,9 +2270,9 @@ function load_geometry(scene_name)
                         if (!combinedSurface)
                         {
                             const geom = buildCombinedSurfaceGeometry(MESH_PROPS ? MESH_PROPS.geometry : null, MESH_SURFACE.geometry);
-                            combinedSurface = { bvh: new MeshBVH(geom, { strategy: SAH, maxLeafTris: 1 }), packed: packSurfaceGeom(geom) };
+                            combinedSurface = { bvh: buildBvh(geom), packed: packSurfaceGeom(geom) };
                         }
-                        pm.uniforms.bvh_surface.value.updateFrom( combinedSurface.bvh );
+                        assignBvhUniforms(pm.uniforms, 'bvh_surface', combinedSurface.bvh);
                         pm.uniforms.geomN_surface.value.updateFrom( combinedSurface.packed.gN );
                         pm.uniforms.geomT_surface.value.updateFrom( combinedSurface.packed.gT );
                         pm.uniforms.geomS_surface.value.updateFrom( combinedSurface.packed.gS );
@@ -2141,7 +2281,7 @@ function load_geometry(scene_name)
                         pm.uniforms.has_uvs_surface.value      = combinedSurface.packed.has_uvs;
                         continue;
                     }
-                    pm.uniforms.bvh_surface.value.updateFrom( BVH_SURFACE );
+                    assignBvhUniforms(pm.uniforms, 'bvh_surface', BVH_SURFACE);
                     pm.uniforms.has_normals_surface.value = false;
                     pm.uniforms.has_tangents_surface.value = false;
                     if (pm.uniforms.has_uvs_surface) pm.uniforms.has_uvs_surface.value = false;
@@ -2168,8 +2308,7 @@ function load_geometry(scene_name)
             }
 
             // Ground plane texture
-            const groundTexLoader = new TextureLoader();
-            const groundTex = groundTexLoader.load(getPublicAssetUrl('textures/ground.png'));
+            const groundTex = loadNativeTexture(getPublicAssetUrl('textures/ground.png'));
             groundTex.wrapS = RepeatWrapping;
             groundTex.wrapT = RepeatWrapping;
             groundTex.colorSpace = SRGBColorSpace;
@@ -2240,19 +2379,19 @@ function load_scene(scene_name)
         };
         const loadEnvTexture = (path, onLoad) => {
             const assetPath = normalizeAssetPath(path);
-            const loader = /\.hdr(?:$|[?#])/i.test(assetPath) ? new RGBELoader() : new TextureLoader();
-            return loader.load(assetPath, texture => {
+            loadEnvironmentTexture(assetPath).then(({ texture, importance }) => {
                 texture.mapping = EquirectangularReflectionMapping;
                 if (!/\.hdr(?:$|[?#])/i.test(assetPath)) texture.colorSpace = SRGBColorSpace;
-                onLoad(texture);
-            }, undefined, err => {
+                onLoad(texture, importance);
+            }).catch(err => {
                 failStartup(`[envmap] failed to load ${assetPath}: ${err?.message || err || 'unknown error'}`);
             });
         };
         const env_map_path = params.env_map_path || 'textures/envmaps/etzwihl_16k.jpg';
-        loadEnvTexture(env_map_path, texture => {
+        loadEnvTexture(env_map_path, (texture, importance) => {
             console.log('-> loaded env map: ', env_map_path);
             env_map_texture = texture;
+            env_map_importance = importance;
             const irradiancePath = params.env_irradiance_path || '';
             if (irradiancePath) {
                 loadEnvTexture(irradiancePath, irradianceTexture => {
@@ -2440,6 +2579,7 @@ function setup_gui()
         catch (e) { showMtlxLibraryError(e); return; }
         load_scene(params.scene_name);
     });
+    renderer_folder.add(params, 'bvh_engine', ['threejs', 'native']).name('BVH engine').onChange(     v => { setPaused(true); load_scene(params.scene_name); });
     renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => { setPaused(true); load_scene(v); });
     renderer_folder.add( params, 'smooth_normals' ).onChange(                                         v => { resetSamples(); });
     renderer_folder.add( params, 'wireframe' ).onChange(                                              v => { resetSamples(); });

@@ -20,61 +20,13 @@
 /////////////////////////////////////////////////////////////////////////
 
 bool bvhIntersectFirstHitWithinDistance(
-	BVH bvh, vec3 rayOrigin, vec3 rayDirection, in float maxDistance,
+    sampler2D nodes, sampler2D indices, sampler2D positions, vec3 rayOrigin, vec3 rayDirection, in float maxDistance,
 	// output variables
 	inout uvec4 faceIndices, inout vec3 faceNormal, inout vec3 barycoord,
 	inout float side, inout float dist)
 {
-	// stack needs to be twice as long as the deepest tree we expect because
-	// we push both the left and right child onto the stack every traversal
-	int ptr = 0;
-	uint stack[ 32 ];
-	stack[ 0 ] = 0u;
-	float triangleDistance = 1e20;
-	bool found = false;
-	while (ptr > - 1 && ptr < 32)
-    {
-		uint currNodeIndex = stack[ ptr ];
-		ptr --;
-		// check if we intersect the current bounds
-		float boundsHitDistance = intersectsBVHNodeBounds( rayOrigin, rayDirection, bvh, currNodeIndex );
-		if (boundsHitDistance == INFINITY ||
-            boundsHitDistance > triangleDistance ||
-            boundsHitDistance > maxDistance)
-		        continue;
-		uvec2 boundsInfo = uTexelFetch1D( bvh.bvhContents, currNodeIndex ).xy;
-		bool isLeaf = bool( boundsInfo.x & 0xffff0000u );
-		if (isLeaf)
-        {
-			uint count = boundsInfo.x & 0x0000ffffu;
-			uint offset = boundsInfo.y;
-            float minDistance = min(maxDistance, triangleDistance);
-            bool found_intersection = intersectTriangles(bvh, rayOrigin, rayDirection, offset, count, minDistance,
-				                                         faceIndices, faceNormal, barycoord, side, dist);
-            if (found_intersection)
-            {
-                triangleDistance = minDistance;
-                found = true;
-            }
-		}
-        else
-        {
-			uint leftIndex = currNodeIndex + 1u;
-			uint splitAxis = boundsInfo.x & 0x0000ffffu;
-			uint rightIndex = boundsInfo.y;
-			bool leftToRight = rayDirection[ splitAxis ] >= 0.0;
-			uint c1 = leftToRight ? leftIndex : rightIndex;
-			uint c2 = leftToRight ? rightIndex : leftIndex;
-			// set c2 in the stack so we traverse it later. We need to keep track of a pointer in
-			// the stack while we traverse. The second pointer added is the one that will be
-			// traversed first
-			ptr ++;
-			stack[ ptr ] = c2;
-			ptr ++;
-			stack[ ptr ] = c1;
-		}
-	}
-	return found;
+    return nativeBvhIntersectFirstHitWithinDistance(nodes, indices, positions, rayOrigin, rayDirection, maxDistance,
+                                                    faceIndices, faceNormal, barycoord, side, dist);
 }
 
 bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
@@ -86,7 +38,7 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
     vec3    barycoord_surface = vec3(0.0);
     float        side_surface = 1.0;
     float        dist_surface = HUGE_DIST;
-    bool hit_surface = bvhIntersectFirstHitWithinDistance( bvh_surface, rayOrigin, rayDir, maxDistance,
+    bool hit_surface = bvhIntersectFirstHitWithinDistance( bvh_surface_nodes, bvh_surface_indices, bvh_surface_positions, rayOrigin, rayDir, maxDistance,
                                                            faceIndices_surface, faceNormal_surface, barycoord_surface, side_surface, dist_surface );
     // Find closest BVH hit distance
     float dist_closest = HUGE_DIST;
@@ -269,9 +221,47 @@ float sunPdf(in vec3 woutputL, in vec3 woutputW)
     return 1.0/solid_angle;
 }
 
+// MaterialX document lights, texture-backed (feature 004, Phase 5 "lights"
+// alignment): mtlxLightsTex is a (6 x N) RGBA float texture, one row per light.
+// type: 0=point, 1=directional, 2=spot, 3=quad (area).
+struct MtlxLight
+{
+    vec3 position;   // point/spot: world position; quad: one corner
+    vec3 direction;  // directional/spot: light direction (points away from surface)
+    vec3 color;
+    float intensity;
+    float decayRate;
+    float innerCone;
+    float outerCone;
+    int type;
+    vec3 u;          // quad: edge vector from corner
+    vec3 v;          // quad: edge vector from corner
+};
+
+MtlxLight GetMtlxLight(int i)
+{
+    vec4 t0 = texelFetch(mtlxLightsTex, ivec2(0, i), 0);
+    vec4 t1 = texelFetch(mtlxLightsTex, ivec2(1, i), 0);
+    vec4 t2 = texelFetch(mtlxLightsTex, ivec2(2, i), 0);
+    vec4 t3 = texelFetch(mtlxLightsTex, ivec2(3, i), 0);
+    vec4 t4 = texelFetch(mtlxLightsTex, ivec2(4, i), 0);
+    vec4 t5 = texelFetch(mtlxLightsTex, ivec2(5, i), 0);
+    MtlxLight l;
+    l.position = t0.xyz; l.decayRate = t0.w;
+    l.direction = t1.xyz; l.type = int(t1.w + 0.5);
+    l.color = t2.xyz; l.intensity = t2.w;
+    l.innerCone = t3.x; l.outerCone = t3.y;
+    l.u = t4.xyz;
+    l.v = t5.xyz;
+    return l;
+}
+
 float mtlxLightTotalPower(int index)
 {
-    return length(mtlxLightColor[index] * mtlxLightIntensity[index]);
+    MtlxLight l = GetMtlxLight(index);
+    float power = length(l.color * l.intensity);
+    if (l.type == 3) power *= length(cross(l.u, l.v)); // scale by quad area
+    return power;
 }
 
 float mtlxLightsTotalPower()
@@ -286,30 +276,55 @@ float mtlxLightsTotalPower()
 }
 
 vec3 mtlxLightSample(int index, in vec3 pW, in Basis basis,
-                     out vec3 woutputL, out vec3 woutputW, out float maxDistance)
+                     out vec3 woutputL, out vec3 woutputW, out float maxDistance,
+                     inout uint rndSeed)
 {
-    int lightType = mtlxLightType[index];
-    vec3 intensity = mtlxLightColor[index] * mtlxLightIntensity[index];
+    MtlxLight l = GetMtlxLight(index);
+    vec3 intensity = l.color * l.intensity;
     maxDistance = HUGE_DIST;
 
-    if (lightType == 1)
+    if (l.type == 1)
     {
-        woutputW = safe_normalize(-mtlxLightDirection[index]);
+        woutputW = safe_normalize(-l.direction);
+    }
+    else if (l.type == 3)
+    {
+        // Quad area light: uniform-sample the quad, fold the area-sampling pdf
+        // (1/area) into the returned radiance so this still behaves like a single
+        // delta-light sample for the MIS scheme in LiDirect() below.
+        vec2 xi = vec2(rand(rndSeed), rand(rndSeed));
+        vec3 pointOnLight = l.position + xi.x * l.u + xi.y * l.v;
+        vec3 lightNormal = safe_normalize(cross(l.u, l.v));
+        float area = length(cross(l.u, l.v));
+        vec3 toLight = pointOnLight - pW;
+        float distSq = max(dot(toLight, toLight), DENOM_TOLERANCE);
+        float distanceToLight = sqrt(distSq);
+        woutputW = toLight / distanceToLight;
+        maxDistance = max(0.0, distanceToLight - 2.0 * RAY_OFFSET);
+        float cosLight = max(dot(lightNormal, -woutputW), 0.0);
+        if (cosLight <= 0.0 || area <= 0.0)
+        {
+            woutputL = worldToLocal(woutputW, basis);
+            return vec3(0.0);
+        }
+        intensity *= cosLight * area / distSq;
+        woutputL = worldToLocal(woutputW, basis);
+        return intensity;
     }
     else
     {
-        vec3 toLight = mtlxLightPosition[index] - pW;
+        vec3 toLight = l.position - pW;
         float distanceToLight = max(length(toLight), DENOM_TOLERANCE);
         woutputW = toLight / distanceToLight;
         maxDistance = max(0.0, distanceToLight - 2.0 * RAY_OFFSET);
-        float attenuation = pow(distanceToLight + 1.0, mtlxLightDecayRate[index] + DENOM_TOLERANCE);
+        float attenuation = pow(distanceToLight + 1.0, l.decayRate + DENOM_TOLERANCE);
         intensity /= max(attenuation, DENOM_TOLERANCE);
 
-        if (lightType == 2)
+        if (l.type == 2)
         {
-            float cosDir = dot(woutputW, -safe_normalize(mtlxLightDirection[index]));
-            float low = min(mtlxLightInnerCone[index], mtlxLightOuterCone[index]);
-            float high = mtlxLightInnerCone[index];
+            float cosDir = dot(woutputW, -safe_normalize(l.direction));
+            float low = min(l.innerCone, l.outerCone);
+            float high = l.innerCone;
             intensity *= smoothstep(low, high, cosDir);
         }
     }
@@ -329,18 +344,98 @@ float skyTotalPower()
     return length(skyPower * skyColor) * PI2;
 }
 
+/////////////////////////////////////////////////////////////////////////
+// Env map CDF importance sampling (feature 004, Phase 5 "envmap" alignment).
+// Ported from GLSL-PathTracer-JS's shaders/common/envmap.glsl (BinarySearch/
+// SampleEnvMap/EvalEnvMap): envMapCDFTex holds a single flat, row-major
+// cumulative luminance sum (not a true 2D marginal/conditional decomposition)
+// reshaped into a (width x height) texture -- see src/envmap/hdrLoader.js.
+// Uses its own envMapEquirect/envMapCDFTex (flipY=false, raw scanline order),
+// independent of three.js's envMap/envMapLatLong (flipY=true) used above.
+/////////////////////////////////////////////////////////////////////////
+
+vec2 envMapDirToUv(in vec3 d)
+{
+    float theta = acos(clamp(d.y, -1.0, 1.0));
+    return vec2((PI + atan(d.z, d.x)) * RECIPROCAL_PI2, theta * RECIPROCAL_PI);
+}
+
+vec3 envMapUvToDir(in vec2 uv)
+{
+    float phi = uv.x * PI2;
+    float theta = uv.y * PI;
+    float s = sin(theta);
+    return vec3(-s * cos(phi), cos(theta), -s * sin(phi));
+}
+
+float envMapLuminance(in vec3 c)
+{
+    return dot(c, vec3(0.212671, 0.715160, 0.072169));
+}
+
+// Coarse search over the row-end checkpoints (column W-1) finds the row y
+// whose cumulative range contains `value`; a second search within that row
+// finds the column x. Both stages binary-search the SAME monotonic flat CDF.
+vec2 envMapBinarySearch(in float value)
+{
+    ivec2 res = ivec2(envMapRes);
+    int lower = 0;
+    int upper = res.y - 1;
+    while (lower < upper)
+    {
+        int mid = (lower + upper) >> 1;
+        if (value < texelFetch(envMapCDFTex, ivec2(res.x - 1, mid), 0).r) upper = mid;
+        else lower = mid + 1;
+    }
+    int y = clamp(lower, 0, res.y - 1);
+
+    lower = 0;
+    upper = res.x - 1;
+    while (lower < upper)
+    {
+        int mid = (lower + upper) >> 1;
+        if (value < texelFetch(envMapCDFTex, ivec2(mid, y), 0).r) upper = mid;
+        else lower = mid + 1;
+    }
+    int x = clamp(lower, 0, res.x - 1);
+    return vec2(x, y) / envMapRes;
+}
+
+// Solid-angle PDF for a sample/eval at uv whose pixel radiance is `color`.
+float envMapPdfFromUv(in vec2 uv, in vec3 color)
+{
+    float theta = uv.y * PI;
+    float s = sin(theta);
+    if (s <= 0.0) return 0.0;
+    float pdf = envMapLuminance(color) / max(envMapTotalSum, DENOM_TOLERANCE);
+    return (pdf * envMapRes.x * envMapRes.y) / (PI2 * PI * s);
+}
+
 vec3 skySample(in Basis basis,
                 out vec3 woutputL, out vec3 woutputW, out float pdfDir,
                 inout uint rndSeed)
 {
-    woutputL = sampleHemisphereCosineWeighted(rndSeed, pdfDir);
-    woutputW = localToWorld(woutputL, basis);
-    return skyRadiance(woutputW);
+    if (!has_env_cdf)
+    {
+        // Fallback (LDR envmap or no HDR loaded): cosine-weighted hemisphere.
+        woutputL = sampleHemisphereCosineWeighted(rndSeed, pdfDir);
+        woutputW = localToWorld(woutputL, basis);
+        return skyRadiance(woutputW);
+    }
+    vec2 uv = envMapBinarySearch(rand(rndSeed) * max(envMapTotalSum, DENOM_TOLERANCE));
+    woutputW = safe_normalize(envMapUvToDir(uv));
+    woutputL = worldToLocal(woutputW, basis);
+    vec3 color = textureLod(envMapEquirect, uv, 0.0).rgb;
+    pdfDir = envMapPdfFromUv(uv, color);
+    return skyPower * skyColor * color;
 }
 
-float skyPdf(in vec3 woutputL, in vec3 woutputWs)
+float skyPdf(in vec3 woutputL, in vec3 woutputW)
 {
-    return pdfHemisphereCosineWeighted(woutputL);
+    if (!has_env_cdf) return pdfHemisphereCosineWeighted(woutputL);
+    vec2 uv = envMapDirToUv(safe_normalize(woutputW));
+    vec3 color = textureLod(envMapEquirect, uv, 0.0).rgb;
+    return envMapPdfFromUv(uv, color);
 }
 
 // Sample direct radiance at the given surface vertex
@@ -390,7 +485,7 @@ vec3 LiDirect(in vec3 pW, in Basis basis,
                 }
             }
             float selectedPower = max(mtlxLightTotalPower(selected), DENOM_TOLERANCE);
-            Li = mtlxLightSample(selected, pW, basis, shadowL, shadowW, maxDistance);
+            Li = mtlxLightSample(selected, pW, basis, shadowL, shadowW, maxDistance, rndSeed);
             pdf_sun = sunPdf(shadowL, shadowW);
             pdf_sky = skyPdf(shadowL, shadowW);
             lightPdf = P_mtlx * selectedPower / max(w_mtlx, DENOM_TOLERANCE);
