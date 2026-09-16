@@ -185,8 +185,21 @@
 
 **Depends on**: T059
 
-- [ ] T060 Evaluer un pipeline render WGSL pour le rasterizer WebGPU avec criteres de performance et de parite; ne pas utiliser le path tracer a un sample comme remplacement.
-- [ ] T061 Implementer le rasterizer WebGPU si l'evaluation T060 est acceptee; conserver la separation entre pipeline render et pipeline compute.
+- [ ] T060 Evaluer le port du rasterizer MTLX WebGL vers un pipeline render WebGPU natif en executant T060.1-T060.6; `glsl/rasterization/mtlx/` et le GLSL MaterialX genere restent l'autorite fonctionnelle, et le path tracer compute a un sample est interdit comme substitut.
+- [ ] T060.1 Inventorier `glsl/rasterization/mtlx/`, `generateMtlxRasterDispatch()` et `EsslHostShaderGenerator`: stages vertex/fragment, varyings, uniforms, textures/samplers, lumières, environnement, espaces de couleur et etats depth/cull/blend; produire `artifacts/webgpu-migration/raster-webgl-contract.json`.
+- [ ] T060.2 Capturer les baselines `Rasterizer MTLX` WebGL2 opaques, metal, verre, thin-film et texturees avec scene/camera/environnement fixes; enregistrer PNG, hashes et parametres dans `artifacts/webgpu-migration/raster-webgl-baselines.json`.
+- [ ] T060.3 Definir le contrat raster Vulkan/WebGPU versionne: `layout(location=N)` vertex-fragment, builtins, groupes/bindings, uniform layouts et etats du render pipeline; interdire les renommages regex JavaScript du GLSL genere.
+- [ ] T060.4 Prototyper dans `../MaterialX-rva` un host generator raster WebGPU qui preserve la semantique du host WebGL/`EsslHostShaderGenerator` mais produit un GLSL Vulkan vertex et fragment compilable par glslang, sans modifier la route WebGL existante.
+- [ ] T060.5 Compiler les deux stages GLSL avec glslang, les transpiler via SPIR-V avec Naga/Tint et valider entry points, locations inter-stage, bindings et diagnostics; conserver GLSL/SPIR-V/WGSL et logs sous `artifacts/webgpu-migration/raster-wgsl-evaluation/`.
+- [ ] T060.6 Produire un rapport go/no-go dans `artifacts/webgpu-migration/raster-webgpu-evaluation.md` couvrant fidelite au rasterizer WebGL, compatibilite Naga, limites device, cout de compilation et criteres de parite; T061 ne commence qu'avec decision `go`.
+- [ ] T061 Implementer le rasterizer WebGPU apres le gate T060 en executant T061.1-T061.7; conserver des pipelines render et compute strictement distincts.
+- [ ] T061.1 Finaliser et publier le host generator raster GLSL Vulkan dans `../MaterialX-rva`, ses bindings Emscripten et le triplet runtime `public/mtlx/`, avec tests GLSL -> SPIR-V -> WGSL vertex/fragment.
+- [ ] T061.2 Creer dans `src/webgpu/` l'assembleur raster WGSL qui combine host vertex, host fragment et module MaterialX transpile; rejeter collisions, signatures, locations ou bindings incompatibles avant creation du pipeline.
+- [ ] T061.3 Implementer les vertex buffers et bind groups raster WebGPU pour matrices camera/objet, positions, normales, tangentes, UV, lumières, environnement et textures MaterialX selon le contrat T060.3.
+- [ ] T061.4 Creer un vrai `GPURenderPipeline` avec vertex/fragment WGSL, primitive topology, culling, depth/stencil, color targets, alpha/blending et multisampling conformes au rasterizer WebGL; ne reutiliser ni `COMPUTE_SHADER` ni le pipeline du path tracer.
+- [ ] T061.5 Integrer le pipeline comme route `Rasterizer MTLX` pour `renderer_backend=webgpu` dans `main.js`, avec resize, camera, changement de scene/materiau et destruction/recreation des ressources; garder `Rasterizer MTLX` WebGL2 intact comme reference.
+- [ ] T061.6 Ajouter une validation navigateur raster WebGPU qui exige `GPURenderPipeline` actif, frame non vide, backend/adaptateur traces, `gpuError=null`, aucune ressource detruite et aucun fallback compute/WebGL masque.
+- [ ] T061.7 Comparer automatiquement les captures raster WebGPU aux baselines WebGL T060.2 pour opaque, metal, verre, thin-film et textures; enregistrer erreurs RGB, pixels hors seuil, profondeur/alpha, silhouettes et divergences acceptees avant de cocher T061.
 - [ ] T062 Ajouter le selecteur `WebGL2`/`WebGPU` au GUI, son etat indisponible et les diagnostics de backend actifs.
 - [ ] T063 Ajouter l'instrumentation de chargement scene, creation buffers, uploads, generation/pipeline WGSL, temps GPU et vitesse de convergence; utiliser `GPUQuerySet` quand disponible.
 - [ ] T064 Etendre `launch_render.mjs` avec `--backend=webgpu`, attente fiable du compteur WebGPU, capture et export des diagnostics adapter/device.

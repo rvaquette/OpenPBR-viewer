@@ -17,6 +17,7 @@ La premiere cible WebGPU est le **Pathtracer MTLX**, car il concentre le pipelin
 | Execution | Un shader compute WGSL trace un pixel par invocation et ecrit dans une texture HDR d'accumulation. Un passage de presentation applique moyenne et tonemapping vers le canvas. |
 | Geometrie | Remplacer les textures GLSL du BVH et des attributs par des `GPUBuffer` de stockage. Conserver le format BVH natif tant qu'un layout binaire explicite est documente et teste. |
 | Materiaux | Le WASM MaterialX continue de generer du GLSL via `WgslShaderGenerator`/`MtlxPathTracerHostWgslShaderGenerator`, sans emission WGSL directe. Une etape de transpilation dediee convertit ce GLSL en WGSL via un passage intermediaire SPIR-V (`glslang` puis `naga`/`Tint`) quand une conversion textuelle directe n'est pas fiable. Aucune regex ad hoc sur le GLSL genere n'est acceptee comme substitut a ce pipeline outille. |
+| Rasterizer WebGPU | Conserver `glsl/rasterization/mtlx/` et son GLSL MaterialX genere comme autorite fonctionnelle WebGL. Le port WebGPU adapte ce host raster vers un GLSL Vulkan vertex/fragment, le transpile avec la meme chaine `glslang -> SPIR-V -> Naga/Tint -> WGSL`, puis l'assemble dans un `GPURenderPipeline` natif distinct du compute path tracer. |
 | Compatibilite | Choisir WebGPU quand disponible et demande par l'utilisateur; conserver WebGL2 sinon. Aucun repli silencieux MaterialX vers les BRDF legacy. |
 | Comparaison | Les captures WebGL2 existantes constituent le baseline. Les comparaisons WebGPU sont faites a scene, camera, seed, taille, nombre de rebonds et nombre de samples identiques. |
 
@@ -106,13 +107,35 @@ La premiere cible WebGPU est le **Pathtracer MTLX**, car il concentre le pipelin
 
 ## Phase 6 - Rasterizer, experience et deploiement
 
-1. Evaluer le rasterizer WebGPU une fois le chemin compute stabilise. Preferer un pipeline render WGSL distinct; ne pas faire du path tracing a un sample un substitut du rasterizer interactif.
+### 6.1 - Autorite WebGL et inventaire raster
+
+1. Conserver `glsl/rasterization/mtlx/` sans remplacement comme implementation de reference WebGL2 du rasterizer MTLX. Son vertex shader, son fragment host, ses conventions d'interpolation, d'eclairage, d'environnement, de profondeur, de blending et le GLSL produit par `EsslHostShaderGenerator` constituent le contrat comportemental a porter.
+2. Inventorier les entrees/sorties vertex-fragment, uniforms, textures, samplers, light data, espaces de couleur, etats depth/cull/blend et points d'injection du GLSL MaterialX. Versionner ce contrat avant toute implementation WebGPU.
+3. Capturer des baselines raster WebGL2 reproductibles pour les materiaux opaques, metal, transmission, thin-film et textures, avec scene, camera et environnement fixes.
+
+### 6.2 - Host generator raster Vulkan et transpilation
+
+1. Ajouter dans `MaterialX-rva` un host generator raster dedie a WebGPU qui adapte le comportement de `EsslHostShaderGenerator` et du host actuel, mais emet deux stages GLSL Vulkan stricts et compilables: vertex et fragment. Le generateur ne doit pas emettre directement du WGSL et ne doit pas modifier la route WebGL de reference.
+2. Emettre des `layout(location=N)` coherents entre vertex outputs et fragment inputs, ainsi que des `layout(set=N,binding=M)`/`std140` explicites pour toutes les ressources raster. Les bindings doivent etre derives d'un contrat versionne, sans renommage regex JavaScript.
+3. Etendre le pipeline outille existant pour compiler chaque stage avec `glslang`, conserver les SPIR-V intermediaires, puis transpiler vertex et fragment avec Naga/Tint. Les diagnostics doivent distinguer generation GLSL, compilation SPIR-V, transpilation WGSL et validation inter-stage.
+4. Valider les modules WGSL vertex/fragment separement puis ensemble: signatures d'entry points, locations, builtins, bindings, collisions de declarations et compatibilite des ressources avec les limites du device.
+
+### 6.3 - Pipeline render WebGPU natif
+
+1. Assembler le WGSL host raster et le WGSL MaterialX transpile sans utiliser le compute path tracer ni un rendu a un sample comme substitut.
+2. Creer un vrai `GPURenderPipeline` WebGPU avec vertex buffers, primitive state, depth/stencil, multisampling si retenu, culling et color targets correspondant au rasterizer WebGL de reference.
+3. Uploader et binder matrices camera/objet, attributs geometriques, lumières, environnement et textures MaterialX suivant le contrat raster. Refuser explicitement toute ressource absente ou tout layout incompatible.
+4. Integrer ce pipeline comme mode `Rasterizer MTLX` lorsque `renderer_backend=webgpu`, tout en conservant la route `Rasterizer MTLX` WebGL2 intacte et selectionnable comme reference.
+
+### 6.4 - Parite, experience et deploiement
+
+1. Comparer les captures du `GPURenderPipeline` WebGPU aux captures du rasterizer WebGL2 existant, a scene, camera, resolution, materiau et environnement identiques. Mesurer erreur RGB moyenne, pixels hors seuil, profondeur/alpha et differences de silhouettes; documenter toute divergence acceptee.
 2. Ajouter le choix `WebGL2`/`WebGPU` dans le GUI avec etat indisponible explicite. Maintenir les modes legacy comme outils de comparaison tant qu'ils apportent de la valeur.
-3. Instrumenter les timings: chargement scene, creation buffers, upload textures, creation module/pipeline, temps GPU par frame et vitesse de convergence. Utiliser `GPUQuerySet` quand l'adaptateur le permet, avec fallback CPU clairement etiquete.
-4. Etendre `launch_render.mjs` avec `--backend=webgpu`, attente du compteur d'echantillons WebGPU et export de diagnostics. Les captures WebGPU necessitent un navigateur et un GPU compatibles; SwiftShader WebGL ne constitue pas une validation WebGPU.
+3. Instrumenter les timings: chargement scene, creation buffers, upload textures, creation module/pipeline et temps GPU par frame. Utiliser `GPUQuerySet` quand l'adaptateur le permet, avec fallback CPU clairement etiquete.
+4. Etendre `launch_render.mjs` avec `--backend=webgpu`, attente du premier frame raster valide et export de diagnostics adaptateur/device. Les captures WebGPU necessitent un navigateur et un GPU compatibles; SwiftShader WebGL ne constitue pas une validation WebGPU.
 5. Publier une matrice support navigateur/GPU et les limitations connues. Conserver la route WebGL2 par defaut jusqu'a validation multiplateforme.
 
-**Gate:** captures automatisees WebGPU des scenes de reference, comparaison acceptee avec WebGL2, absence de fuite de ressources sur changements repetes de scene/materiau et build Vite vert.
+**Gate:** le rasterizer WebGPU utilise un vrai `GPURenderPipeline` vertex/fragment issu du host raster Vulkan et de la chaine `glslang -> SPIR-V -> Naga/Tint -> WGSL`; les captures automatisees des scenes de reference respectent les seuils de comparaison avec `glsl/rasterization/mtlx`, sans fallback compute/legacy, sans fuite de ressources sur changements repetes de scene/materiau et avec un build Vite vert.
 
 ## Risques et parades
 
