@@ -33,6 +33,7 @@
  *                                        --mode=raster-mtlx pour la route MTLX rasterizer,
  *                                        --mode=legacy pour le pathtracer manuel)
  *   --gpu=true|false              false = rendu logiciel SwiftShader (défaut: true)
+ *   --backend=webgl|webgpu         Backend du viewer (defaut: webgl)
  *   --scene=standard-shader-ball|glavenus|terrain|bearded-man
  *   --smooth_normals=true|false   Lissage des normales (défaut: true)
  *   --bounces=N                   Nombre de rebonds (défaut: 6)
@@ -241,14 +242,17 @@ const DEFAULT_ENV_MAP = 'D:\\WebGL2\\MaterialX\\MaterialX-rva\\resources\\Lights
 const DEFAULT_ENV_IRRADIANCE = 'D:\\WebGL2\\MaterialX\\MaterialX-rva\\resources\\Lights\\irradiance\\san_giuseppe_bridge.hdr';
 const envMapInput = options.envmap ?? options.env_map_path ?? DEFAULT_ENV_MAP;
 const envIrradianceInput = options.env_irradiance_path ?? DEFAULT_ENV_IRRADIANCE;
+const backend = options.backend ?? options.renderer_backend ?? 'webgl';
 delete options.port; delete options.gpu; delete options.headless;
 delete options.browser; delete options['launch-timeout-ms'];
 delete options['start-server']; delete options.screenshot; delete options.output;
 delete options['wait-samples']; delete options['spp']; delete options.mode; delete options.size;
 delete options.mtlx; delete options.denoise; delete options.oidn;
 delete options.envmap; delete options.env_map_path; delete options.env_irradiance_path;
+delete options.backend;
 
 if (!options.renderer_mode) options.renderer_mode = mode;
+options.renderer_backend = backend;
 if (options.strict_generated_contract === undefined) options.strict_generated_contract = 'true';
 if (options.legacy_comparison === undefined) options.legacy_comparison = 'false';
 options.env_map_path = prepareEnvAsset(envMapInput, '_env');
@@ -374,6 +378,12 @@ if (!useGpu) {
     console.log('GPU : rendu logiciel (SwiftShader)');
 } else {
     args.push('--use-gl=angle', '--enable-gpu');
+    // Disable Chromium's GPU shader disk cache: it persists across separate
+    // browser launches (unlike the temp profile) and can silently serve stale
+    // compiled shaders after WGSL source edits, making code changes appear to
+    // have no effect during iterative shader debugging.
+    args.push('--disable-gpu-shader-disk-cache', '--disable-gpu-program-cache', '--gpu-disk-cache-size-kb=0');
+    if (backend === 'webgpu') args.push('--enable-unsafe-webgpu');
     console.log('GPU : matériel (ANGLE)');
 }
 
@@ -382,6 +392,7 @@ if (!useGpu) {
 // ---------------------------------------------------------------------------
 console.log(`Mode      : ${headless ? 'headless' : 'fenêtré'}`);
 console.log(`Renderer  : ${options.renderer_mode}`);
+console.log(`Backend   : ${backend}`);
 console.log(`URL       : ${url}`);
 console.log(`Size      : ${renderW}x${renderH}`);
 const isPathtracing = options.renderer_mode === 'Pathtracer' || options.renderer_mode === 'Pathtracer MTLX' || options.renderer_mode === 'Rasterizer MTLX' || options.renderer_mode === 'Pathtracer legacy';
@@ -469,6 +480,18 @@ if (shaderError) {
     process.exit(1);
 }
 console.log('Shaders compilés.');
+
+if (backend === 'webgpu') {
+    await page.waitForFunction(() => {
+        const state = window.__openpbrRendererBackend;
+        return state?.active === 'webgpu' || state?.webgpuStatus === 'error';
+    }, null, { timeout: 120_000 });
+}
+const backendState = await page.evaluate(() => window.__openpbrRendererBackend ?? null);
+if (backend === 'webgpu' && backendState?.active !== 'webgpu') {
+    throw new Error(`WebGPU backend was requested but not activated: ${backendState?.error ?? backendState?.webgpuStatus ?? 'missing diagnostic'}`);
+}
+console.log(`Backend actif: ${backendState?.active ?? 'unknown'}`);
 
 if (isPathtracing && waitSamples > 0) {
     console.log(`Attente de ${waitSamples} spp...`);

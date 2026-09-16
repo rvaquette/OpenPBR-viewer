@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "language": "wgsl",
+  "generator": "MtlxPathTracerHostWgslShaderGenerator",
+  "generatorSource": "JsWgslShaderGenerator.cpp",
+  "entryPoints": [
+    "mtlxGenEvaluateBsdf",
+    "mtlxGenSampleBsdf",
+    "mtlxGenPrepare",
+    "mtlxGenEmission",
+    "mtlxGenIsOpaque",
+    "mtlxGenIsThinWalled"
+  ],
+  "coordinateSystem": "local_z_normal",
+  "pdfUnit": "solid_angle",
+  "materialModels": [
+    "open_pbr_surface",
+    "standard_surface",
+    "disney_principled",
+    "gltf_pbr",
+    "UsdPreviewSurface"
+  ],
+  "structures": {
+    "FrameUniforms": {
+      "fields": ["width:u32", "height:u32", "frameIndex:u32", "debugMode:u32", "nodeCount:u32", "triangleCount:u32", "lightCount:u32", "padding:u32"]
+    },
+    "CameraUniforms": {
+      "fields": ["worldMatrix:mat4x4<f32>", "inverseProjectionMatrix:mat4x4<f32>"]
+    },
+    "Light": {
+      "fields": ["position:vec4<f32>", "direction:vec4<f32>", "colorIntensity:vec4<f32>", "cone:vec4<f32>", "edgeU:vec4<f32>", "edgeV:vec4<f32>"]
+    },
+    "BvhNode": {
+      "fields": ["minimum:vec4<f32>", "maximum:vec4<f32>", "metadata:vec4<f32>"]
+    },
+    "TriangleIndices": {
+      "fields": ["indices:vec4<u32>"]
+    }
+  },
+  "bindings": [
+    {"group": 0, "binding": 0, "kind": "storage_texture_2d", "format": "rgba16float", "access": "write", "name": "accumulation_output"},
+    {"group": 0, "binding": 1, "kind": "uniform", "type": "FrameUniforms", "name": "frame"},
+    {"group": 0, "binding": 2, "kind": "storage_read", "type": "BvhNode[]", "name": "bvhNodes"},
+    {"group": 0, "binding": 3, "kind": "storage_read", "type": "TriangleIndices[]", "name": "bvhIndices"},
+    {"group": 0, "binding": 4, "kind": "storage_read", "type": "vec4<f32>[]", "name": "bvhPositions"},
+    {"group": 0, "binding": 5, "kind": "storage_atomic", "type": "atomic<u32>", "name": "bvhStackOverflow"},
+    {"group": 0, "binding": 6, "kind": "uniform", "type": "CameraUniforms", "name": "camera"},
+    {"group": 0, "binding": 7, "kind": "texture_2d", "type": "f32", "name": "previousAccumulation"},
+    {"group": 0, "binding": 8, "kind": "texture_2d", "type": "f32", "name": "groundTexture"},
+    {"group": 0, "binding": 9, "kind": "sampler", "name": "groundSampler"},
+    {"group": 0, "binding": 10, "kind": "storage_read", "type": "Light[]", "name": "lights"},
+    {"group": 0, "binding": 11, "kind": "uniform", "type": "LightingUniforms", "name": "lighting"},
+    {"group": 0, "binding": 12, "kind": "texture_2d", "type": "f32", "name": "environmentTexture"},
+    {"group": 0, "binding": 13, "kind": "sampler", "name": "environmentSampler"},
+    {"group": 0, "binding": 14, "kind": "storage_read", "type": "vec4<f32>[]", "name": "bvhNormals"}
+  ],
+  "vulkan": {
+    "targetEnv": "vulkan1.2",
+    "glslVersion": "450",
+    "resourcePolicy": "Host bindings 0-14 are reserved. MaterialX resources start at binding 15. Every resource uses layout(set=0,binding=N); uniform blocks use std140; binding numbers are preserved through SPIR-V and Naga without JavaScript renaming.",
+    "bindings": [
+      {"group": 0, "binding": 0, "name": "accumulation_output"},
+      {"group": 0, "binding": 1, "name": "frame"},
+      {"group": 0, "binding": 2, "name": "bvhNodes"},
+      {"group": 0, "binding": 3, "name": "bvhIndices"},
+      {"group": 0, "binding": 4, "name": "bvhPositions"},
+      {"group": 0, "binding": 5, "name": "bvhStackOverflow"},
+      {"group": 0, "binding": 6, "name": "camera"},
+      {"group": 0, "binding": 7, "name": "previousAccumulation"},
+      {"group": 0, "binding": 8, "name": "groundTexture"},
+      {"group": 0, "binding": 9, "name": "groundSampler"},
+      {"group": 0, "binding": 10, "name": "lights"},
+      {"group": 0, "binding": 11, "name": "lighting"},
+      {"group": 0, "binding": 12, "name": "environmentTexture"},
+      {"group": 0, "binding": 13, "name": "environmentSampler"},
+      {"group": 0, "binding": 14, "name": "bvhNormals"}
+    ]
+  },
+  "colorSpaces": {
+    "materialColorInputs": "MaterialX-declared colorspace; host must not double-decode",
+    "groundTexture": "sRGB encoded upload, decoded to linear in WGSL",
+    "environmentTexture": "LDR sRGB upload, decoded to linear in WGSL",
+    "output": "linear HDR accumulation followed by presentation tonemapping and sRGB encoding"
+  },
+  "metadata": {
+    "bsdfDirectionConvention": "incoming/outgoing directions are local to Basis with +Z as shading normal",
+    "sampling": "host generator owns evaluate/sample/pdf contract; unsupported closure strategies fail explicitly",
+    "cdfEnvironmentSampling": "disabled until the known overexposure issue is resolved",
+    "fallbackPolicy": "no GLSL conversion and no legacy BXDF fallback"
+  }
+}

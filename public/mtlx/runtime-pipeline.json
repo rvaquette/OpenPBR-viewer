@@ -1,0 +1,23 @@
+{
+  "runtimeVersion": "t044-2026-09-16",
+  "generator": "MtlxPathTracerHostWgslShaderGenerator",
+  "generatorOutput": "Vulkan GLSL",
+  "sourceBuild": "../MaterialX-rva/javascript/build-t036/bin",
+  "artifacts": {
+    "javascript": "JsMaterialXGenShader.js",
+    "wasm": "JsMaterialXGenShader.wasm",
+    "data": "JsMaterialXGenShader.data"
+  },
+  "transpilation": {
+    "glslangValidator": "15.0.0",
+    "targetEnv": "vulkan1.2",
+    "naga": "30.0.1",
+    "nagaInputKind": "spv",
+    "stages": ["fragment", "vertex", "compute"]
+  },
+  "contracts": {
+    "wgslHost": "wgsl-host-contract.json",
+    "generatorAbi": "generator-abi-expectations.json",
+    "functionRegistry": "generated-function-registry.mjs"
+  }
+}

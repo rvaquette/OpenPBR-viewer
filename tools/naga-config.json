@@ -1,0 +1,16 @@
+{
+  "tool": "naga",
+  "version": "30.0.1",
+  "binary": "tools/bin/naga.exe",
+  "inputKind": "spv",
+  "defaultShaderStage": "compute",
+  "command": ["--input-kind", "spv", "<input.spv>", "<output.wgsl>"],
+  "optionalStageFlag": "--shader-stage compute",
+  "limitations": [
+    "Requires valid SPIR-V accepted by naga 30.0.1; GLSL source must be compiled first.",
+    "The MVP targets compute shaders and WebGPU-compatible storage/uniform resources.",
+    "Unsupported or backend-specific SPIR-V capabilities must fail explicitly; no text-level WGSL fallback is allowed.",
+    "Resource decorations and std140 layout must be checked against wgsl-host-contract.json after conversion.",
+    "MaterialX closures remain limited to the host-generator MVP models and supported naga SPIR-V features."
+  ]
+}

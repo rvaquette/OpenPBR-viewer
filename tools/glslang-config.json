@@ -1,0 +1,12 @@
+{
+  "tool": "glslangValidator",
+  "version": "15.0.0",
+  "targetEnv": "vulkan1.2",
+  "defaultStage": "comp",
+  "requiredFlags": ["-V", "--target-env", "vulkan1.2"],
+  "resolution": [
+    "GLSLANG_VALIDATOR environment variable",
+    "tools/bin/glslangValidator.exe",
+    "tools/bin/glslangValidator"
+  ]
+}

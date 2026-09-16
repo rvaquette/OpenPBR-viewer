@@ -6845,6 +6845,111 @@ float mx_latlong_compute_lod(vec3 dir, float pdf, float maxMipLevel, int envSamp
     float distortion = sqrt(1.0 - mx_square(dir.y));
     return max(effectiveMaxMipLevel - 0.5 * log2(float(envSamples) * pdf * distortion), 0.0);
 }
+const float PI = 3.14159265358979323846;
+const float PDF_EPSILON = 1.0e-6;
+const float DENOM_TOLERANCE = 1.0e-6;
+const float FLT_EPSILON = 1.0e-7;
+
+struct Basis
+{
+    vec3 nW;
+    vec3 tW;
+    vec3 bW;
+    vec3 baryCoord;
+    vec2 texCoord;
+};
+
+struct Volume
+{
+    vec3 extinction;
+    vec3 albedo;
+    float anisotropy;
+};
+
+vec3 localToWorld(in vec3 value, in Basis basis)
+{
+    return basis.tW * value.x + basis.bW * value.y + basis.nW * value.z;
+}
+
+vec3 mtlxComputeFwidth(in vec3 value)
+{
+    return value * 0.0;
+}
+
+uint ptPcg(uint value)
+{
+    uint state = value * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+float rand(inout uint seed)
+{
+    seed = ptPcg(seed);
+    return float(seed - 1u) / float(0xffffffffu);
+}
+
+float pdfHemisphereCosineWeighted(in vec3 direction)
+{
+    return max(direction.z, PDF_EPSILON) / PI;
+}
+
+vec3 sampleHemisphereCosineWeighted(inout uint seed, out float pdf)
+{
+    float radius = sqrt(rand(seed));
+    float phi = 2.0 * PI * rand(seed);
+    vec3 direction = vec3(radius * cos(phi), radius * sin(phi), sqrt(max(0.0, 1.0 - radius * radius)));
+    pdf = max(direction.z / PI, PDF_EPSILON);
+    return direction;
+}
+
+float FresnelDielectricReflectance(in float cosineIncident, in float etaRatio)
+{
+    float transmittedCosineSquared = etaRatio * etaRatio + cosineIncident * cosineIncident - 1.0;
+    if (transmittedCosineSquared <= 0.0) return 1.0;
+    float transmittedCosine = sqrt(transmittedCosineSquared);
+    float parallel = (transmittedCosine - cosineIncident) / (transmittedCosine + cosineIncident);
+    float perpendicular = ((transmittedCosine + cosineIncident) * cosineIncident - 1.0) /
+                          ((transmittedCosine - cosineIncident) * cosineIncident + 1.0);
+    return 0.5 * parallel * parallel * (1.0 + perpendicular * perpendicular);
+}
+
+float ggx_ndf_eval(in vec3 normal, in float alphaX, in float alphaY)
+{
+    float ax = max(alphaX, DENOM_TOLERANCE);
+    float ay = max(alphaY, DENOM_TOLERANCE);
+    float denominator = PI * ax * ay * pow(normal.x * normal.x / (ax * ax) + normal.y * normal.y / (ay * ay) + normal.z * normal.z, 2.0);
+    return 1.0 / max(denominator, DENOM_TOLERANCE);
+}
+
+vec3 ggx_ndf_sample(in vec3 viewDirection, in float alphaX, in float alphaY, inout uint seed)
+{
+    vec2 randomSample = vec2(rand(seed), rand(seed));
+    vec3 view = normalize(vec3(viewDirection.xy * vec2(alphaX, alphaY), viewDirection.z));
+    float phi = 2.0 * PI * randomSample.x;
+    float z = (1.0 - randomSample.y) * (1.0 + view.z) - view.z;
+    float sinTheta = sqrt(clamp(1.0 - z * z, 0.0, 1.0));
+    vec3 halfVector = vec3(sinTheta * cos(phi), sinTheta * sin(phi), z) + view;
+    return normalize(vec3(halfVector.xy * vec2(alphaX, alphaY), halfVector.z));
+}
+
+float ggx_lambda(in vec3 direction, in float alphaX, in float alphaY)
+{
+    if (abs(direction.z) < FLT_EPSILON) return 0.0;
+    float tangentSquared = (alphaX * alphaX * direction.x * direction.x + alphaY * alphaY * direction.y * direction.y) /
+                           (direction.z * direction.z);
+    return 0.5 * (-1.0 + sqrt(1.0 + tangentSquared));
+}
+
+float ggx_G1(in vec3 direction, in float alphaX, in float alphaY)
+{
+    return 1.0 / (1.0 + ggx_lambda(direction, alphaX, alphaY));
+}
+
+float ggx_G2(in vec3 incoming, in vec3 outgoing, in float alphaX, in float alphaY)
+{
+    return 1.0 / (1.0 + ggx_lambda(incoming, alphaX, alphaY) + ggx_lambda(outgoing, alphaX, alphaY));
+}
 // https://developer.nvidia.com/gpugems/gpugems3/part-ii-light-and-shadows/chapter-8-summed-area-variance-shadow-maps
 float mx_variance_shadow_occlusion(vec2 moments, float fragmentDepth)
 {

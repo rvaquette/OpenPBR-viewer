@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Minimal WGSL lights[] test</title>
+    <style>
+      body { font-family: sans-serif; margin: 2rem; background: #111; color: #eee; }
+      pre { background: #1b1b1b; padding: 1rem; border-radius: 8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Minimal WGSL lights[] test</h1>
+    <pre id="result">running…</pre>
+    <script>
+      function packLight(light) {
+        const position = Array.isArray(light.position) && light.position.length >= 3 ? light.position : [0, 0, 0];
+        const direction = Array.isArray(light.direction) && light.direction.length >= 3 ? light.direction : [0, -1, 0];
+        const color = Array.isArray(light.color) && light.color.length >= 3 ? light.color : [1, 1, 1];
+        const u = Array.isArray(light.u) && light.u.length >= 3 ? light.u : [0, 0, 0];
+        const v = Array.isArray(light.v) && light.v.length >= 3 ? light.v : [0, 0, 0];
+        const data = new Float32Array(24);
+        data[0] = position[0];
+        data[1] = position[1];
+        data[2] = position[2];
+        data[3] = Number.isFinite(light.decayRate) ? light.decayRate : 0;
+        data[4] = direction[0];
+        data[5] = direction[1];
+        data[6] = direction[2];
+        data[7] = Number.isFinite(light.type) ? light.type : 0;
+        data[8] = color[0];
+        data[9] = color[1];
+        data[10] = color[2];
+        data[11] = Number.isFinite(light.intensity) ? light.intensity : 0;
+        data[12] = Number.isFinite(light.innerCone) ? light.innerCone : 1;
+        data[13] = Number.isFinite(light.outerCone) ? light.outerCone : 1;
+        data[14] = 0;
+        data[15] = 0;
+        data[16] = u[0];
+        data[17] = u[1];
+        data[18] = u[2];
+        data[19] = 0;
+        data[20] = v[0];
+        data[21] = v[1];
+        data[22] = v[2];
+        data[23] = 0;
+        return data;
+      }
+
+      async function runMinimalLightTest() {
+        const shader = `
+          struct Light {
+            position: vec4<f32>,
+            direction: vec4<f32>,
+            colorIntensity: vec4<f32>,
+            cone: vec4<f32>,
+            edgeU: vec4<f32>,
+            edgeV: vec4<f32>
+          }
+
+          struct Frame { values: vec4<u32> }
+
+          @group(0) @binding(0) var<storage, read> lights: array<Light>;
+          @group(0) @binding(1) var<storage, read_write> output: array<vec4<f32>>;
+          @group(0) @binding(2) var<uniform> frame: Frame;
+
+          @compute @workgroup_size(1)
+          fn main(@builtin(global_invocation_id) id: vec3<u32>) {
+            if (frame.values.x == 0u) {
+              output[0] = vec4<f32>(0.0);
+              output[1] = vec4<f32>(0.0);
+              return;
+            }
+            let light = lights[0];
+            let position = vec3<f32>(0.0, 0.0, 0.0);
+            let toLight = light.position.xyz - position;
+            let lightDistance = max(length(toLight), 1.0e-5);
+            let direction = toLight / lightDistance;
+            let attenuation = 1.0 / max(lightDistance * lightDistance, 1.0e-5);
+            let cosine = max(dot(vec3<f32>(0.0, 1.0, 0.0), direction), 0.0);
+            let value = cosine * light.colorIntensity.w * attenuation;
+            output[0] = vec4<f32>(value, light.position.x, light.position.y, light.colorIntensity.w);
+            output[1] = light.direction;
+          }
+        `;
+
+        if (!navigator.gpu) {
+          return { ok: false, error: 'WebGPU unavailable in this browser.' };
+        }
+
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) {
+          return { ok: false, error: 'No WebGPU adapter available.' };
+        }
+
+        const device = await adapter.requestDevice();
+        const light = {
+          name: 'test_point',
+          type: 0,
+          intensity: 50,
+          decayRate: 0,
+          color: [1, 1, 1],
+          position: [0, 1, 0],
+          direction: [0, -1, 0],
+          u: [0, 0, 0],
+          v: [0, 0, 0],
+          innerCone: 0.9396926,
+          outerCone: 0.7660444,
+        };
+
+        const lightData = packLight(light);
+        const expected = 50.0 * (1.0 / (1.0 * 1.0));
+        const layout = {
+          strideBytes: lightData.byteLength,
+          strideFloats: lightData.length,
+          fields: {
+            position: { floatOffset: 0, byteOffset: 0 },
+            direction: { floatOffset: 4, byteOffset: 16 },
+            colorIntensity: { floatOffset: 8, byteOffset: 32 },
+            cone: { floatOffset: 12, byteOffset: 48 },
+            edgeU: { floatOffset: 16, byteOffset: 64 },
+            edgeV: { floatOffset: 20, byteOffset: 80 },
+          },
+        };
+        const lightBuffer = device.createBuffer({
+          size: lightData.byteLength,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        device.queue.writeBuffer(lightBuffer, 0, lightData);
+
+        const outputBuffer = device.createBuffer({
+          size: 32,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
+        });
+        const readbackBuffer = device.createBuffer({
+          size: 32,
+          usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+        });
+        const frameBuffer = device.createBuffer({
+          size: 16,
+          usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+
+        const module = device.createShaderModule({ code: shader });
+        const pipeline = device.createComputePipeline({
+          layout: 'auto',
+          compute: { module, entryPoint: 'main' },
+        });
+
+        const bindGroup = device.createBindGroup({
+          layout: pipeline.getBindGroupLayout(0),
+          entries: [
+            { binding: 0, resource: { buffer: lightBuffer } },
+            { binding: 1, resource: { buffer: outputBuffer } },
+            { binding: 2, resource: { buffer: frameBuffer } },
+          ],
+        });
+
+        async function runCase(lightCount) {
+          device.queue.writeBuffer(frameBuffer, 0, new Uint32Array([lightCount, 0, 0, 0]));
+          const encoder = device.createCommandEncoder();
+          const pass = encoder.beginComputePass();
+          pass.setPipeline(pipeline);
+          pass.setBindGroup(0, bindGroup);
+          pass.dispatchWorkgroups(1);
+          pass.end();
+          encoder.copyBufferToBuffer(outputBuffer, 0, readbackBuffer, 0, 32);
+          device.queue.submit([encoder.finish()]);
+          await readbackBuffer.mapAsync(GPUMapMode.READ);
+          const values = Array.from(new Float32Array(readbackBuffer.getMappedRange()));
+          readbackBuffer.unmap();
+          return {
+            lightCount,
+            output: values,
+            actual: values[0],
+            expected: lightCount === 0 ? 0 : expected,
+            ok: lightCount === 0 ? values.every(value => value === 0) : Math.abs(values[0] - expected) < 1e-4,
+          };
+        }
+
+        const noLight = await runCase(0);
+        const oneLight = await runCase(1);
+
+        return {
+          ok: noLight.ok && oneLight.ok,
+          layout,
+          cases: { noLight, oneLight },
+          lightData: Array.from(lightData),
+        };
+      }
+
+      window.runMinimalLightTest = runMinimalLightTest;
+      const resultEl = document.getElementById('result');
+      runMinimalLightTest().then((payload) => {
+        resultEl.textContent = JSON.stringify(payload, null, 2);
+      }).catch((error) => {
+        resultEl.textContent = JSON.stringify({ ok: false, error: String(error) }, null, 2);
+      });
+    </script>
+  </body>
+</html>

@@ -1,4 +1,11 @@
 {
+  "runtimeVersion": "t044-2026-09-16",
+  "generator": "MtlxPathTracerHostWgslShaderGenerator",
+  "generatorOutput": "Vulkan GLSL",
+  "requiredRuntimeExports": [
+    "WgslShaderGenerator",
+    "MtlxPathTracerHostWgslShaderGenerator"
+  ],
   "requiredSymbols": [
     "pt_InitMaterialSummary",
     "EvalMtlxClosure",

@@ -20,6 +20,9 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { loadEnvironmentTexture } from './src/envmap/envLoader.js';
 import { loadNativeTexture } from './src/textures/textureLoader.js';
+import { createRendererSceneContract } from './src/renderer/sceneContract.js';
+import { WebGpuRenderer } from './src/webgpu/WebGpuRenderer.js';
+import { formatMtlxWgslError } from './src/webgpu/errorCodes.js';
 //import Stats from 'stats.js';
 
 import {
@@ -152,6 +155,7 @@ class MeshLoader
         if (this.result) Promise.resolve(this.result);
 
         let gltf = await this.loader.loadAsync(path);
+        gltf.scene.updateMatrixWorld(true);
         let S = Array.isArray( gltf.scene ) ? gltf.scene : [ gltf.scene ];
         const meshes = [];
         for ( let i = 0, l = S.length; i < l; i++ )
@@ -168,7 +172,11 @@ class MeshLoader
 
         if (meshes.length > 0)
         {
-            const mergedGeometry = mergeGeometries(meshes.map(mesh => mesh.geometry.clone()), false);
+            const mergedGeometry = mergeGeometries(meshes.map(mesh => {
+                const geometry = mesh.geometry.clone();
+                geometry.applyMatrix4(mesh.matrixWorld);
+                return geometry;
+            }), false);
             if (!mergedGeometry) throw new Error('Unable to merge mesh geometries for BVH construction.');
             mergedGeometry.clearGroups();
             let merged_mesh = new Mesh(mergedGeometry, new MeshStandardMaterial());
@@ -195,6 +203,8 @@ var params =
 
     scene_name:                         'standard-shader-ball',
     renderer_mode:                      'Rasterizer legacy',
+    renderer_backend:                   'webgl',
+    webgpu_debug_mode:                  'hit',
     // 'threejs' = three-mesh-bvh (battle-tested, kept as the default); 'native'
     // = the local src/bvh/* port (feature 004). Same GLSL traversal call site
     // either way; see adaptBvhGlslForEngine()/buildBvh()/createBvhUniforms().
@@ -294,8 +304,11 @@ var materialDefines = {
 
 // Generated GLSL from MaterialX WASM (set before create_materials() is called).
 var mtlxGeneratedGlsl = '';
+var mtlxGeneratedWgsl = '';
+var pendingMtlxWebGpuWgsl = '';
 var mtlxRouteDispatchGlsl = '';
 var mtlxRouteTextureBindings = [];
+var mtlxRouteWebGpuTextureManifest = [];
 var mtlxRouteLights = [];
 var mtlxRouteMaterialSummary = {
     opaque: true,
@@ -342,6 +355,173 @@ var substitutionRuntimeState = {
     generatorVersion: 'unknown',
     registry: null
 };
+
+function updateRendererBackendDiagnostic()
+{
+    const requestedBackend = params.renderer_backend === 'webgpu' ? 'webgpu' : 'webgl';
+    if (params.renderer_backend !== requestedBackend) {
+        console.warn(`[renderer] Unsupported backend '${params.renderer_backend}', using webgl.`);
+        params.renderer_backend = 'webgl';
+    }
+    window.__openpbrRendererBackend = {
+        requested: requestedBackend,
+        active: 'webgl',
+        webgpuStatus: requestedBackend === 'webgpu' ? 'initializing' : 'not-requested'
+    };
+}
+
+function showWebGpuError(error)
+{
+    const text = `[webgpu] ${formatMtlxWgslError(error)}`;
+    console.error(text);
+    window.__openpbrRendererBackend = { ...window.__openpbrRendererBackend, active: 'none', webgpuStatus: 'error', error: text };
+    window.__openpbrShaderError = text;
+    document.getElementById('shader-error-content').textContent = text;
+    document.getElementById('shader-error').style.display = 'block';
+}
+
+async function initializeWebGpuBackend()
+{
+    console.log('[webgpu] initializeWebGpuBackend requested=', params.renderer_backend);
+    if (params.renderer_backend !== 'webgpu') return;
+    webGpuRenderer = new WebGpuRenderer({
+        onStatus: info => {
+            window.__openpbrRendererBackend = { requested: 'webgpu', active: 'webgpu', webgpuStatus: info.state, adapter: info.adapter, format: info.format, ...info };
+            renderer.domElement.style.visibility = 'hidden';
+            if (info.materialBindGroup) resetSamples();
+            if (camera) resize();
+            if (LOADED) finishCompilationProgress();
+        },
+        onError: showWebGpuError
+    });
+    document.body.appendChild(webGpuRenderer.canvas);
+    try {
+        await webGpuRenderer.initialize();
+        if (pendingMtlxWebGpuWgsl) {
+            const source = pendingMtlxWebGpuWgsl;
+            pendingMtlxWebGpuWgsl = '';
+            await webGpuRenderer.setMaterialComputeModule(source);
+        }
+    } catch (error) {
+        webGpuRenderer.destroy();
+        webGpuRenderer = null;
+        showWebGpuError(error);
+    }
+}
+
+// Diagnostic-only hook: tears down and reinitializes the WebGPU renderer in place,
+// used by the T014 browser smoke test to validate destroy/recreate lifecycle.
+async function recreateWebGpuBackend()
+{
+    if (params.renderer_backend !== 'webgpu') return false;
+    console.log('[webgpu-smoke] recreate: destroying current renderer');
+    if (webGpuRenderer) {
+        webGpuRenderer.destroy();
+        webGpuRenderer = null;
+    }
+    window.__openpbrRendererBackend = { requested: 'webgpu', active: 'none', webgpuStatus: 'recreating' };
+    console.log('[webgpu-smoke] recreate: reinitializing renderer');
+    await initializeWebGpuBackend();
+    console.log('[webgpu-smoke] recreate: done', JSON.stringify(window.__openpbrRendererBackend));
+    return window.__openpbrRendererBackend?.active === 'webgpu';
+}
+window.__openpbrRecreateWebGpuRenderer = recreateWebGpuBackend;
+window.__openpbrWaitForWebGpuWork = async function waitForWebGpuWork() {
+    await webGpuRenderer?.device?.queue?.onSubmittedWorkDone?.();
+};
+window.__openpbrReadAccumulationPixel = () => webGpuRenderer?.readAccumulationPixel?.();
+window.__openpbrReadBvhDebug = () => webGpuRenderer?.readBvhDebug?.();
+window.__openpbrReadBvhStackOverflow = () => webGpuRenderer?.readBvhStackOverflow?.();
+window.__openpbrGetWebGpuRenderState = () => webGpuRenderer ? ({
+    ready: webGpuRenderer.ready,
+    width: webGpuRenderer.width,
+    height: webGpuRenderer.height,
+    accumulationIndex: webGpuRenderer.accumulationIndex,
+    hasBindGroups: Boolean(webGpuRenderer.computeBindGroup && webGpuRenderer.presentBindGroup),
+    materialPipelineActive: Boolean(webGpuRenderer.materialComputePipeline && webGpuRenderer.materialComputeBindGroup),
+    materialBindGroup: Boolean(webGpuRenderer.materialComputeBindGroup),
+    materialPrivateUniformBuffer: Boolean(webGpuRenderer.materialPrivateUniformBuffer),
+    materialPipelineDurationMs: webGpuRenderer.materialPipelineDurationMs ?? null,
+    materialTextures: webGpuRenderer.materialTextureResources.map(resource => ({ name: resource.textureName, binding: resource.textureBinding, samplerBinding: resource.samplerBinding, width: resource.width, height: resource.height, colorSpace: resource.colorSpace })),
+    environmentTexture: webGpuRenderer.environmentTextureInfo || null,
+    environmentIrradianceTexture: webGpuRenderer.environmentIrradianceTextureInfo || null,
+    nodeCount: webGpuRenderer.sceneBuffers?.nodeCount || 0,
+    triangleCount: webGpuRenderer.sceneBuffers?.triangleCount || 0,
+    gpuError: webGpuRenderer.lastGpuError || null,
+    sceneBounds: webGpuRenderer.sceneBounds || null,
+    groundTexture: webGpuRenderer.groundTextureInfo || null,
+    firstLeafIndex: webGpuRenderer.firstLeafIndex,
+    camera: camera ? {
+        position: camera.getWorldPosition(new Vector3()).toArray(),
+        direction: camera.getWorldDirection(new Vector3()).toArray(),
+    } : null,
+}) : null;
+
+// Diagnostic-only hooks used by the T025 verification tool to select a WGSL debug
+// mode and to reset/resume accumulation without going through the GUI.
+window.__openpbrSetDebugMode = function setDebugMode(mode)
+{
+    params.webgpu_debug_mode = mode;
+    resetSamples();
+};
+window.__openpbrResetSamples = function triggerResetSamples()
+{
+    resetSamples();
+};
+// Diagnostic-only hook used to bisect the T032.2 lights[] investigation: applies a
+// light list to the live renderer in-place (no reload) so before/after captures
+// share the exact same execution context.
+window.__openpbrSetTestLights = function setTestLights(lights)
+{
+    mtlxRouteLights = lights || [];
+    webGpuRenderer?.setLights(mtlxRouteLights, params);
+    resetSamples();
+};
+window.__openpbrGetLightsDiagnostic = function getLightsDiagnostic()
+{
+    return {
+        routeLights: mtlxRouteLights.map(light => ({
+            name: String(light.name || ''),
+            type: light.type,
+            position: light.position,
+            direction: light.direction,
+            intensity: light.intensity,
+            decayRate: light.decayRate,
+            innerCone: light.innerCone,
+            outerCone: light.outerCone,
+            u: light.u,
+            v: light.v,
+        })),
+        renderer: webGpuRenderer?.getLightsDiagnostic() || null,
+    };
+};
+window.__openpbrGetWebGpuTextureManifest = function getWebGpuTextureManifest()
+{
+    return JSON.parse(JSON.stringify(mtlxRouteWebGpuTextureManifest));
+};
+window.__openpbrReadLightsGpuDiagnostic = function readLightsGpuDiagnostic()
+{
+    return webGpuRenderer?.readLightsGpuDiagnostic() || null;
+};
+
+function updateRendererSceneContract()
+{
+    const renderDimensions = getRenderDimensions();
+    window.__openpbrSceneContract = createRendererSceneContract({
+        requestedBackend: window.__openpbrRendererBackend?.requested || 'webgl',
+        activeBackend: window.__openpbrRendererBackend?.active || 'webgl',
+        params,
+        camera,
+        renderDimensions,
+        surfaceMesh: MESH_SURFACE,
+        propsMesh: MESH_PROPS,
+        materialTextureCount: mtlxRouteTextureBindings.length,
+        lightCount: mtlxRouteLights.length,
+        hasEnvironmentMap: Boolean(env_map_texture),
+        hasGroundTexture: Boolean(pathtracedMaterial?.uniforms?.ground_texture?.value),
+        samples
+    });
+}
 
 let _generatedRegistryModulePromise = null;
 const APP_BASE_URL = import.meta.env?.BASE_URL || '/public/';
@@ -410,6 +590,28 @@ function extractMtlxTextureBindings(mtlxText, materialBaseUrl)
         }
     }
     return bindings;
+}
+
+function extractMtlxWebGpuTextureManifest(mtlxText, materialBaseUrl)
+{
+    const bindings = extractMtlxTextureBindings(mtlxText, materialBaseUrl);
+    let binding = 20; // Host 0-14 and MaterialX environment 15-19 are reserved.
+    return bindings.map((textureBinding, index) => {
+        const textureName = `${textureBinding.sampler}_texture`;
+        const samplerName = `${textureBinding.sampler}_sampler`;
+        const result = {
+            index,
+            source: textureBinding.source,
+            url: textureBinding.url,
+            materialType: textureBinding.type,
+            colorSpace: isMtlxColorTexture(textureBinding) ? 'MaterialX-declared-color' : 'linear-data',
+            group: 0,
+            texture: { name: textureName, binding, kind: 'texture_2d<f32>' },
+            sampler: { name: samplerName, binding: binding + 1, kind: 'sampler' },
+        };
+        binding += 2;
+        return result;
+    });
 }
 
 function isMtlxColorTexture(binding)
@@ -1030,7 +1232,7 @@ const DEFAULT_MTLX = `<?xml version="1.0"?>
 // Load (and cache) the MaterialX WASM generator module.
 // Bump on every republish of the public/mtlx bundle so clients never mix a cached
 // .js offset table with a differently-versioned .data payload.
-const MTLX_RUNTIME_VERSION = '2026-08-31';
+const MTLX_RUNTIME_VERSION = 't044-2026-09-16';
 let _mtlxModulePromise = null;
 async function loadMtlxModule() {
     if (_mtlxModulePromise) return _mtlxModulePromise;
@@ -1213,6 +1415,9 @@ async function generateMtlxRasterDispatch(mtlxText) {
 // literals. The functions are renamed to mtlxGen* so the route integrator's own
 // evaluateBsdf/sampleBsdf dispatchers can call them via the mtlx_openpbr_* hooks.
 async function generateMtlxRouteDispatch(mtlxText) {
+    if (params.renderer_backend === 'webgpu') {
+        return generateMtlxWebGpuDispatch(mtlxText);
+    }
     const mx = await loadMtlxModule();
     if (typeof mx.MtlxPathTracerHostShaderGenerator === 'undefined') {
         throw new Error('[mtlx-route] MtlxPathTracerHostShaderGenerator not exposed by WASM build');
@@ -1313,6 +1518,53 @@ async function generateMtlxRouteDispatch(mtlxText) {
     return { glsl, mtlxParams };
 }
 
+// WebGPU owns the GLSL -> SPIR-V -> WGSL boundary. The browser adapter is
+// intentionally explicit: it consumes the Vulkan GLSL host generator and must
+// be supplied a real transpiler hook, rather than falling back to WebGL GLSL or
+// applying text substitutions to generated MaterialX code.
+async function generateMtlxWebGpuDispatch(mtlxText) {
+    const totalStart = performance.now();
+    const mx = await loadMtlxModule();
+    if (typeof mx.MtlxPathTracerHostWgslShaderGenerator === 'undefined') {
+        throw new Error('[mtlx-webgpu] MtlxPathTracerHostWgslShaderGenerator not exposed by WASM runtime');
+    }
+    if (typeof window.__openpbrTranspileGlslToWgsl !== 'function') {
+        throw new Error('[mtlx-webgpu] GLSL -> SPIR-V -> WGSL transpiler hook is unavailable; refusing WebGL fallback');
+    }
+    const gen = mx.MtlxPathTracerHostWgslShaderGenerator.create();
+    const ctx = new mx.GenContext(gen);
+    const stdlib = mx.loadStandardLibraries(ctx);
+    const doc = mx.createDocument();
+    doc.importLibrary(stdlib);
+    await mx.readFromXmlString(doc, mtlxText, '');
+    const elem = mx.findRenderableElement(doc);
+    if (!elem) throw new Error('[mtlx-webgpu] No renderable element found in .mtlx');
+    const generationStart = performance.now();
+    const shader = gen.generate(elem.getNamePath(), elem, ctx);
+    const glsl = shader.getSourceCode('pixel') || '';
+    const generationMs = performance.now() - generationStart;
+    if (!glsl.trim()) throw new Error('[mtlx-webgpu] Host generator returned empty Vulkan GLSL');
+    const transpileStart = performance.now();
+    const result = await window.__openpbrTranspileGlslToWgsl({ glsl, stage: 'fragment' });
+    const transpileMs = performance.now() - transpileStart;
+    if (!result?.wgsl?.trim()) throw new Error('[mtlx-webgpu] Transpiler returned empty WGSL');
+    pendingMtlxWebGpuWgsl = result.wgsl;
+    if (webGpuRenderer?.ready) {
+        await webGpuRenderer.setMaterialComputeModule(result.wgsl);
+    }
+    mtlxGeneratedWgsl = result.wgsl;
+    window.__openpbrMtlxRouteDispatchGlsl = glsl;
+    window.__openpbrMtlxGeneratedWgsl = result.wgsl;
+    window.__openpbrMtlxTimings = { generationMs, transpileMs, dispatchTotalMs: performance.now() - totalStart };
+    try { shader.delete?.(); } catch {}
+    try { elem.delete?.(); } catch {}
+    try { stdlib.delete?.(); } catch {}
+    try { ctx.delete?.(); } catch {}
+    try { gen.delete?.(); } catch {}
+    try { doc.delete?.(); } catch {}
+    return { glsl, wgsl: result.wgsl, mtlxParams: summarizeMtlxRouteMaterialParams({ transmissionWeight: 0, transmissionDepth: 0, dispersionScale: 0, thinFilmWeight: 0, geometry_thin_walled: false }) };
+}
+
 async function loadMtlxMaterialLibrary()
 {
     try {
@@ -1372,7 +1624,10 @@ async function configureSingleMtlxMaterial(mtlxUrl, materialId)
     const summary = summarizeMtlxRouteMaterialParams(result.mtlxParams);
     const hasTransmission = result.mtlxParams.transmissionWeight > 0;
 
-    mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
+    mtlxRouteWebGpuTextureManifest = extractMtlxWebGpuTextureManifest(mtlxText, mtlxMaterialBaseUrl);
+    mtlxRouteTextureBindings = params.renderer_backend === 'webgpu'
+        ? []
+        : extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
     mtlxRouteLights = extractMtlxLights(mtlxText);
     mtlxRouteMaterialSummary = summary;
     mtlxRouteDispatchGlsl = result.glsl;
@@ -1421,7 +1676,7 @@ async function ensureMtlxRouteDispatch()
 }
 
 var mesh_loader;
-var renderer, camera, orbitControls, scene, gui;//, stats;
+var renderer, webGpuRenderer, camera, orbitControls, scene, gui;//, stats;
 var pathtracedQuad, pathtracedFinalQuad, pathtracingRenderTarget;
 var pathtracedMaterial = null;
 var pathtracedMaterial_legacy = null;
@@ -1499,6 +1754,7 @@ var scene_names = {
             params[key] = rawVal;
         }
     }
+    updateRendererBackendDiagnostic();
     if (search.has('renderer_mode')) {
         console.log('[URL params] renderer_mode =', params.renderer_mode);
     }
@@ -1526,13 +1782,18 @@ var scene_names = {
             // MTLX BVH routes: pathtracer uses MtlxPathTracerHostShaderGenerator;
             // raster uses EsslHostShaderGenerator and calls its generated main().
             mtlxRouteTextureBindings = [];
+            mtlxRouteWebGpuTextureManifest = [];
             mtlxRouteLights = [];
             const result = is_mtlx_bvh_raster_route()
                 ? await generateMtlxRasterDispatch(mtlxText)
                 : await generateMtlxRouteDispatch(mtlxText);
             mtlxRouteDispatchGlsl = result.glsl;
             mtlxRouteMaterialSummary = summarizeMtlxRouteMaterialParams(result.mtlxParams);
-            mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
+            mtlxRouteWebGpuTextureManifest = extractMtlxWebGpuTextureManifest(mtlxText, mtlxMaterialBaseUrl);
+            webGpuRenderer?.setMaterialTextureManifest(mtlxRouteWebGpuTextureManifest).catch(error => showWebGpuError(error));
+            mtlxRouteTextureBindings = params.renderer_backend === 'webgpu'
+                ? []
+                : extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
             mtlxRouteLights = extractMtlxLights(mtlxText);
 
             mtlxRouteLights.push(...extractMtlxLightOverrides(search));
@@ -1750,13 +2011,13 @@ function create_materials()
         } );
     }
 
-    if (FULLSCREEN_BVH_ROUTE)
+    if (FULLSCREEN_BVH_ROUTE && params.renderer_backend !== 'webgpu')
     {
         //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
         // pathtracedMaterial (for pathtracing shader)
         //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-        if (uses_mtlx_fullscreen_shader()) {
+        if (uses_mtlx_fullscreen_shader() && params.renderer_backend !== 'webgpu') {
             const mtlxRouteCommon = is_mtlx_bvh_raster_route()
                 ? glsl_rasterization_mtlx_common
                 : glsl_mtlx_route_common;
@@ -2121,6 +2382,8 @@ function init()
     }
 
     document.body.appendChild( renderer.domElement );
+    console.log('[webgpu] init: starting backend initialization');
+    initializeWebGpuBackend();
 
     FULLSCREEN_BVH_ROUTE = is_fullscreen_bvh_route();
 
@@ -2229,9 +2492,11 @@ function load_geometry(scene_name)
                     pm.uniforms.has_uvs_props.value = true;
                 }
             }
-                const pt = active_pathtrace_material();
-                console.log("  has_normals_scene:  ", pt.uniforms.has_normals_props);
-                console.log("  has_tangents_scene: ", pt.uniforms.has_tangents_props);
+                if (params.renderer_backend !== 'webgpu') {
+                    const pt = active_pathtrace_material();
+                    console.log("  has_normals_scene:  ", pt.uniforms.has_normals_props);
+                    console.log("  has_tangents_scene: ", pt.uniforms.has_tangents_props);
+                }
         }
 
         progress_bar.animate(0.5);
@@ -2262,6 +2527,10 @@ function load_geometry(scene_name)
             {
                 // Set up mesh properties for pathtracing
                 BVH_SURFACE  = mesh_loader.result.bvh;
+                if (params.renderer_backend === 'webgpu' && webGpuRenderer) {
+                    const webGpuGeom = buildCombinedSurfaceGeometry(MESH_PROPS ? MESH_PROPS.geometry : null, MESH_SURFACE.geometry);
+                    webGpuRenderer.setSceneBvh(new Bvh(webGpuGeom));
+                }
                 let combinedSurface = null;   // MTLX route: neutral+openpbr merged BVH (cached)
                 for (const pm of get_pathtrace_materials()) {
                     if (pm.uniforms.geomN_surface)
@@ -2271,6 +2540,7 @@ function load_geometry(scene_name)
                         {
                             const geom = buildCombinedSurfaceGeometry(MESH_PROPS ? MESH_PROPS.geometry : null, MESH_SURFACE.geometry);
                             combinedSurface = { bvh: buildBvh(geom), packed: packSurfaceGeom(geom) };
+                            if (webGpuRenderer) webGpuRenderer.setSceneBvh(new Bvh(geom));
                         }
                         assignBvhUniforms(pm.uniforms, 'bvh_surface', combinedSurface.bvh);
                         pm.uniforms.geomN_surface.value.updateFrom( combinedSurface.packed.gN );
@@ -2301,14 +2571,17 @@ function load_geometry(scene_name)
                         pm.uniforms.has_uvs_surface.value = true;
                     }
                 }
-                const pt = active_pathtrace_material();
-                console.log("  has_normals_surface:  ", pt.uniforms.has_normals_surface);
-                console.log("  has_tangents_surface: ", pt.uniforms.has_tangents_surface);
+                if (params.renderer_backend !== 'webgpu') {
+                    const pt = active_pathtrace_material();
+                    console.log("  has_normals_surface:  ", pt.uniforms.has_normals_surface);
+                    console.log("  has_tangents_surface: ", pt.uniforms.has_tangents_surface);
+                }
                 console.log("===> LOADED");
             }
 
             // Ground plane texture
             const groundTex = loadNativeTexture(getPublicAssetUrl('textures/ground.png'));
+            webGpuRenderer?.setGroundTexture(getPublicAssetUrl('textures/ground.png')).catch(error => showWebGpuError(error.message));
             groundTex.wrapS = RepeatWrapping;
             groundTex.wrapT = RepeatWrapping;
             groundTex.colorSpace = SRGBColorSpace;
@@ -2335,6 +2608,8 @@ function load_geometry(scene_name)
             }
 
             LOADED = true;
+            webGpuRenderer?.setLights(mtlxRouteLights, params);
+            updateRendererSceneContract();
 
             post_load_setup();
 
@@ -2391,12 +2666,14 @@ function load_scene(scene_name)
         loadEnvTexture(env_map_path, (texture, importance) => {
             console.log('-> loaded env map: ', env_map_path);
             env_map_texture = texture;
+            webGpuRenderer?.setEnvironmentTexture(normalizeAssetPath(env_map_path)).catch(error => showWebGpuError(error.message));
             env_map_importance = importance;
             const irradiancePath = params.env_irradiance_path || '';
             if (irradiancePath) {
                 loadEnvTexture(irradiancePath, irradianceTexture => {
                     console.log('-> loaded env irradiance map: ', irradiancePath);
                     env_irradiance_texture = irradianceTexture;
+                    webGpuRenderer?.setEnvironmentIrradianceTexture(normalizeAssetPath(irradiancePath)).catch(error => showWebGpuError(error.message));
                     load_geometry(scene_name);
                 });
             }
@@ -2642,18 +2919,20 @@ function post_load_setup()
         //////////////////////////////////////////////////////////
         // Setup framebuffers for pathtracing
         //////////////////////////////////////////////////////////
-        pathtracedQuad = new FullScreenQuad( active_pathtrace_material() );
+        if (params.renderer_backend !== 'webgpu') {
+            pathtracedQuad = new FullScreenQuad( active_pathtrace_material() );
 
-        const pt = active_pathtrace_material();
-        pt.transparent = true;
-        pt.depthWrite = false;
+            const pt = active_pathtrace_material();
+            pt.transparent = true;
+            pt.depthWrite = false;
 
-        pathtracingRenderTarget = new WebGLRenderTarget(1, 1, {format: RGBAFormat, type: FloatType, colorSpace: LinearSRGBColorSpace});
-        pathtracedFinalQuad = new FullScreenQuad( new MeshBasicMaterial({map: pathtracingRenderTarget.texture}) );
+            pathtracingRenderTarget = new WebGLRenderTarget(1, 1, {format: RGBAFormat, type: FloatType, colorSpace: LinearSRGBColorSpace});
+            pathtracedFinalQuad = new FullScreenQuad( new MeshBasicMaterial({map: pathtracingRenderTarget.texture}) );
+        }
     }
 
-    // Trigger initial shader compile
-    trigger_recompile();
+    // WebGPU owns its own WGSL compilation and readiness state.
+    if (params.renderer_backend !== 'webgpu') trigger_recompile();
 
     //////////////////////////////////////////////////////////
     // Setup camera
@@ -2672,6 +2951,7 @@ function post_load_setup()
     //////////////////////////////////////////////////////////
     window.addEventListener( 'resize', resize, false );
     resize();
+    if (params.renderer_backend === 'webgpu' && webGpuRenderer?.ready) finishCompilationProgress();
 }
 
 const SHADER_COMPILE_WARN_MS  = 10000;  // avertissement après 10 s
@@ -2755,10 +3035,16 @@ function finishCompilationProgress()
     console.log('finishCompilationProgress');
     progress_bar.set(1.0);
     progress_finished_timer = performance.now();
+    if (params.renderer_backend === 'webgpu') {
+        const progress_overlay = document.getElementById('progress_overlay');
+        progress_overlay.style.display = 'none';
+        progress_overlay.style.opacity = 0;
+    }
     COMPILING = false;
     // Signal headless readiness (used by launch_render.mjs)
     window.__openpbrReady   = true;
     window.__openpbrSamples = 0;
+    updateRendererSceneContract();
 }
 
 // Canvas size for the selected render_size. '256x256'/'512x512' are literal pixel
@@ -2790,8 +3076,9 @@ function resize()
     renderer.domElement.style.top = '0';
     renderer.domElement.style.left = '0';
     renderer.domElement.style.transform = 'none';
-    if (FULLSCREEN_BVH_ROUTE)
+    if (FULLSCREEN_BVH_ROUTE && pathtracingRenderTarget)
         pathtracingRenderTarget.setSize(rd.w, rd.h);
+    webGpuRenderer?.resize(rd.w, rd.h);
     resetSamples();
 }
 
@@ -2803,6 +3090,7 @@ function get_vector3(array3)
 function resetSamples()
 {
     samples = 0;
+    updateRendererSceneContract();
 }
 
 // Force the render into (or out of) pause and keep the GUI toggle in sync.
@@ -2945,7 +3233,7 @@ function render()
 
     // Paused: freeze the pathtracer accumulation, keep the last frame on screen.
     // The rasterizer route is single-pass/cheap and keeps rendering normally.
-    if (params.paused && FULLSCREEN_BVH_ROUTE)
+    if (params.paused && FULLSCREEN_BVH_ROUTE && window.__openpbrRendererBackend?.active !== 'webgpu')
     {
         if (pathtracedFinalQuad) {
             renderer.setRenderTarget( null );
@@ -2956,6 +3244,29 @@ function render()
         if (samples_txt) { samples_txt.style.visibility = 'visible'; samples_txt.innerText = `samples: ${ samples } (paused)`; }
         updateProgressOverlay();
         requestAnimationFrame( render );
+        return;
+    }
+
+    if (params.renderer_backend === 'webgpu')
+    {
+        if (!webGpuRenderer?.ready) {
+            updateProgressOverlay();
+            requestAnimationFrame(render);
+            return;
+        }
+        camera.updateMatrixWorld();
+        if (webGpuRenderer?.render(samples, camera, params.webgpu_debug_mode)) {
+            samples++;
+            window.__openpbrSamples = samples;
+            updateRendererSceneContract();
+        }
+        const samples_txt = document.getElementById('samples');
+        const info_txt = document.getElementById('info');
+        samples_txt.style.visibility = 'visible';
+        samples_txt.innerText = `webgpu smoke frames: ${ samples }`;
+        info_txt.innerText = 'OpenPBR viewer, WebGPU smoke pipeline';
+        updateProgressOverlay();
+        requestAnimationFrame(render);
         return;
     }
 
@@ -2983,6 +3294,7 @@ function render()
 
             samples++;
             window.__openpbrSamples = samples;
+            updateRendererSceneContract();
         }
         else
         {
