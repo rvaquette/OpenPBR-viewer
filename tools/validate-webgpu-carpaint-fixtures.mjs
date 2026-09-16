@@ -49,6 +49,7 @@ for (let index = 0; index < fixtures.length; index++) {
     samples: fixture?.samples ?? fixture?.state?.samples ?? null,
     timings: fixture?.timings || null,
     image: fixture?.image ? { width: fixture.image.width, height: fixture.image.height, variance: fixture.image.variance, nonUniform: fixture.image.nonUniform } : null,
+    objectVisibility: fixture?.objectVisibility || null,
     pipeline: {
       generatedWgsl: fixture?.materialDispatch?.generatedWgsl === true,
       hostDispatch: fixture?.materialDispatch?.hostDispatch === true,
@@ -65,13 +66,16 @@ for (let index = 0; index < fixtures.length; index++) {
   console.log(`[T052.7] ${fixtureId}: ${reports.at(-1).status} exit=${result.status} code=${errorCode || 'none'}`);
 }
 
+const transmissionFixturesVisible = reports
+  .filter(result => result.fixtureId === 'glass' || result.fixtureId === 'soapbubble')
+  .every(result => Number.isFinite(result.objectVisibility?.centralMean) && result.objectVisibility.centralMean > 2);
 const pass = reports.every(result => result.runnerExitCode === 0 && result.status === 'pass' &&
   result.samples >= 2 && result.image?.width === 256 && result.image?.height === 256 && result.image?.nonUniform === true &&
   result.pipeline.generatedWgsl && result.pipeline.hostDispatch && result.pipeline.webgpuMaterialPipeline && result.pipeline.materialBindGroup &&
   result.backend === 'webgpu' && result.gpuError === null && result.fallback === false &&
   Number.isFinite(result.timings?.generationMs) && Number.isFinite(result.timings?.transpileMs) &&
   Number.isFinite(result.timings?.pipelineMs) && Number.isFinite(result.timings?.fixtureTotalMs) &&
-  Boolean(result.capture && existsSync(result.capture)));
+  Boolean(result.capture && existsSync(result.capture))) && transmissionFixturesVisible;
 const output = resolve(artifactRoot, 't052.7-carpaint-fixtures-report.json');
 writeFileSync(output, `${JSON.stringify({ version: 1, task: 'T052.7', status: pass ? 'pass' : 'blocked', fixtures: reports }, null, 2)}\n`, 'utf8');
 console.log(JSON.stringify({ status: pass ? 'pass' : 'blocked', total: reports.length, passed: reports.filter(result => result.status === 'pass').length, failed: reports.filter(result => result.status !== 'pass').length, output }, null, 2));
