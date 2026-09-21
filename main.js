@@ -3595,6 +3595,16 @@ function render()
             requestAnimationFrame(render);
             return;
         }
+        if (params.paused) {
+            const samples_txt = document.getElementById('samples');
+            const info_txt = document.getElementById('info');
+            samples_txt.style.visibility = 'visible';
+            samples_txt.innerText = `webgpu ${params.webgpu_pipeline} frames: ${samples} (paused)`;
+            info_txt.innerText = `OpenPBR viewer, WebGPU ${params.webgpu_pipeline} pipeline`;
+            updateProgressOverlay();
+            requestAnimationFrame(render);
+            return;
+        }
         camera.updateMatrixWorld();
         const rendered = params.webgpu_pipeline === 'render'
             ? webGpuRenderer?.renderPipelineFrame()

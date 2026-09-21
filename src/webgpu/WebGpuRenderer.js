@@ -467,6 +467,8 @@ export class WebGpuRenderer {
             fragmentEntryPoint,
             hostBindings,
         });
+        this.renderRequestedBindings = [...new Set([...hostBindings.map(binding => binding.binding), ...materialBindings])].sort((a, b) => a - b);
+        this.renderIncludeHostBindings = hostBindings.length > 0;
         await this.createRenderPipeline({
             vertexSource,
             fragmentSource,
@@ -474,8 +476,6 @@ export class WebGpuRenderer {
             fragmentEntryPoint,
         });
         this.renderPipelineMaterialXFinal = materialXFinal;
-        this.renderRequestedBindings = [...new Set([...hostBindings.map(binding => binding.binding), ...materialBindings])].sort((a, b) => a - b);
-        this.renderIncludeHostBindings = hostBindings.length > 0;
         if (this.accumulationTextures) {
             this.createRenderBindGroups({ materialBindings: this.renderRequestedBindings, includeHostBindings: this.renderIncludeHostBindings });
         }
