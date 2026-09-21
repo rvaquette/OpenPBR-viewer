@@ -22,6 +22,28 @@ Then open http://localhost:5173/OpenPBR-viewer in your browser.
 
 Then open http://localhost:8080/OpenPBR-viewer in your browser.
 
+## Offline WebGPU shaders
+
+The WebGPU MaterialX routes can load pre-transpiled WGSL files instead of sending
+runtime-generated GLSL to a local transpilation server. Generate the fixture GLSL
+and WGSL first, then publish the static browser assets:
+
+    npm run compile:mtlx-render-fixtures
+    npm run transpile:mtlx-render-fixtures
+    npm run publish:offline-wgsl
+
+Start Vite normally, then select offline loading with
+`mtlx_transpilation=offline`. The selected `mtlx_url` must have an entry in
+`public/mtlx/offline/manifest.json`.
+
+    npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
+
+    http://127.0.0.1:5173/OpenPBR-viewer/?renderer_backend=webgpu&webgpu_pipeline=render&renderer_mode=Pathtracer%20MTLX&mtlx_url=mtlx-library%2Fopen_pbr_default.mtlx&gpu=true&paused=true&mtlx_transpilation=offline
+
+Run the final fixture matrix in this mode with:
+
+    npm run test:final-render-fixtures:offline
+
 ## WASM substitution workflow
 
 Run the strict substitution validation pipeline:

@@ -22,8 +22,8 @@ if (!existsSync(runtimePath)) throw new Error(`Missing runtime: ${runtimePath}`)
 const module = await import(`file://${runtimePath.replaceAll('\\', '/')}`);
 const factory = module.default || module;
 const mx = await factory({ locateFile: file => resolve(runtimeRoot, file) });
-const Host = mx.MtlxPathTracerHostWgslShaderGenerator;
-if (!Host?.create) throw new Error('WGSL host generator export is missing.');
+const Host = mx.MtlxPathTracerHostShaderGenerator;
+if (!Host?.create) throw new Error('GLSL host generator export is missing.');
 const results = [];
 for (const [id, relativePath] of fixtures) {
     const sourcePath = resolve(process.cwd(), relativePath);

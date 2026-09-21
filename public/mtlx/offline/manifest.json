@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "open_pbr_surface",
+      "route": "pathtracer",
+      "material": "mtlx-library/open_pbr_default.mtlx",
+      "wgsl": "mtlx/offline/open_pbr_surface/pathtracer.wgsl",
+      "wgslSha256": "d77256286fd3fba9c746a986c7f3b06393f1f913bbac72bc8def9f0502e31064"
+    },
+    {
+      "id": "open_pbr_surface",
+      "route": "rasterizer",
+      "material": "mtlx-library/open_pbr_default.mtlx",
+      "wgsl": "mtlx/offline/open_pbr_surface/rasterizer.wgsl",
+      "wgslSha256": "d438e57268b30c88fbcf8ba7bd2b1f5bd955336685911ee845599df398094521"
+    },
+    {
+      "id": "standard_surface",
+      "route": "pathtracer",
+      "material": "mtlx-input/standard_surface_default/standard_surface_default.mtlx",
+      "wgsl": "mtlx/offline/standard_surface/pathtracer.wgsl",
+      "wgslSha256": "e8f09b06c9cd0091c75cc90b4cb4a309eee4a266e65a8dbdf9167040e1e2df4f"
+    },
+    {
+      "id": "standard_surface",
+      "route": "rasterizer",
+      "material": "mtlx-input/standard_surface_default/standard_surface_default.mtlx",
+      "wgsl": "mtlx/offline/standard_surface/rasterizer.wgsl",
+      "wgslSha256": "f54a945cf7348874a1545dc69178d7bb6029a7b0a9df5b04289d487699732a91"
+    },
+    {
+      "id": "disney_principled",
+      "route": "pathtracer",
+      "material": "mtlx-input/plastic/plastic.mtlx",
+      "wgsl": "mtlx/offline/disney_principled/pathtracer.wgsl",
+      "wgslSha256": "bf3a4c2d33601b2119e747305cc85d5f1269039a5582871fd3e95bdad36c638a"
+    },
+    {
+      "id": "disney_principled",
+      "route": "rasterizer",
+      "material": "mtlx-input/plastic/plastic.mtlx",
+      "wgsl": "mtlx/offline/disney_principled/rasterizer.wgsl",
+      "wgslSha256": "071e80e561fa5f26cbd893a77519244dbfa6f11e8db2a1b0dd3c68e82d359609"
+    },
+    {
+      "id": "gltf_pbr",
+      "route": "pathtracer",
+      "material": "mtlx-input/metal_brushed/metal_brushed.mtlx",
+      "wgsl": "mtlx/offline/gltf_pbr/pathtracer.wgsl",
+      "wgslSha256": "3e0a7b3a9cf1b5bff17401e5d7d8cfd2ac2a842e72c21803b285c09e9c7989b5"
+    },
+    {
+      "id": "gltf_pbr",
+      "route": "rasterizer",
+      "material": "mtlx-input/metal_brushed/metal_brushed.mtlx",
+      "wgsl": "mtlx/offline/gltf_pbr/rasterizer.wgsl",
+      "wgslSha256": "9283e884564d1849fef87982e40c915ffeb56a99094b66b8787c8639771c38c8"
+    },
+    {
+      "id": "usd_preview_surface",
+      "route": "pathtracer",
+      "material": "mtlx-input/_chrome_test/_chrome_test.mtlx",
+      "wgsl": "mtlx/offline/usd_preview_surface/pathtracer.wgsl",
+      "wgslSha256": "cdd4ad7d46bd5f829957aa632016f206f9caa8352bf2b928ac05f46a3adae69e"
+    },
+    {
+      "id": "usd_preview_surface",
+      "route": "rasterizer",
+      "material": "mtlx-input/_chrome_test/_chrome_test.mtlx",
+      "wgsl": "mtlx/offline/usd_preview_surface/rasterizer.wgsl",
+      "wgslSha256": "16616c5f44b038cc15a0ee61d23366aa3adb7de4a1214496072d552c50ba45ef"
+    },
+    {
+      "id": "carpaint",
+      "route": "pathtracer",
+      "material": "mtlx-input/carpaint/carpaint.mtlx",
+      "wgsl": "mtlx/offline/carpaint/pathtracer.wgsl",
+      "wgslSha256": "44b5b989f716c8cd18b7ca757de084de897b3f8beb91f7210c441f6fd88200ef"
+    },
+    {
+      "id": "carpaint",
+      "route": "rasterizer",
+      "material": "mtlx-input/carpaint/carpaint.mtlx",
+      "wgsl": "mtlx/offline/carpaint/rasterizer.wgsl",
+      "wgslSha256": "74c3265cd33b2c0abf12241ab87ecd371a95f905337b22c600963cfcb37813c1"
+    },
+    {
+      "id": "glass",
+      "route": "pathtracer",
+      "material": "mtlx-input/glass/glass.mtlx",
+      "wgsl": "mtlx/offline/glass/pathtracer.wgsl",
+      "wgslSha256": "95b714d692fd0d9f9fa115e240b0fbf8b2534fd7f7792f77067bb90a3b541027"
+    },
+    {
+      "id": "glass",
+      "route": "rasterizer",
+      "material": "mtlx-input/glass/glass.mtlx",
+      "wgsl": "mtlx/offline/glass/rasterizer.wgsl",
+      "wgslSha256": "fd152579acf7addbb2e0adddd2a65f4f87a1d15007b41d14b46e35a03bd39558"
+    },
+    {
+      "id": "pearl",
+      "route": "pathtracer",
+      "material": "mtlx-input/pearl/pearl.mtlx",
+      "wgsl": "mtlx/offline/pearl/pathtracer.wgsl",
+      "wgslSha256": "fafd2029c172592a1c352ed098efae2671fc6d3d06d0445b9747ef82f498c8b7"
+    },
+    {
+      "id": "pearl",
+      "route": "rasterizer",
+      "material": "mtlx-input/pearl/pearl.mtlx",
+      "wgsl": "mtlx/offline/pearl/rasterizer.wgsl",
+      "wgslSha256": "30298718e1293f8c83cf3f28441595cb58e3982e45778614467aef3aee9a2cba"
+    },
+    {
+      "id": "soapbubble",
+      "route": "pathtracer",
+      "material": "mtlx-input/soapbubble/soapbubble.mtlx",
+      "wgsl": "mtlx/offline/soapbubble/pathtracer.wgsl",
+      "wgslSha256": "45ddc69cac088ff8fcfe26e00595b3f6e29d717d21e31bf278b45955e49c159f"
+    },
+    {
+      "id": "soapbubble",
+      "route": "rasterizer",
+      "material": "mtlx-input/soapbubble/soapbubble.mtlx",
+      "wgsl": "mtlx/offline/soapbubble/rasterizer.wgsl",
+      "wgslSha256": "d62ddda47677fa6481e94049603f835ac94b6a07914fe457f432f494fabaf625"
+    }
+  ]
+}

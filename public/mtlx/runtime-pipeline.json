@@ -1,6 +1,6 @@
 {
   "runtimeVersion": "t044-2026-09-16",
-  "generator": "MtlxPathTracerHostWgslShaderGenerator",
+  "generator": "MtlxPathTracerHostShaderGenerator",
   "generatorOutput": "Vulkan GLSL",
   "sourceBuild": "../MaterialX-rva/javascript/build-t036/bin",
   "artifacts": {
@@ -16,7 +16,8 @@
     "stages": ["fragment", "vertex", "compute"]
   },
   "contracts": {
-    "wgslHost": "wgsl-host-contract.json",
+    "renderHost": "render-host-contract.json",
+    "renderModule": "render-module-contract.json",
     "generatorAbi": "generator-abi-expectations.json",
     "functionRegistry": "generated-function-registry.mjs"
   }

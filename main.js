@@ -23,6 +23,7 @@ import { loadNativeTexture } from './src/textures/textureLoader.js';
 import { createRendererSceneContract } from './src/renderer/sceneContract.js';
 import { WebGpuRenderer } from './src/webgpu/WebGpuRenderer.js';
 import { formatMtlxWgslError } from './src/webgpu/errorCodes.js';
+import { FULLSCREEN_TRIANGLE_WGSL } from './src/webgpu/fullscreenTriangle.wgsl.js';
 //import Stats from 'stats.js';
 
 import {
@@ -204,6 +205,7 @@ var params =
     scene_name:                         'standard-shader-ball',
     renderer_mode:                      'Rasterizer legacy',
     renderer_backend:                   'webgl',
+    webgpu_pipeline:                    'compute',
     webgpu_debug_mode:                  'hit',
     // 'threejs' = three-mesh-bvh (battle-tested, kept as the default); 'native'
     // = the local src/bvh/* port (feature 004). Same GLSL traversal call site
@@ -358,6 +360,10 @@ var substitutionRuntimeState = {
 
 function updateRendererBackendDiagnostic()
 {
+    if (!['compute', 'render'].includes(params.webgpu_pipeline)) {
+        console.warn(`[webgpu] Unsupported pipeline '${params.webgpu_pipeline}', using compute.`);
+        params.webgpu_pipeline = 'compute';
+    }
     const requestedBackend = params.renderer_backend === 'webgpu' ? 'webgpu' : 'webgl';
     if (params.renderer_backend !== requestedBackend) {
         console.warn(`[renderer] Unsupported backend '${params.renderer_backend}', using webgl.`);
@@ -397,7 +403,18 @@ async function initializeWebGpuBackend()
     document.body.appendChild(webGpuRenderer.canvas);
     try {
         await webGpuRenderer.initialize();
-        if (pendingMtlxWebGpuWgsl) {
+        if (params.webgpu_pipeline === 'render') {
+            const renderFragment = pendingMtlxWebGpuWgsl;
+            if (!renderFragment || !/@fragment\s+fn\s+fragmentMain\s*\(/.test(renderFragment)) {
+                throw new Error('[mtlx-webgpu-render] final MaterialX WGSL fragment entry point is unavailable; refusing T030 smoke-fragment fallback');
+            }
+            const materialBindings = is_mtlx_bvh_raster_route()
+                ? Array.from({ length: 21 }, (_, index) => index + 15)
+                : [...Array.from({ length: 24 }, (_, index) => index + 15), 40];
+            const hostBindings = [];
+            await webGpuRenderer.prepareRenderPipeline({ vertexSource: FULLSCREEN_TRIANGLE_WGSL, fragmentSource: renderFragment, materialBindings, hostBindings, materialXFinal: true });
+        }
+        if (pendingMtlxWebGpuWgsl && params.webgpu_pipeline !== 'render') {
             const source = pendingMtlxWebGpuWgsl;
             pendingMtlxWebGpuWgsl = '';
             await webGpuRenderer.setMaterialComputeModule(source);
@@ -429,6 +446,7 @@ window.__openpbrRecreateWebGpuRenderer = recreateWebGpuBackend;
 window.__openpbrWaitForWebGpuWork = async function waitForWebGpuWork() {
     await webGpuRenderer?.device?.queue?.onSubmittedWorkDone?.();
 };
+window.__openpbrRenderPipelineFrame = () => webGpuRenderer?.renderPipelineFrame?.() || false;
 window.__openpbrReadAccumulationPixel = () => webGpuRenderer?.readAccumulationPixel?.();
 window.__openpbrReadBvhDebug = () => webGpuRenderer?.readBvhDebug?.();
 window.__openpbrReadBvhStackOverflow = () => webGpuRenderer?.readBvhStackOverflow?.();
@@ -442,6 +460,16 @@ window.__openpbrGetWebGpuRenderState = () => webGpuRenderer ? ({
     materialBindGroup: Boolean(webGpuRenderer.materialComputeBindGroup),
     materialPrivateUniformBuffer: Boolean(webGpuRenderer.materialPrivateUniformBuffer),
     materialPipelineDurationMs: webGpuRenderer.materialPipelineDurationMs ?? null,
+    renderPipelineActive: Boolean(webGpuRenderer.renderPipeline),
+    renderPipelineDurationMs: webGpuRenderer.renderPipelineDurationMs ?? null,
+    renderPipelineStageHashes: webGpuRenderer.renderPipelineStageHashes || null,
+    renderPipelineMaterialXFinal: webGpuRenderer.renderPipelineMaterialXFinal === true,
+    renderPipelineFrameCount: webGpuRenderer.renderPipelineFrameCount || 0,
+    renderRequestedBindings: webGpuRenderer.renderRequestedBindings || [],
+    renderMissingBindings: webGpuRenderer.renderMissingBindings || [],
+    renderBindGroup: Boolean(webGpuRenderer.renderBindGroup),
+    renderIncludeHostBindings: webGpuRenderer.renderIncludeHostBindings !== false,
+    renderFallbackReason: webGpuRenderer.renderFallbackReason || null,
     materialTextures: webGpuRenderer.materialTextureResources.map(resource => ({ name: resource.textureName, binding: resource.textureBinding, samplerBinding: resource.samplerBinding, width: resource.width, height: resource.height, colorSpace: resource.colorSpace })),
     environmentTexture: webGpuRenderer.environmentTextureInfo || null,
     environmentIrradianceTexture: webGpuRenderer.environmentIrradianceTextureInfo || null,
@@ -1062,6 +1090,27 @@ function stripFunctionsByName(source, names)
     return removeFunctionBlocks(source, extractFunctionBlocks(source).filter(block => nameSet.has(block.name)));
 }
 
+// MtlxPathTracerHostShaderGenerator emits a self-contained fragment: it re-declares
+// its own copies of the shared primitives (PI/epsilon constants, Basis/Volume
+// structs, sampling/Fresnel helpers) that glsl/pathtracing/mtlx/common.glsl also
+// defines, under the identical names. Concatenating both verbatim is a GLSL
+// redefinition error. common.glsl remains authoritative (it is what the rest of
+// the integrator in pathtracer.glsl is tuned against), so only the generator's
+// duplicate copies are removed here; nothing in glsl/pathtracing/mtlx/ is touched.
+function stripHostPrimitiveRedeclarations(source)
+{
+    let result = source
+        .replace(/\bstruct\s+Basis\s*\{[^}]*\}\s*;\s*\n?/, '')
+        .replace(/\bstruct\s+Volume\s*\{[^}]*\}\s*;\s*\n?/, '')
+        .replace(/^[ \t]*const[ \t]+float[ \t]+(?:PI|PDF_EPSILON|DENOM_TOLERANCE|FLT_EPSILON)[ \t]*=[^;]+;[ \t]*\r?\n/gm, '');
+    result = stripFunctionsByName(result, [
+        'localToWorld', 'rand', 'pdfHemisphereCosineWeighted',
+        'sampleHemisphereCosineWeighted', 'FresnelDielectricReflectance',
+        'ggx_ndf_eval', 'ggx_ndf_sample', 'ggx_lambda', 'ggx_G1', 'ggx_G2',
+    ]);
+    return result;
+}
+
 function stripGeneratedBsdfEntrypoints(source)
 {
     let result = source;
@@ -1082,6 +1131,36 @@ function stripGeneratedBsdfEntrypoints(source)
         result = result.slice(0, block.start) + result.slice(block.end);
     }
     return result;
+}
+
+function findGlslTopLevelDeclarations(source) {
+    const declarations = new Set();
+    const declarationPattern = /^\s*(?:(?:layout\s*\([^\n]*\)\s*)?uniform\s+\w+|const\s+\w+|struct\s+\w+|(?:void|bool|int|uint|float|vec[234]|mat[234])\s+)([A-Za-z_]\w*)\s*(?:\(|;|\{)/gm;
+    let match;
+    while ((match = declarationPattern.exec(source)) !== null) declarations.add(match[1]);
+    return declarations;
+}
+
+function assertMtlxAssemblyHasNoDeclarationCollisions(parts) {
+    const owners = new Map();
+    const collisions = new Map();
+    for (const part of parts) {
+        for (const name of findGlslTopLevelDeclarations(part.source)) {
+            const previous = owners.get(name);
+            if (previous && previous !== part.name) {
+                if (!collisions.has(name)) collisions.set(name, new Set([previous]));
+                collisions.get(name).add(part.name);
+            } else if (!previous) {
+                owners.set(name, part.name);
+            }
+        }
+    }
+    if (collisions.size > 0) {
+        const details = [...collisions.entries()]
+            .map(([name, ownersForName]) => `${name} (${[...ownersForName].join(', ')})`)
+            .join(', ');
+        throw new Error(`[mtlx-route] duplicate GLSL declarations during assembly: ${details}`);
+    }
 }
 
 function transformGeneratedMainToFunction(source, functionName)
@@ -1137,15 +1216,15 @@ function emitMtlxMaterialValueFunction(type, name, key, defaultValue)
 }
 
 // Assemble the MTLX route fragment: the generated per-material dispatch
-// (MtlxPathTracerHostShaderGenerator output, renamed to mtlxGen*), a thin bridge
-// mapping the integrator's mtlx_openpbr_* hooks onto it, then the copied
+// (MtlxPathTracerHostShaderGenerator output), which now emits the complete
+// mtlx_openpbr_* pathtracer host hook contract directly, then the copied
 // integrator. Fails explicitly if the generated dispatch is missing, per the MTLX
 // viewer route contract (no legacy fallback).
 function assemble_mtlx_route_dispatch()
 {
     const dispatch = (mtlxRouteDispatchGlsl || '').trim();
-    const hasEval = /\bvec3\s+mtlxGenEvaluateBsdf\s*\(/.test(dispatch);
-    const hasSample = /\bvec3\s+mtlxGenSampleBsdf\s*\(/.test(dispatch);
+    const hasEval = /\bvec3\s+mtlx_openpbr_bsdf_evaluate\s*\(/.test(dispatch);
+    const hasSample = /\bvec3\s+mtlx_openpbr_bsdf_sample\s*\(/.test(dispatch);
     if (!dispatch || (!is_mtlx_bvh_raster_route() && (!hasEval || !hasSample)))
     {
         substitutionRuntimeState.contractStatus = 'invalid';
@@ -1162,13 +1241,6 @@ ${emitRasterGeneratedInputAssignments('')}
 ${emitMtlxMaterialValueFunction('bool', 'mtlx_openpbr_is_opaque', 'opaque', true)}
 ${emitMtlxMaterialValueFunction('bool', 'mtlx_openpbr_is_thinwalled', 'thinWalled', false)}
 ` : `
-vec3 mtlx_openpbr_bsdf_evaluate(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL, inout float pdf_woutputL) {
-    return mtlxGenEvaluateBsdf(pW, basis, winputL, woutputL, MATERIAL_OPENPBR, pdf_woutputL);
-}
-vec3 mtlx_openpbr_bsdf_sample(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed, out vec3 woutputL, out float pdf_woutputL, out Volume internal_medium) {
-    return mtlxGenSampleBsdf(pW, basis, winputL, rndSeed, MATERIAL_OPENPBR, woutputL, pdf_woutputL, internal_medium);
-}
-void mtlx_openpbr_prepare(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed) {}
 vec3 mtlx_openpbr_raster_color(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL) {
     g_ptP = pW;
     g_ptN = basis.nW;
@@ -1182,30 +1254,7 @@ vec3 mtlx_openpbr_raster_color(in vec3 pW, in Basis basis, in vec3 winputL, in v
     g_ptClosureType = CLOSURE_TYPE_INDIRECT;
     return mtlxHostEvalSurface().color;
 }
-// Spatial emission: evaluate the generated surface with the EMISSION closure so only
-// the (possibly graph-driven) emission term contributes -> per-hit emissive bands.
-vec3 mtlx_openpbr_emission_at(in vec3 pW, in Basis basis) {
-    g_ptP = pW;
-    g_ptN = basis.nW;
-    g_ptTangent = basis.tW;
-    g_ptBitangent = basis.bW;
-    g_ptTexcoord = basis.texCoord;
-    g_ptV = basis.nW;
-    g_ptL = basis.nW;
-    g_ptOcclusion = 1.0;
-    g_ptEmitEmission = 1;
-    g_ptClosureType = CLOSURE_TYPE_EMISSION;
-    return mtlxHostEvalSurface().color;
-}
-${emitMtlxMaterialValueFunction('bool', 'mtlx_openpbr_is_opaque', 'opaque', true)}
-${emitMtlxMaterialValueFunction('bool', 'mtlx_openpbr_is_thinwalled', 'thinWalled', false)}
 ${emitMtlxMaterialValueFunction('vec3', 'mtlx_openpbr_emission', 'emission', [0, 0, 0])}
-${emitMtlxMaterialValueFunction('float', 'mtlx_openpbr_thin_film_weight', 'thinFilmWeight', 0)}
-${emitMtlxMaterialValueFunction('float', 'mtlx_openpbr_thin_film_thickness_nm', 'thinFilmThicknessNm', 0)}
-${emitMtlxMaterialValueFunction('float', 'mtlx_openpbr_thin_film_ior', 'thinFilmIor', 1.5)}
-${emitMtlxMaterialValueFunction('float', 'mtlx_openpbr_specular_ior', 'specularIor', 1.5)}
-${emitMtlxMaterialValueFunction('float', 'mtlx_openpbr_specular_roughness', 'specularRoughness', 0.3)}
-${emitMtlxMaterialValueFunction('float', 'mtlx_openpbr_transmission_weight', 'transmissionWeight', 0)}
 `;
     const dispatchBody = is_mtlx_bvh_raster_route()
         ? stripGeneratedBsdfEntrypoints(mtlxRouteDispatchGlsl)
@@ -1213,6 +1262,11 @@ ${emitMtlxMaterialValueFunction('float', 'mtlx_openpbr_transmission_weight', 'tr
     const routeBody = is_mtlx_bvh_raster_route()
         ? glsl_rasterization_mtlx_rasterizer
         : glsl_mtlx_route_pathtracer;
+    assertMtlxAssemblyHasNoDeclarationCollisions([
+        { name: 'dispatch', source: dispatchBody },
+        { name: 'bridge', source: bridge },
+        { name: 'integrator', source: routeBody },
+    ]);
     if (typeof window !== 'undefined') window.__openpbrMtlxDispatch = mtlxRouteDispatchGlsl;
     return dispatchBody + bridge + routeBody;
 }
@@ -1234,6 +1288,31 @@ const DEFAULT_MTLX = `<?xml version="1.0"?>
 // .js offset table with a differently-versioned .data payload.
 const MTLX_RUNTIME_VERSION = 't044-2026-09-16';
 let _mtlxModulePromise = null;
+let _mtlxRenderHostContractPromise = null;
+let _mtlxOfflineWgslManifestPromise = null;
+const mtlxOfflineTranspilation = new URLSearchParams(window.location.search).get('mtlx_transpilation') === 'offline';
+
+async function loadMtlxOfflineWgsl(materialUrl, route) {
+    if (!_mtlxOfflineWgslManifestPromise) {
+        _mtlxOfflineWgslManifestPromise = fetch(APP_BASE_URL + 'mtlx/offline/manifest.json')
+            .then(response => {
+                if (!response.ok) throw new Error(`[mtlx-offline] manifest fetch failed: ${response.status}`);
+                return response.json();
+            });
+    }
+    const manifest = await _mtlxOfflineWgslManifestPromise;
+    const material = new URL(materialUrl, window.location.origin).pathname
+        .replace(/^\/OpenPBR-viewer\//, '')
+        .replace(/^\/+/, '');
+    const entry = (manifest.entries || []).find(item => item.route === route && item.material === material);
+    if (!entry) throw new Error(`[mtlx-offline] no published WGSL for ${route}/${material}; run npm run publish:offline-wgsl`);
+    const response = await fetch(APP_BASE_URL + entry.wgsl);
+    if (!response.ok) throw new Error(`[mtlx-offline] WGSL fetch failed: ${response.status} (${entry.wgsl})`);
+    const source = await response.text();
+    if (!source.trim()) throw new Error(`[mtlx-offline] WGSL asset is empty: ${entry.wgsl}`);
+    return { entry, source: adaptMtlxRenderWgslInterface(source) };
+}
+
 async function loadMtlxModule() {
     if (_mtlxModulePromise) return _mtlxModulePromise;
     // Construct full http:// URL at runtime so Vite's static analyzer
@@ -1251,6 +1330,28 @@ async function loadMtlxModule() {
             locateFile: p => origin + base + 'mtlx/' + p + v
         }));
     return _mtlxModulePromise;
+}
+
+async function loadMtlxRenderHostContract() {
+    if (_mtlxRenderHostContractPromise) return _mtlxRenderHostContractPromise;
+    _mtlxRenderHostContractPromise = fetch(APP_BASE_URL + 'mtlx/render-host-contract.json')
+        .then(response => {
+            if (!response.ok) throw new Error(`[mtlx-webgpu] render host contract fetch failed: ${response.status}`);
+            return response.json();
+        })
+        .then(contract => {
+            const range = contract?.hostBindingRange;
+            const reserved = range?.reservedBindings;
+            if (contract?.glslVersion !== 450 || range?.group !== 0 || range?.firstMaterialBinding !== 15 || !Array.isArray(reserved)) {
+                throw new Error('[mtlx-webgpu] invalid render host binding contract');
+            }
+            const unique = new Set(reserved);
+            if (unique.size !== reserved.length || reserved.some(binding => !Number.isInteger(binding) || binding < 0 || binding >= range.firstMaterialBinding)) {
+                throw new Error('[mtlx-webgpu] render host binding contract has invalid reserved bindings');
+            }
+            return contract;
+        });
+    return _mtlxRenderHostContractPromise;
 }
 
 // Generate GLSL for the path tracer from a .mtlx XML string.
@@ -1323,15 +1424,17 @@ async function generateMtlxRasterDispatch(mtlxText) {
     if (typeof mx.EsslHostShaderGenerator === 'undefined') {
         throw new Error('[mtlx-raster] EsslHostShaderGenerator not exposed by WASM build');
     }
-    const gen = mx.EsslHostShaderGenerator.create();
-    const ctx = new mx.GenContext(gen);
-    const stdlib = mx.loadStandardLibraries(ctx);
-    const doc = mx.createDocument();
+    let gen, ctx, stdlib, doc, elem, shader;
+    try {
+    gen = mx.EsslHostShaderGenerator.create();
+    ctx = new mx.GenContext(gen);
+    stdlib = mx.loadStandardLibraries(ctx);
+    doc = mx.createDocument();
     doc.importLibrary(stdlib);
     await mx.readFromXmlString(doc, mtlxText, '');
-    const elem = mx.findRenderableElement(doc);
+    elem = mx.findRenderableElement(doc);
     if (!elem) throw new Error('[mtlx-raster] No renderable element found in .mtlx');
-    const shader = gen.generate(elem.getNamePath(), elem, ctx);
+    shader = gen.generate(elem.getNamePath(), elem, ctx);
     let glsl = shader.getSourceCode('pixel');
 
     glsl = glsl
@@ -1401,13 +1504,35 @@ async function generateMtlxRasterDispatch(mtlxText) {
         emission:             emissionColor.map(v => v * emissionScale),
     };
 
-    try { shader.delete?.(); } catch {}
-    try { elem.delete?.();   } catch {}
-    try { stdlib.delete?.(); } catch {}
-    try { ctx.delete?.();    } catch {}
-    try { gen.delete?.();    } catch {}
-    try { doc.delete?.();    } catch {}
-    return { glsl, mtlxParams };
+    let wgsl = null;
+    if (params.renderer_backend === 'webgpu') {
+        if (mtlxOfflineTranspilation) {
+            throw new Error('[mtlx-raster] offline WGSL must be loaded before generating raster GLSL');
+        }
+        if (typeof window.__openpbrTranspileGlslToWgsl !== 'function') {
+            throw new Error('[mtlx-raster] GLSL -> SPIR-V -> WGSL transpiler hook is unavailable; refusing WebGL fallback');
+        }
+        const bindingContract = await loadMtlxRenderHostContract();
+        const vulkanGlsl = wrapMtlxRasterGlslForVulkan(glsl, bindingContract);
+        const transpiled = await window.__openpbrTranspileGlslToWgsl({ glsl: vulkanGlsl, stage: 'fragment' });
+        if (!transpiled?.wgsl?.trim()) throw new Error('[mtlx-raster] Transpiler returned empty WGSL');
+        glsl = vulkanGlsl;
+        wgsl = transpiled.wgsl;
+        pendingMtlxWebGpuWgsl = wgsl;
+        mtlxGeneratedWgsl = wgsl;
+        window.__openpbrMtlxRouteDispatchGlsl = glsl;
+        window.__openpbrMtlxGeneratedWgsl = wgsl;
+    }
+
+    return { glsl, wgsl, mtlxParams };
+    } finally {
+        try { shader?.delete?.(); } catch {}
+        try { elem?.delete?.(); } catch {}
+        try { stdlib?.delete?.(); } catch {}
+        try { ctx?.delete?.(); } catch {}
+        try { gen?.delete?.(); } catch {}
+        try { doc?.delete?.(); } catch {}
+    }
 }
 // MtlxPathTracerHostShaderGenerator (feature 003). Unlike generateMtlxGlsl (which
 // uses the forbidden PathTracerGlslShaderGenerator for the substitution path),
@@ -1422,15 +1547,17 @@ async function generateMtlxRouteDispatch(mtlxText) {
     if (typeof mx.MtlxPathTracerHostShaderGenerator === 'undefined') {
         throw new Error('[mtlx-route] MtlxPathTracerHostShaderGenerator not exposed by WASM build');
     }
-    const gen = mx.MtlxPathTracerHostShaderGenerator.create();
-    const ctx = new mx.GenContext(gen);
-    const stdlib = mx.loadStandardLibraries(ctx);
-    const doc = mx.createDocument();
+    let gen, ctx, stdlib, doc, elem, shader;
+    try {
+    gen = mx.MtlxPathTracerHostShaderGenerator.create();
+    ctx = new mx.GenContext(gen);
+    stdlib = mx.loadStandardLibraries(ctx);
+    doc = mx.createDocument();
     doc.importLibrary(stdlib);
     await mx.readFromXmlString(doc, mtlxText, '');
-    const elem = mx.findRenderableElement(doc);
+    elem = mx.findRenderableElement(doc);
     if (!elem) throw new Error('[mtlx-route] No renderable element found in .mtlx');
-    const shader = gen.generate(elem.getNamePath(), elem, ctx);
+    shader = gen.generate(elem.getNamePath(), elem, ctx);
     let glsl = shader.getSourceCode('pixel');
 
     // Strip #version / precision (route provides its own) and the MaterialX
@@ -1440,6 +1567,10 @@ async function generateMtlxRouteDispatch(mtlxText) {
         .replace(/^[ \t]*#version[^\n]*\n/gm, '')
         .replace(/^[ \t]*precision[^\n]*\n/gm, '')
         .replace(/^[ \t]*#define[ \t]+material[ \t]+surfaceshader[ \t]*\r?\n/gm, '');
+    // The generated dispatch is a self-contained fragment; drop its duplicate copies
+    // of the primitives that glsl/pathtracing/mtlx/common.glsl already defines, so
+    // concatenation with the route common/integrator files doesn't redefine them.
+    glsl = stripHostPrimitiveRedeclarations(glsl);
     // Remap MaterialX env-map uniforms to the viewer's symbols (as in generateMtlxGlsl).
     glsl = glsl
         .replace(/^[ \t]*uniform[ \t]+\w+[ \t]+u_envRadiance[ \t]*;[ \t]*\r?\n/gm, '')
@@ -1469,10 +1600,16 @@ async function generateMtlxRouteDispatch(mtlxText) {
 
     // Rename the generated entry points so they don't collide with the route
     // integrator's own evaluateBsdf/sampleBsdf dispatchers.
-    glsl = glsl
-        .replace(/\bevaluateBsdf\b/g, 'mtlxGenEvaluateBsdf')
-        .replace(/\bsampleBsdf\b/g, 'mtlxGenSampleBsdf');
     glsl = glsl.replace(/(g_ptBitangent[ \t]*=[ \t]*basis\.bW;\r?\n)/g, '$1    g_ptTexcoord = basis.texCoord;\n');
+
+    // The generator now emits a complete, self-contained pathtracer host hook
+    // contract (mtlx_openpbr_bsdf_evaluate/_sample/_prepare/_is_opaque/
+    // _is_thinwalled/_emission_at and the folded material-value getters), plus a
+    // bare evaluateBsdf/sampleBsdf pair that only exists to be called internally.
+    // That bare pair collides by name with the route integrator's own
+    // material-switching evaluateBsdf/sampleBsdf (glsl_mtlx_route_pathtracer), so
+    // it is dropped here as dead code; nothing else references it by name.
+    glsl = stripFunctionsByName(glsl, ['evaluateBsdf', 'sampleBsdf']);
 
     // Floor folded roughness literals: a perfectly smooth metal/specular (roughness 0)
     // makes the host GGX BSDF near-delta, which is unsampleable against IBL in the
@@ -1509,13 +1646,15 @@ async function generateMtlxRouteDispatch(mtlxText) {
         emission:             emissionColor.map(v => v * emissionScale),
     };
 
-    try { shader.delete?.(); } catch {}
-    try { elem.delete?.();   } catch {}
-    try { stdlib.delete?.(); } catch {}
-    try { ctx.delete?.();    } catch {}
-    try { gen.delete?.();    } catch {}
-    try { doc.delete?.();    } catch {}
     return { glsl, mtlxParams };
+    } finally {
+        try { shader?.delete?.(); } catch {}
+        try { elem?.delete?.(); } catch {}
+        try { doc?.delete?.(); } catch {}
+        try { stdlib?.delete?.(); } catch {}
+        try { ctx?.delete?.(); } catch {}
+        try { gen?.delete?.(); } catch {}
+    }
 }
 
 // WebGPU owns the GLSL -> SPIR-V -> WGSL boundary. The browser adapter is
@@ -1523,46 +1662,235 @@ async function generateMtlxRouteDispatch(mtlxText) {
 // be supplied a real transpiler hook, rather than falling back to WebGL GLSL or
 // applying text substitutions to generated MaterialX code.
 async function generateMtlxWebGpuDispatch(mtlxText) {
+    if (mtlxOfflineTranspilation) {
+        throw new Error('[mtlx-webgpu] offline WGSL must be loaded before generating host GLSL');
+    }
     const totalStart = performance.now();
     const mx = await loadMtlxModule();
-    if (typeof mx.MtlxPathTracerHostWgslShaderGenerator === 'undefined') {
-        throw new Error('[mtlx-webgpu] MtlxPathTracerHostWgslShaderGenerator not exposed by WASM runtime');
+    const bindingContract = await loadMtlxRenderHostContract();
+    if (typeof mx.MtlxPathTracerHostShaderGenerator === 'undefined') {
+        throw new Error('[mtlx-webgpu] MtlxPathTracerHostShaderGenerator not exposed by WASM runtime');
     }
     if (typeof window.__openpbrTranspileGlslToWgsl !== 'function') {
         throw new Error('[mtlx-webgpu] GLSL -> SPIR-V -> WGSL transpiler hook is unavailable; refusing WebGL fallback');
     }
-    const gen = mx.MtlxPathTracerHostWgslShaderGenerator.create();
-    const ctx = new mx.GenContext(gen);
-    const stdlib = mx.loadStandardLibraries(ctx);
-    const doc = mx.createDocument();
+    let gen, ctx, stdlib, doc, elem, shader;
+    try {
+    gen = mx.MtlxPathTracerHostShaderGenerator.create();
+    ctx = new mx.GenContext(gen);
+    stdlib = mx.loadStandardLibraries(ctx);
+    doc = mx.createDocument();
     doc.importLibrary(stdlib);
     await mx.readFromXmlString(doc, mtlxText, '');
-    const elem = mx.findRenderableElement(doc);
+    elem = mx.findRenderableElement(doc);
     if (!elem) throw new Error('[mtlx-webgpu] No renderable element found in .mtlx');
     const generationStart = performance.now();
-    const shader = gen.generate(elem.getNamePath(), elem, ctx);
-    const glsl = shader.getSourceCode('pixel') || '';
+    shader = gen.generate(elem.getNamePath(), elem, ctx);
+    const hostGlsl = shader.getSourceCode('pixel') || '';
     const generationMs = performance.now() - generationStart;
-    if (!glsl.trim()) throw new Error('[mtlx-webgpu] Host generator returned empty Vulkan GLSL');
+    if (!hostGlsl.trim()) throw new Error('[mtlx-webgpu] Host generator returned empty GLSL');
+    const glsl = wrapMtlxHostGlslForVulkan(hostGlsl, bindingContract);
     const transpileStart = performance.now();
     const result = await window.__openpbrTranspileGlslToWgsl({ glsl, stage: 'fragment' });
     const transpileMs = performance.now() - transpileStart;
     if (!result?.wgsl?.trim()) throw new Error('[mtlx-webgpu] Transpiler returned empty WGSL');
-    pendingMtlxWebGpuWgsl = result.wgsl;
+    const renderWgsl = adaptMtlxRenderWgslInterface(result.wgsl);
+    pendingMtlxWebGpuWgsl = renderWgsl;
     if (webGpuRenderer?.ready) {
         await webGpuRenderer.setMaterialComputeModule(result.wgsl);
     }
-    mtlxGeneratedWgsl = result.wgsl;
+    mtlxGeneratedWgsl = renderWgsl;
     window.__openpbrMtlxRouteDispatchGlsl = glsl;
-    window.__openpbrMtlxGeneratedWgsl = result.wgsl;
+    window.__openpbrMtlxGeneratedWgsl = renderWgsl;
     window.__openpbrMtlxTimings = { generationMs, transpileMs, dispatchTotalMs: performance.now() - totalStart };
-    try { shader.delete?.(); } catch {}
-    try { elem.delete?.(); } catch {}
-    try { stdlib.delete?.(); } catch {}
-    try { ctx.delete?.(); } catch {}
-    try { gen.delete?.(); } catch {}
-    try { doc.delete?.(); } catch {}
-    return { glsl, wgsl: result.wgsl, mtlxParams: summarizeMtlxRouteMaterialParams({ transmissionWeight: 0, transmissionDepth: 0, dispersionScale: 0, thinFilmWeight: 0, geometry_thin_walled: false }) };
+    return { glsl, wgsl: renderWgsl, mtlxParams: summarizeMtlxRouteMaterialParams({ transmissionWeight: 0, transmissionDepth: 0, dispersionScale: 0, thinFilmWeight: 0, geometry_thin_walled: false }) };
+    } finally {
+        try { shader?.delete?.(); } catch {}
+        try { elem?.delete?.(); } catch {}
+        try { doc?.delete?.(); } catch {}
+        try { stdlib?.delete?.(); } catch {}
+        try { ctx?.delete?.(); } catch {}
+        try { gen?.delete?.(); } catch {}
+    }
+}
+
+function adaptMtlxRenderWgslInterface(source) {
+    const entry = /@fragment\s+fn\s+main\s*\(\s*@builtin\(position\)\s+gl_FragCoord:\s*vec4<f32>,\s*@location\(\d+\)\s+vUv:\s*vec2<f32>\s*\)\s*->\s*@location\(0\)\s+vec4<f32>\s*\{/m;
+    if (!entry.test(source)) throw new Error('[mtlx-webgpu-render] transpiled MaterialX WGSL lacks the expected fragment entry interface');
+    return `${source.replace(entry, '@fragment\nfn fragmentMain(input: FullscreenVertexOutput) -> @location(0) vec4<f32> {\n    let gl_FragCoord = input.position;\n    let vUv = input.uv;')}`
+        .replace(/(struct\s+[^\s{]+\s*\{)/, 'struct FullscreenVertexOutput {\n    @builtin(position) position: vec4<f32>,\n    @location(0) uv: vec2<f32>,\n}\n\n$1');
+}
+
+function wrapMtlxHostGlslForVulkan(hostGlsl, bindingContract) {
+    hostGlsl = hostGlsl.replace(/^\s*#version[^\n]*\n/m, '');
+    const promoted = promoteMtlxUniformsForVulkan(hostGlsl, bindingContract);
+    return [
+        '#version 450',
+        '#define MAX_LIGHT_SOURCES 1',
+        '#extension GL_EXT_nonuniform_qualifier : enable',
+        mtlxVulkanHostPreamble(bindingContract, promoted.declarations),
+        'layout(location = 0) out vec4 mtlxFragmentColor;',
+        '#define gl_FragColor mtlxFragmentColor',
+        '// MaterialX host GLSL follows unchanged; Vulkan adaptation is owned by JS/TS.',
+        promoted.source,
+    ].join('\n');
+}
+
+function wrapMtlxRasterGlslForVulkan(rasterGlsl, bindingContract) {
+    if (/^\s*#version\b/m.test(rasterGlsl)) {
+        throw new Error('[mtlx-raster] Raster host GLSL already contains a version directive');
+    }
+    const promoted = promoteMtlxUniformsForVulkan(rasterGlsl, bindingContract);
+    return [
+        '#version 450',
+        '#define MAX_LIGHT_SOURCES 1',
+        mtlxVulkanHostPreamble(bindingContract, promoted.declarations),
+        'layout(location = 0) out vec4 mtlxFragmentColor;',
+        '#define mtlxRasterOut mtlxFragmentColor',
+        '// MaterialX raster host GLSL follows unchanged; Vulkan adaptation is owned by JS/TS.',
+        promoted.source,
+        'void main() { mtlxRasterMain(); }',
+    ].join('\n');
+}
+
+function promoteMtlxUniformsForVulkan(source, bindingContract) {
+    source = source
+        .replace(/vec3\s+mx_latlong_map_lookup\(vec3 dir, mat4 transform, float lod,\s*sampler2D tex_sampler\)\s*\{([\s\S]*?)\n\}/, (_, body) => {
+            const bodyWithRadiance = body.replace(/textureLod\(tex_sampler,\s*uv,\s*lod\)/g, 'texture(envMapLatLong, uv)').replace(/texture\(tex_sampler,/g, 'texture(envMapLatLong,');
+            const bodyWithIrradiance = body.replace(/textureLod\(tex_sampler,\s*uv,\s*lod\)/g, 'texture(envMapIrradiance, uv)').replace(/texture\(tex_sampler,/g, 'texture(envMapIrradiance,');
+            return `vec3 mx_latlong_map_lookup_radiance(vec3 dir, mat4 transform, float lod) {${bodyWithRadiance}\n}\nvec3 mx_latlong_map_lookup_irradiance(vec3 dir, mat4 transform, float lod) {${bodyWithIrradiance}\n}`;
+        })
+        .replace(/mx_latlong_map_lookup\(([^;]*?),\s*u_envIrradiance\)/g, 'mx_latlong_map_lookup_irradiance($1)')
+        .replace(/mx_latlong_map_lookup\(([^;]*?),\s*u_envRadiance\)/g, 'mx_latlong_map_lookup_radiance($1)')
+        .replace(/return\s+textureLod\(tex_sampler,\s*uv,\s*lod\)\.rgb\s*;/g, 'return texture(tex_sampler, uv).rgb;')
+        .replace(/uniform\s+LightData\s+u_lightData\[([^\]]+)\]\s*;/g, 'uniform int u_lightData[$1];')
+        .replace(/sampleLightSource\(LightData\s+light\s*,/g, 'sampleLightSource(int light,');
+    const materialBinding = bindingContract.hostBindingRange.firstMaterialBinding;
+    const blockMembers = [];
+    const opaqueUniforms = [];
+    const combinedSamplers = [];
+    const retainedLines = [];
+    const structTypes = new Set();
+    let binding = materialBinding + 1;
+    for (const line of source.split('\n')) {
+        const structArray = line.trim().match(/^uniform\s+([A-Za-z_]\w*)\s+([A-Za-z_]\w*)\s*\[([^\]]+)\]\s*;$/);
+        if (structArray) {
+            const declarationlessSource = source.replace(line, '');
+            const uses = (declarationlessSource.match(new RegExp(`\\b${structArray[2]}\\b`, 'g')) || []).length;
+            if (uses > 0) {
+                structTypes.add(structArray[1]);
+                blockMembers.push(`    ${structArray[1]} ${structArray[2]}[${structArray[3]}];`);
+            }
+            continue;
+        }
+        const tokens = line.trim().replace(/;\s*$/, '').split(/\s+/);
+        if (tokens.length === 3 && tokens[0] === 'uniform' && /^[A-Za-z_]\w*$/.test(tokens[1]) && /^[A-Za-z_]\w*$/.test(tokens[2])) {
+            const [, type, name] = tokens;
+            if (/^(?:sampler|image|subpassInput)/.test(type)) {
+                if (type === 'sampler2D' || type === 'samplerCube') {
+                    const textureName = `${name}_texture`;
+                    const samplerName = `${name}_sampler`;
+                    const textureType = type === 'samplerCube' ? 'textureCube' : 'texture2D';
+                    opaqueUniforms.push(`layout(set = 0, binding = ${binding++}) uniform ${textureType} ${textureName};`);
+                    opaqueUniforms.push(`layout(set = 0, binding = ${binding++}) uniform sampler ${samplerName};`);
+                    combinedSamplers.push({ name, textureName, samplerName, constructor: type === 'samplerCube' ? 'samplerCube' : 'sampler2D' });
+                } else {
+                    opaqueUniforms.push(`layout(set = 0, binding = ${binding++}) uniform ${type} ${name};`);
+                }
+            } else {
+                blockMembers.push(`    ${type} ${name};`);
+            }
+            continue;
+        }
+        retainedLines.push(line);
+    }
+    const declarations = [];
+    for (const type of structTypes) {
+        const definition = source.match(new RegExp(`struct\\s+${type}\\s*\\{[\\s\\S]*?\\}\\s*;`));
+        if (definition) declarations.push(definition[0]);
+    }
+    if (blockMembers.length > 0) {
+        declarations.push('layout(set = 0, binding = 15, std140) uniform MtlxMaterialUniforms {');
+        declarations.push(...blockMembers);
+        declarations.push('};');
+    }
+    declarations.push(...opaqueUniforms);
+    let body = retainedLines.join('\n');
+    for (const { name, textureName, samplerName, constructor } of combinedSamplers) {
+        body = body.split('\n').map(line => line.trimStart().startsWith('#')
+            ? line
+            : line.replace(new RegExp(`\\b${name}\\b`, 'g'), `${constructor}(${textureName}, ${samplerName})`)).join('\n');
+    }
+    for (const type of structTypes) {
+        body = body.replace(new RegExp(`struct\\s+${type}\\s*\\{[\\s\\S]*?\\}\\s*;`), '');
+    }
+    return { source: body, declarations: declarations.join('\n') };
+}
+
+function mtlxVulkanHostPreamble(bindingContract, resourceDeclarations) {
+    const firstMaterialBinding = bindingContract.hostBindingRange.firstMaterialBinding;
+    return `
+#define MTLX_HOST_BINDING_GROUP 0
+#define MAX_LIGHT_SOURCES 1
+#define MTLX_FIRST_MATERIAL_BINDING ${firstMaterialBinding}
+${resourceDeclarations}
+const float PI = 3.141592653589793;
+const float PI2 = 6.283185307179586;
+const float PDF_EPSILON = 1.0e-6;
+const float DENOM_TOLERANCE = 1.0e-10;
+
+struct Basis {
+    vec3 nW;
+    vec3 tW;
+    vec3 bW;
+    vec3 baryCoord;
+    vec2 texCoord;
+};
+
+struct Volume {
+    vec3 extinction;
+    vec3 albedo;
+    float anisotropy;
+};
+
+void xorshift(inout uint state) {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+}
+
+float rand(inout uint state) {
+    xorshift(state);
+    return float(state) / 4294967296.0;
+}
+
+vec3 safe_normalize(in vec3 value) {
+    return value / max(length(value), DENOM_TOLERANCE);
+}
+
+vec3 worldToLocal(in vec3 value, in Basis basis) {
+    return vec3(dot(value, basis.tW), dot(value, basis.bW), dot(value, basis.nW));
+}
+
+vec3 localToWorld(in vec3 value, in Basis basis) {
+    return basis.tW * value.x + basis.bW * value.y + basis.nW * value.z;
+}
+
+float pdfHemisphereCosineWeighted(in vec3 direction);
+
+vec3 sampleHemisphereCosineWeighted(inout uint state, inout float pdf) {
+    float radius = sqrt(rand(state));
+    float phi = PI2 * rand(state);
+    float z = sqrt(max(0.0, 1.0 - radius * radius));
+    vec3 direction = vec3(radius * cos(phi), radius * sin(phi), z);
+    pdf = pdfHemisphereCosineWeighted(direction);
+    return direction;
+}
+
+float pdfHemisphereCosineWeighted(in vec3 direction) {
+    return max(PDF_EPSILON, max(direction.z, 0.0) / PI);
+}
+`;
 }
 
 async function loadMtlxMaterialLibrary()
@@ -1784,9 +2112,21 @@ var scene_names = {
             mtlxRouteTextureBindings = [];
             mtlxRouteWebGpuTextureManifest = [];
             mtlxRouteLights = [];
-            const result = is_mtlx_bvh_raster_route()
-                ? await generateMtlxRasterDispatch(mtlxText)
-                : await generateMtlxRouteDispatch(mtlxText);
+            let result;
+            if (params.renderer_backend === 'webgpu' && mtlxOfflineTranspilation) {
+                const route = is_mtlx_bvh_raster_route() ? 'rasterizer' : 'pathtracer';
+                const offline = await loadMtlxOfflineWgsl(search.get('mtlx_url') || '', route);
+                pendingMtlxWebGpuWgsl = offline.source;
+                mtlxGeneratedWgsl = offline.source;
+                window.__openpbrMtlxGeneratedWgsl = offline.source;
+                window.__openpbrMtlxOfflineWgsl = offline.entry;
+                result = { glsl: '', mtlxParams: {} };
+                console.log('[mtlx-offline] loaded', offline.entry.wgsl);
+            } else {
+                result = is_mtlx_bvh_raster_route()
+                    ? await generateMtlxRasterDispatch(mtlxText)
+                    : await generateMtlxRouteDispatch(mtlxText);
+            }
             mtlxRouteDispatchGlsl = result.glsl;
             mtlxRouteMaterialSummary = summarizeMtlxRouteMaterialParams(result.mtlxParams);
             mtlxRouteWebGpuTextureManifest = extractMtlxWebGpuTextureManifest(mtlxText, mtlxMaterialBaseUrl);
@@ -1809,7 +2149,7 @@ var scene_names = {
             materialDefines.VOLUME_ENABLED       = hasTransmission && p.transmissionDepth > 0 && !p.geometry_thin_walled;
             materialDefines.TRANSMISSION_ENABLED = hasTransmission && p.dispersionScale > 0;
             materialDefines.THIN_FILM_ENABLED    = p.thinFilmWeight > 0;
-            console.log('[mtlx-route] generated', mtlxRouteDispatchGlsl.split('\n').length, 'lines of dispatch GLSL');
+            console.log(mtlxOfflineTranspilation ? '[mtlx-offline] ready' : '[mtlx-route] generated', mtlxRouteDispatchGlsl.split('\n').length, 'lines of dispatch GLSL');
         } else {
             const result = await generateMtlxGlsl(mtlxText);
             mtlxGeneratedGlsl = result.glsl;
@@ -3090,6 +3430,7 @@ function get_vector3(array3)
 function resetSamples()
 {
     samples = 0;
+    webGpuRenderer?.resetRenderAccumulation();
     updateRendererSceneContract();
 }
 
@@ -3255,7 +3596,10 @@ function render()
             return;
         }
         camera.updateMatrixWorld();
-        if (webGpuRenderer?.render(samples, camera, params.webgpu_debug_mode)) {
+        const rendered = params.webgpu_pipeline === 'render'
+            ? webGpuRenderer?.renderPipelineFrame()
+            : webGpuRenderer?.render(samples, camera, params.webgpu_debug_mode);
+        if (rendered) {
             samples++;
             window.__openpbrSamples = samples;
             updateRendererSceneContract();
@@ -3263,8 +3607,8 @@ function render()
         const samples_txt = document.getElementById('samples');
         const info_txt = document.getElementById('info');
         samples_txt.style.visibility = 'visible';
-        samples_txt.innerText = `webgpu smoke frames: ${ samples }`;
-        info_txt.innerText = 'OpenPBR viewer, WebGPU smoke pipeline';
+        samples_txt.innerText = `webgpu ${params.webgpu_pipeline} frames: ${ samples }`;
+        info_txt.innerText = `OpenPBR viewer, WebGPU ${params.webgpu_pipeline} pipeline`;
         updateProgressOverlay();
         requestAnimationFrame(render);
         return;

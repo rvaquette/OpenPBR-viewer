@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -21,10 +22,10 @@ function fail(code, message, details = '') {
 }
 
 function parseArgs(argv) {
-  const options = { stage: 'comp', keep: true };
+  const options = { stage: 'comp', keep: true, mode: 'standard' };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
-    if (arg === '--input' || arg === '--output' || arg === '--stage' || arg === '--artifacts-dir' || arg === '--entry-point') {
+    if (arg === '--input' || arg === '--output' || arg === '--stage' || arg === '--artifacts-dir' || arg === '--entry-point' || arg === '--mode' || arg === '--manifest') {
       const value = argv[++index];
       if (!value) fail(EXIT_CODES.usage, `Missing value for ${arg}.`);
       options[arg.slice(2)] = value;
@@ -33,7 +34,7 @@ function parseArgs(argv) {
     } else if (arg === '--no-keep-intermediates') {
       options.keep = false;
     } else if (arg === '--help' || arg === '-h') {
-      console.log('Usage: node tools/transpile-glsl-to-wgsl.mjs --input shader.comp.glsl --output shader.comp.wgsl [--stage comp|frag|vert] [--entry-point NAME] [--artifacts-dir DIR] [--no-keep-intermediates]');
+      console.log('Usage: node tools/transpile-glsl-to-wgsl.mjs --input shader.frag.glsl --output shader.frag.wgsl [--mode fragment-render] [--manifest report.json] [--stage comp|frag|vert] [--entry-point NAME] [--artifacts-dir DIR] [--no-keep-intermediates]');
       process.exit(0);
     } else {
       fail(EXIT_CODES.usage, `Unknown argument '${arg}'.`);
@@ -41,6 +42,11 @@ function parseArgs(argv) {
   }
   if (!options.input || !options.output) fail(EXIT_CODES.usage, '--input and --output are required.');
   if (!['comp', 'frag', 'vert'].includes(options.stage)) fail(EXIT_CODES.usage, `Unsupported stage '${options.stage}'.`);
+  if (!['standard', 'fragment-render'].includes(options.mode)) fail(EXIT_CODES.usage, `Unsupported mode '${options.mode}'.`);
+  if (options.mode === 'fragment-render') {
+    options.stage = 'frag';
+    options['entry-point'] = 'main';
+  }
   return options;
 }
 
@@ -62,8 +68,9 @@ const nagaLog = resolve(artifactsDir, 'naga.log');
 if (!existsSync(input)) fail(EXIT_CODES.usage, `Input GLSL file does not exist: ${input}`);
 mkdirSync(artifactsDir, { recursive: true });
 try { unlinkSync(output); } catch {}
+const inputSha256 = createHash('sha256').update(readFileSync(input)).digest('hex');
 
-const glslangArgs = [GLSLANG_WRAPPER, '--input', input, '--output', spv, '--stage', options.stage];
+const glslangArgs = [GLSLANG_WRAPPER, '--input', input, '--output', spv, '--stage', options.stage, '--mode', options.mode];
 if (options['entry-point']) glslangArgs.push('--entry-point', options['entry-point']);
 const glslang = run(process.execPath, glslangArgs);
 writeLog(glslangLog, glslang);
@@ -91,8 +98,26 @@ if (nagaResult.status !== 0) {
   fail(EXIT_CODES.naga, `SPIR-V to WGSL conversion failed. Artifacts preserved in ${artifactsDir}.`, `naga exit=${nagaResult.status}`);
 }
 if (!existsSync(output)) fail(EXIT_CODES.naga, `Naga completed without producing ${output}. Artifacts preserved in ${artifactsDir}.`);
+const spvSha256 = createHash('sha256').update(readFileSync(spv)).digest('hex');
+const wgslSha256 = createHash('sha256').update(readFileSync(output)).digest('hex');
+const manifestPath = resolve(process.cwd(), options.manifest || `${output}.manifest.json`);
+writeFileSync(manifestPath, `${JSON.stringify({
+  version: 1,
+  mode: options.mode,
+  stage: options.stage,
+  entryPoint: options['entry-point'] || 'main',
+  glslangVersion: '15.0.0',
+  nagaVersion: NAGA_CONFIG.version,
+  input: options.input,
+  spirv: spv,
+  output: options.output,
+  inputSha256,
+  spvSha256,
+  wgslSha256,
+  diagnostics: { glslang: glslangLog, naga: nagaLog },
+}, null, 2)}\n`, 'utf8');
 if (!options.keep) {
   // Keep logs for diagnosis; only remove the successful intermediate SPIR-V.
   try { unlinkSync(spv); } catch {}
 }
-console.log(`Transpiled ${input} -> ${output} via glslangValidator and naga ${NAGA_CONFIG.version}.`);
+console.log(`Transpiled ${input} -> ${output} via glslangValidator and naga ${NAGA_CONFIG.version}; manifest=${manifestPath}.`);

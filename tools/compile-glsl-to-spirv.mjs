@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync } from 'node:fs';
+import { unlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -19,15 +21,15 @@ function fail(code, message) {
 }
 
 function parseArgs(argv) {
-  const options = { stage: CONFIG.defaultStage };
+  const options = { stage: CONFIG.defaultStage, mode: 'standard' };
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index];
-    if (arg === '--input' || arg === '--output' || arg === '--stage' || arg === '--entry-point') {
+    if (arg === '--input' || arg === '--output' || arg === '--stage' || arg === '--entry-point' || arg === '--mode' || arg === '--manifest') {
       const value = argv[++index];
       if (!value) fail(EXIT_CODES.usage, `Missing value for ${arg}.`);
       options[arg.slice(2)] = value;
     } else if (arg === '--help' || arg === '-h') {
-      console.log('Usage: node tools/compile-glsl-to-spirv.mjs --input shader.comp.glsl --output shader.comp.spv [--stage comp|frag|vert] [--entry-point NAME]');
+      console.log('Usage: node tools/compile-glsl-to-spirv.mjs --input shader.frag.glsl --output shader.frag.spv [--mode fragment-render] [--manifest report.json] [--stage comp|frag|vert] [--entry-point NAME]');
       process.exit(0);
     } else {
       fail(EXIT_CODES.usage, `Unknown argument '${arg}'.`);
@@ -35,6 +37,11 @@ function parseArgs(argv) {
   }
   if (!options.input || !options.output) fail(EXIT_CODES.usage, '--input and --output are required.');
   if (!['comp', 'frag', 'vert'].includes(options.stage)) fail(EXIT_CODES.usage, `Unsupported stage '${options.stage}'.`);
+  if (!['standard', 'fragment-render'].includes(options.mode)) fail(EXIT_CODES.usage, `Unsupported mode '${options.mode}'.`);
+  if (options.mode === 'fragment-render') {
+    options.stage = 'frag';
+    options['entry-point'] = 'main';
+  }
   return options;
 }
 
@@ -50,6 +57,8 @@ const options = parseArgs(process.argv.slice(2));
 const input = resolve(process.cwd(), options.input);
 const output = resolve(process.cwd(), options.output);
 if (!existsSync(input)) fail(EXIT_CODES.usage, `Input GLSL file does not exist: ${input}`);
+const inputHash = createHash('sha256').update(readFileSync(input)).digest('hex');
+try { unlinkSync(output); } catch {}
 
 const validator = findValidator();
 const args = [
@@ -68,4 +77,19 @@ if (result.error) fail(EXIT_CODES.toolMissing, `Unable to launch glslangValidato
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);
 if (result.status !== 0) fail(EXIT_CODES.compileFailed, `glslangValidator failed with exit code ${result.status}.`);
-console.log(`Compiled ${input} -> ${output} with glslangValidator ${CONFIG.version} (${CONFIG.targetEnv}).`);
+if (!existsSync(output) || readFileSync(output).length === 0) fail(EXIT_CODES.compileFailed, `glslangValidator produced no SPIR-V output: ${output}.`);
+const outputHash = createHash('sha256').update(readFileSync(output)).digest('hex');
+const manifestPath = resolve(process.cwd(), options.manifest || `${output}.manifest.json`);
+writeFileSync(manifestPath, `${JSON.stringify({
+  version: 1,
+  mode: options.mode,
+  stage: options.stage,
+  entryPoint: options['entry-point'] || 'main',
+  targetEnv: CONFIG.targetEnv,
+  glslangVersion: CONFIG.version,
+  input: options.input,
+  output: options.output,
+  inputSha256: inputHash,
+  spirvSha256: outputHash,
+}, null, 2)}\n`, 'utf8');
+console.log(`Compiled ${input} -> ${output} with glslangValidator ${CONFIG.version} (${CONFIG.targetEnv}); manifest=${manifestPath}.`);

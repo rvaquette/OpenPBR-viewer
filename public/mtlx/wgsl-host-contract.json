@@ -1,8 +1,8 @@
 {
   "version": 1,
   "language": "wgsl",
-  "generator": "MtlxPathTracerHostWgslShaderGenerator",
-  "generatorSource": "JsWgslShaderGenerator.cpp",
+  "generator": "MtlxPathTracerHostShaderGenerator",
+  "generatorSource": "JsMtlxPathTracerHostShaderGenerator.cpp",
   "entryPoints": [
     "mtlxGenEvaluateBsdf",
     "mtlxGenSampleBsdf",

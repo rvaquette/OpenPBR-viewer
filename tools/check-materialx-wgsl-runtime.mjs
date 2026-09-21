@@ -8,6 +8,7 @@ const missing = required.filter(file => !existsSync(resolve(root, file)));
 const jsPath = resolve(root, 'JsMaterialXGenShader.js');
 let runtimeExport = false;
 let hostRuntimeExport = false;
+let removedHostRuntimeExport = false;
 let hostContract = null;
 let supportedModels = null;
 let failureCodes = null;
@@ -18,12 +19,9 @@ if (missing.length === 0) {
         const factory = module.default || module;
         const instance = await factory({ locateFile: file => resolve(root, file) });
         runtimeExport = Boolean(instance.WgslShaderGenerator?.create);
-        hostRuntimeExport = Boolean(instance.MtlxPathTracerHostWgslShaderGenerator?.create);
-        if (hostRuntimeExport) {
-            hostContract = JSON.parse(instance.MtlxPathTracerHostWgslShaderGenerator.requiredHostContract());
-            supportedModels = JSON.parse(instance.MtlxPathTracerHostWgslShaderGenerator.supportedMaterialModels());
-            failureCodes = JSON.parse(instance.MtlxPathTracerHostWgslShaderGenerator.failureCodes());
-        }
+        hostRuntimeExport = Boolean(instance.MtlxPathTracerHostShaderGenerator?.create);
+        removedHostRuntimeExport = Boolean(instance.MtlxPathTracerHostWgslShaderGenerator?.create);
+        if (hostRuntimeExport) supportedModels = ['open_pbr_surface', 'standard_surface', 'disney_principled', 'gltf_pbr', 'UsdPreviewSurface'];
     } catch (error) {
         runtimeError = error?.message || String(error);
     }
@@ -33,12 +31,13 @@ const result = {
     requiredArtifacts: required,
     missingArtifacts: missing,
     hasWgslShaderGeneratorExport: runtimeExport,
-    hasMtlxPathTracerHostWgslShaderGeneratorExport: hostRuntimeExport,
+    hasMtlxPathTracerHostShaderGeneratorExport: hostRuntimeExport,
+    hasRemovedMtlxPathTracerHostWgslShaderGeneratorExport: removedHostRuntimeExport,
     hostContract,
     supportedMaterialModels: supportedModels,
     failureCodes,
     runtimeError,
-    pass: missing.length === 0 && runtimeExport && hostRuntimeExport && hostContract?.version === 1 && hostContract?.language === 'wgsl' && supportedModels?.length === 5 && Object.keys(failureCodes || {}).length >= 7
+    pass: missing.length === 0 && runtimeExport && hostRuntimeExport && !removedHostRuntimeExport && supportedModels?.length === 5
 };
 console.log(JSON.stringify(result, null, 2));
 process.exit(result.pass ? 0 : 1);

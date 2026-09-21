@@ -28,8 +28,8 @@ if (!existsSync(runtimePath)) throw new Error(`Missing runtime: ${runtimePath}`)
 const module = await import(`file://${runtimePath.replaceAll('\\', '/')}`);
 const factory = module.default || module;
 const mx = await factory({ locateFile: file => resolve(runtimeRoot, file) });
-const Host = mx.MtlxPathTracerHostWgslShaderGenerator;
-if (!Host?.create) throw new Error('MtlxPathTracerHostWgslShaderGenerator export is missing.');
+const Host = mx.MtlxPathTracerHostShaderGenerator;
+if (!Host?.create) throw new Error('MtlxPathTracerHostShaderGenerator export is missing.');
 
 const requestedFixture = process.env.T043_FIXTURE_ID;
 const fixtures = [...synthetic, ...carpaint].filter(([id]) => !requestedFixture || id === requestedFixture);

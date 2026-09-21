@@ -1,5 +1,5 @@
 var MaterialX = (() => {
-
+  
   return (
 async function(moduleArg = {}) {
   var moduleRtn;
@@ -50,7 +50,7 @@ if (ENVIRONMENT_IS_NODE) {
 
 // --pre-jses are emitted after the Module integration code, so that they can
 // refer to Module (if they choose; they can also define Module)
-// include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpbmrzvl1g.js
+// include: C:\Users\RGISVA~1\AppData\Local\Temp\tmp91xhg1ft.js
 Module["expectedDataFileDownloads"] ??= 0;
 
 Module["expectedDataFileDownloads"]++;
@@ -1452,15 +1452,15 @@ Module["expectedDataFileDownloads"]++;
   });
 })();
 
-// end include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpbmrzvl1g.js
-// include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpw8gry4gg.js
+// end include: C:\Users\RGISVA~1\AppData\Local\Temp\tmp91xhg1ft.js
+// include: C:\Users\RGISVA~1\AppData\Local\Temp\tmp9aa6tmft.js
 // All the pre-js content up to here must remain later on, we need to run
 // it.
 if (Module["$ww"] || (typeof ENVIRONMENT_IS_PTHREAD != "undefined" && ENVIRONMENT_IS_PTHREAD) || (typeof ENVIRONMENT_IS_AUDIO_WORKLET != "undefined" && ENVIRONMENT_IS_AUDIO_WORKLET)) Module["preRun"] = [];
 
 var necessaryPreJSTasks = Module["preRun"].slice();
 
-// end include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpw8gry4gg.js
+// end include: C:\Users\RGISVA~1\AppData\Local\Temp\tmp9aa6tmft.js
 // include: D:/WebGL2/MaterialX/MaterialX-rva/source/JsMaterialX/pre.js
 // Copyright Contributors to the MaterialX Project
 // SPDX-License-Identifier: Apache-2.0
@@ -1542,14 +1542,14 @@ Module.onRuntimeInitialized = function() {
 };
 
 // end include: D:/WebGL2/MaterialX/MaterialX-rva/source/JsMaterialX/pre.js
-// include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpolw6_mw1.js
+// include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpi5rz8wba.js
 if (!Module["preRun"]) throw "Module.preRun should exist because file support used it; did a pre-js delete it?";
 
 necessaryPreJSTasks.forEach(task => {
   if (Module["preRun"].indexOf(task) < 0) throw "All preRun tasks that exist before user pre-js code should remain after; did you replace Module or modify Module.preRun?";
 });
 
-// end include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpolw6_mw1.js
+// end include: C:\Users\RGISVA~1\AppData\Local\Temp\tmpi5rz8wba.js
 var arguments_ = [];
 
 var thisProgram = "./this.program";
@@ -8248,17 +8248,17 @@ function checkIncomingModuleAPI() {
 }
 
 var ASM_CONSTS = {
-  294344: () => {
+  291080: () => {
     Module["TreeIterator"]["prototype"][Symbol.iterator] = function() {
       return this;
     };
   },
-  294428: () => {
+  291164: () => {
     Module["GraphIterator"]["prototype"][Symbol.iterator] = function() {
       return this;
     };
   },
-  294513: () => {
+  291249: () => {
     Module["InheritanceIterator"]["prototype"][Symbol.iterator] = function() {
       return this;
     };
@@ -9342,7 +9342,7 @@ run();
          * - The C++ implementation assumes files to be stored in a filesystem. That works for NodeJS, but not for
          *   browsers, where files will usually be fetched via HTTP.
          * - Fetching files via HTTP is an asynchronous operation, but the C++ implementation is synchronous.
-         *
+         * 
          * The approach taken is as follows:
          * - Determine the environment (NodeJS vs browser)
          * - Resolve and load files according to that environment

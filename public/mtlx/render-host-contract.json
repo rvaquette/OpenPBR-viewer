@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "contract": "webgpu-render-materialx-host",
+  "targetEnv": "vulkan1.2",
+  "glslVersion": 450,
+  "hostBindingRange": {
+    "group": 0,
+    "firstMaterialBinding": 15,
+    "reservedBindings": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+  },
+  "resourcePolicy": "The host owns bindings 0-14. MaterialX resources begin at binding 15. Bindings are declared by the generated GLSL and preserved through SPIR-V and Naga; JavaScript does not rename generated resources.",
+  "stages": ["fragment"],
+  "entryPoint": "main",
+  "output": {
+    "location": 0,
+    "name": "mtlxFragmentColor",
+    "format": "rgba16float"
+  }
+}

@@ -3,6 +3,7 @@ import { BVH_TRAVERSAL_WGSL } from './bvhTraversal.wgsl.js';
 import { INTEGRATOR_WGSL } from './integrator.wgsl.js';
 import { REQUIRED_ADAPTER_LIMITS, validateAdapterLimits, validateMaterialTextureLimits } from './adapterLimits.js';
 import { assembleWgslModules, compileWgslModule, createMaterialWgslBridge } from './wgslModuleAssembler.js';
+import { assembleRenderWgslModules } from './renderWgslModuleAssembler.js';
 
 const COMPUTE_SHADER = /* wgsl */ `
 struct FrameUniforms { width: u32, height: u32, frameIndex: u32, debugMode: u32, nodeCount: u32, triangleCount: u32, lightCount: u32, _padding: u32 }
@@ -272,6 +273,19 @@ fn main() {
 }
 `;
 
+async function constrainBitmapToDeviceLimits(device, bitmap) {
+    const maxDimension = device.limits.maxTextureDimension2D;
+    if (bitmap.width <= maxDimension && bitmap.height <= maxDimension) return bitmap;
+    const scale = Math.min(maxDimension / bitmap.width, maxDimension / bitmap.height);
+    const resized = await createImageBitmap(bitmap, {
+        resizeWidth: Math.max(1, Math.floor(bitmap.width * scale)),
+        resizeHeight: Math.max(1, Math.floor(bitmap.height * scale)),
+        resizeQuality: 'high',
+    });
+    bitmap.close();
+    return resized;
+}
+
 export class WebGpuRenderer {
     constructor({ onStatus, onError } = {}) {
         this.onStatus = onStatus || (() => {});
@@ -290,9 +304,23 @@ export class WebGpuRenderer {
         this.lightDiagnostics = null;
         this.lightReadbackPipeline = null;
         this.materialTextureResources = [];
+        this.renderEnvironmentResources = [];
+        this.renderMaterialResources = [];
         this.materialComputePipeline = null;
         this.materialComputeBindGroup = null;
         this.materialExpectedBindings = [];
+        this.renderPipeline = null;
+        this.renderPipelineSources = null;
+        this.renderBindGroup = null;
+        this.renderMaterialBindings = [];
+        this.renderRequestedBindings = [];
+        this.renderMissingBindings = [];
+        this.renderIncludeHostBindings = true;
+        this.renderPipelineDurationMs = null;
+        this.renderPipelineStageHashes = null;
+        this.renderPipelineMaterialXFinal = false;
+        this.renderPipelineFrameCount = 0;
+        this.renderFallbackReason = null;
     }
 
     async initialize() {
@@ -332,14 +360,23 @@ export class WebGpuRenderer {
         this.groundTexture = this.device.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
         this.device.queue.writeTexture({ texture: this.groundTexture }, new Uint8Array([128, 128, 128, 255]), { bytesPerRow: 4, rowsPerImage: 1 }, [1, 1]);
         this.groundSampler = this.device.createSampler({ addressModeU: 'repeat', addressModeV: 'repeat', magFilter: 'linear', minFilter: 'linear' });
+        this.renderLightsTexture = this.device.createTexture({ size: [1, 1], format: 'rgba32float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+        this.device.queue.writeTexture({ texture: this.renderLightsTexture }, new Float32Array([0, 0, 0, 0]), { bytesPerRow: 16, rowsPerImage: 1 }, [1, 1]);
+        this.renderLightsSampler = this.device.createSampler({ addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge', magFilter: 'nearest', minFilter: 'nearest' });
         this.environmentTexture = this.device.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
         this.device.queue.writeTexture({ texture: this.environmentTexture }, new Uint8Array([20, 30, 50, 255]), { bytesPerRow: 4, rowsPerImage: 1 }, [1, 1]);
+        this.environmentCubeTexture = this.device.createTexture({ size: [1, 1, 6], dimension: '2d', format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+        this.device.queue.writeTexture({ texture: this.environmentCubeTexture }, new Uint8Array([20, 30, 50, 255, 20, 30, 50, 255, 20, 30, 50, 255, 20, 30, 50, 255, 20, 30, 50, 255, 20, 30, 50, 255]), { bytesPerRow: 4, rowsPerImage: 1 }, [1, 1, 6]);
         this.environmentSampler = this.device.createSampler({ addressModeU: 'repeat', addressModeV: 'clamp-to-edge', magFilter: 'linear', minFilter: 'linear' });
         this.environmentIrradianceTexture = this.device.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
         this.device.queue.writeTexture({ texture: this.environmentIrradianceTexture }, new Uint8Array([20, 30, 50, 255]), { bytesPerRow: 4, rowsPerImage: 1 }, [1, 1]);
         this.environmentIrradianceSampler = this.device.createSampler({ addressModeU: 'repeat', addressModeV: 'clamp-to-edge', magFilter: 'linear', minFilter: 'linear' });
-        this.materialPrivateUniformBuffer = this.device.createBuffer({ size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        const materialPrivateUniforms = new ArrayBuffer(80);
+        this.environmentCdfTexture = this.device.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+        this.device.queue.writeTexture({ texture: this.environmentCdfTexture }, new Uint8Array([255, 255, 255, 255]), { bytesPerRow: 4, rowsPerImage: 1 }, [1, 1]);
+        this.environmentCdfSampler = this.device.createSampler({ addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge', magFilter: 'nearest', minFilter: 'nearest' });
+        this.refreshRenderEnvironmentResources();
+        this.materialPrivateUniformBuffer = this.device.createBuffer({ size: 512, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        const materialPrivateUniforms = new ArrayBuffer(512);
         const materialPrivateView = new DataView(materialPrivateUniforms);
         for (let index = 0; index < 4; index++) materialPrivateView.setFloat32(index * 20, 1, true);
         materialPrivateView.setFloat32(64, 1, true);
@@ -394,6 +431,133 @@ export class WebGpuRenderer {
         return this.withValidationScope(() => this.device.createComputePipeline({ layout: 'auto', compute: { module, entryPoint: 'main' } }));
     }
 
+    async createRenderPipeline({ vertexSource, fragmentSource, vertexEntryPoint = 'fullscreenTriangleVertex', fragmentEntryPoint = 'fragmentMain', layout = 'auto' } = {}) {
+        if (!this.device) throw new Error('WebGPU render pipeline requires an initialized device.');
+        if (!vertexSource?.trim() || !fragmentSource?.trim()) throw new Error('WebGPU render pipeline sources cannot be empty.');
+        const start = performance.now();
+        const hash = async source => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(source))), byte => byte.toString(16).padStart(2, '0')).join('');
+        this.renderPipelineStageHashes = { vertex: await hash(vertexSource), fragment: await hash(fragmentSource) };
+        const vertexModule = await compileWgslModule(this.device, vertexSource, 'WebGPU render vertex shader');
+        const fragmentModule = await compileWgslModule(this.device, fragmentSource, 'WebGPU render fragment shader');
+        const pipeline = await this.withValidationScope(() => this.device.createRenderPipelineAsync({
+            layout,
+            vertex: { module: vertexModule.module, entryPoint: vertexEntryPoint },
+            fragment: { module: fragmentModule.module, entryPoint: fragmentEntryPoint, targets: [{ format: this.format }] },
+            primitive: { topology: 'triangle-list' },
+        }), 'validation');
+        this.renderPipeline = pipeline;
+        this.renderPipelineDurationMs = performance.now() - start;
+        this.renderFallbackReason = null;
+        this.renderPipelineSources = { vertexSource, fragmentSource, vertexEntryPoint, fragmentEntryPoint };
+        this.onStatus({ state: 'ready', renderPipeline: true, renderPipelineEntryPoints: { vertex: vertexEntryPoint, fragment: fragmentEntryPoint } });
+        return pipeline;
+    }
+
+    async prepareRenderPipeline({ vertexSource, fragmentSource, materialBindings = [], hostBindings = [], vertexEntryPoint = 'fullscreenTriangleVertex', fragmentEntryPoint = 'fragmentMain', materialXFinal = false } = {}) {
+        console.log('[webgpu-render] prepare pipeline', { materialXFinal, materialBindings: materialBindings.length, hostBindings: hostBindings.length });
+        const hasMaterialXProvenance = /mtlxGen[A-Za-z0-9_]+/.test(fragmentSource)
+            || /\/\/ openpbr-offline-materialx-wgsl\b/.test(fragmentSource);
+        if (materialXFinal && (!/@fragment\s+fn\s+fragmentMain\s*\(/.test(fragmentSource) || !hasMaterialXProvenance)) {
+            throw new Error('Final MaterialX render fragment signature is missing; refusing the T030 smoke fragment.');
+        }
+        const assembled = assembleRenderWgslModules({
+            vertex: vertexSource,
+            fragment: fragmentSource,
+            vertexEntryPoint,
+            fragmentEntryPoint,
+            hostBindings,
+        });
+        await this.createRenderPipeline({
+            vertexSource,
+            fragmentSource,
+            vertexEntryPoint,
+            fragmentEntryPoint,
+        });
+        this.renderPipelineMaterialXFinal = materialXFinal;
+        this.renderRequestedBindings = [...new Set([...hostBindings.map(binding => binding.binding), ...materialBindings])].sort((a, b) => a - b);
+        this.renderIncludeHostBindings = hostBindings.length > 0;
+        if (this.accumulationTextures) {
+            this.createRenderBindGroups({ materialBindings: this.renderRequestedBindings, includeHostBindings: this.renderIncludeHostBindings });
+        }
+        console.log('[webgpu-render] pipeline ready', { materialXFinal: this.renderPipelineMaterialXFinal, bindGroup: Boolean(this.renderBindGroup), requestedBindings: this.renderRequestedBindings.length, missingBindings: this.renderMissingBindings });
+        return assembled;
+    }
+
+    createRenderBindGroups({ materialBindings = [], includeHostBindings = true } = {}) {
+        if (!this.device || !this.renderPipeline) {
+            this.renderFallbackReason = 'render_pipeline_unavailable';
+            throw new Error('Render pipeline must exist before creating render bind groups.');
+        }
+        const required = [
+            ['frameBuffer', this.frameBuffer],
+            ['cameraBuffer', this.cameraBuffer],
+            ['stackOverflowBuffer', this.stackOverflowBuffer],
+            ['groundTexture', this.groundTexture],
+            ['groundSampler', this.groundSampler],
+            ['environmentTexture', this.environmentTexture],
+            ['environmentSampler', this.environmentSampler],
+            ['lightingBuffer', this.lightingBuffer],
+            ['lightsBuffer', this.lightsBuffer],
+        ];
+        if (includeHostBindings) for (const [name, resource] of required) if (!resource) throw new Error(`Render bind group resource missing: ${name}`);
+        const output = this.accumulationTextures?.[this.accumulationIndex];
+        const previous = this.accumulationTextures?.[1 - this.accumulationIndex];
+        if (includeHostBindings && (!output || !previous)) throw new Error('Render accumulation textures are unavailable.');
+        const hostEntries = includeHostBindings ? [
+            { binding: 0, resource: output.createView() },
+            { binding: 1, resource: { buffer: this.frameBuffer } },
+            { binding: 2, resource: { buffer: this.sceneBuffers?.nodes || this.emptyNodeBuffer } },
+            { binding: 3, resource: { buffer: this.sceneBuffers?.triangleIndices || this.emptyIndexBuffer } },
+            { binding: 4, resource: { buffer: this.sceneBuffers?.positions || this.emptyPositionBuffer } },
+            { binding: 5, resource: { buffer: this.stackOverflowBuffer } },
+            { binding: 6, resource: { buffer: this.cameraBuffer } },
+            { binding: 7, resource: previous.createView() },
+            { binding: 8, resource: this.groundTexture.createView() },
+            { binding: 9, resource: this.groundSampler },
+            { binding: 10, resource: { buffer: this.lightsBuffer } },
+            { binding: 11, resource: { buffer: this.lightingBuffer } },
+            { binding: 12, resource: this.environmentTexture.createView() },
+            { binding: 13, resource: this.environmentSampler },
+            { binding: 14, resource: { buffer: this.sceneBuffers?.normals || this.emptyPositionBuffer } },
+        ] : [];
+        const sceneTextures = this.sceneBuffers?.renderTextures;
+        const sceneSampler = this.sceneBuffers?.renderSampler;
+        const materialEntries = [
+            { binding: 15, resource: { buffer: this.materialPrivateUniformBuffer } },
+            ...this.renderEnvironmentResources,
+            { binding: 22, resource: sceneTextures?.nodes?.createView(), name: 'bvh_surface_nodes_texture' },
+            { binding: 23, resource: sceneSampler, name: 'bvh_surface_nodes_sampler' },
+            { binding: 24, resource: sceneTextures?.triangleIndices?.createView(), name: 'bvh_surface_indices_texture' },
+            { binding: 25, resource: sceneSampler, name: 'bvh_surface_indices_sampler' },
+            { binding: 26, resource: sceneTextures?.positions?.createView(), name: 'bvh_surface_positions_texture' },
+            { binding: 27, resource: sceneSampler, name: 'bvh_surface_positions_sampler' },
+            { binding: 28, resource: sceneTextures?.normals?.createView(), name: 'geomN_surface_texture' },
+            { binding: 29, resource: sceneSampler, name: 'geomN_surface_sampler' },
+            { binding: 30, resource: sceneTextures?.tangents?.createView(), name: 'geomT_surface_texture' },
+            { binding: 31, resource: sceneSampler, name: 'geomT_surface_sampler' },
+            { binding: 32, resource: sceneTextures?.uvs?.createView(), name: 'geomS_surface_texture' },
+            { binding: 33, resource: sceneSampler, name: 'geomS_surface_sampler' },
+            { binding: 34, resource: this.groundTexture.createView(), name: 'ground_texture_texture' },
+            { binding: 35, resource: this.groundSampler, name: 'ground_texture_sampler' },
+            { binding: 40, resource: this.renderLightsTexture.createView(), name: 'mtlxLightsTex_texture' },
+            { binding: 41, resource: this.renderLightsSampler, name: 'mtlxLightsTex_sampler' },
+            ...this.renderMaterialResources,
+        ];
+        const entries = [...hostEntries, ...materialEntries].filter(entry => entry.resource);
+        const requested = new Set(materialBindings.length ? materialBindings : hostEntries.map(entry => entry.binding));
+        const selected = entries.filter(entry => requested.has(entry.binding));
+        const supplied = new Set(selected.map(entry => entry.binding));
+        this.renderRequestedBindings = [...requested].sort((a, b) => a - b);
+        this.renderMissingBindings = [...requested].filter(binding => !supplied.has(binding)).sort((a, b) => a - b);
+        if (this.renderMissingBindings.length) throw new Error(`Render bind group resources missing for bindings ${this.renderMissingBindings.join(', ')}.`);
+        this.renderBindGroup = this.device.createBindGroup({ layout: this.renderPipeline.getBindGroupLayout(0), entries: selected });
+        this.renderFallbackReason = null;
+        this.renderMaterialBindings = [...requested].sort((a, b) => a - b);
+        this.renderIncludeHostBindings = includeHostBindings;
+        console.log('[webgpu-render] bind group ready', { bindings: this.renderMaterialBindings, missingBindings: this.renderMissingBindings });
+        return this.renderBindGroup;
+    }
+
     async setMaterialComputeModule(source) {
         const pipelineStart = performance.now();
         if (!source || !source.trim()) {
@@ -443,7 +607,6 @@ export class WebGpuRenderer {
         const module = this.device.createShaderModule({ code: PRESENT_SHADER });
         const info = await module.getCompilationInfo();
         const errors = info.messages.filter(message => message.type === 'error');
-        if (errors.length) throw new Error(errors.map(message => message.message).join('\n'));
         return this.withValidationScope(() => this.device.createRenderPipelineAsync({
             layout: 'auto', vertex: { module, entryPoint: 'vertexMain' },
             fragment: { module, entryPoint: 'fragmentMain', targets: [{ format: this.format }] },
@@ -468,11 +631,14 @@ export class WebGpuRenderer {
         this.accumulationTextures?.forEach(texture => texture.destroy());
         this.frameBuffer?.destroy();
         this.device.pushErrorScope('out-of-memory');
-        this.accumulationTextures = [0, 1].map(() => this.device.createTexture({ size: [width, height], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC }));
+        this.accumulationTextures = [0, 1].map(() => this.device.createTexture({ size: [width, height], format: 'rgba16float', usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT }));
         this.device.popErrorScope().then(error => { if (error) this.onError(`WebGPU out-of-memory error while resizing to ${width}x${height}: ${error.message}`); });
         this.accumulationIndex = 0;
         this.frameBuffer = this.device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this.createBindGroups();
+        if (this.renderPipeline && this.renderRequestedBindings.length && this.sceneBuffers) {
+            this.createRenderBindGroups({ materialBindings: this.renderRequestedBindings, includeHostBindings: this.renderIncludeHostBindings });
+        }
     }
 
     createBindGroups() {
@@ -524,7 +690,8 @@ export class WebGpuRenderer {
         }
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Ground texture fetch failed: ${response.status} ${url}`);
-        const bitmap = await createImageBitmap(await response.blob());
+        let bitmap = await createImageBitmap(await response.blob());
+        bitmap = await constrainBitmapToDeviceLimits(this.device, bitmap);
         const texture = this.device.createTexture({ size: [bitmap.width, bitmap.height], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
         this.device.queue.copyExternalImageToTexture({ source: bitmap, flipY: true }, { texture }, [bitmap.width, bitmap.height]);
         this.groundTexture?.destroy();
@@ -533,6 +700,9 @@ export class WebGpuRenderer {
         bitmap.close();
         this.onStatus({ state: 'ready', groundTexture: this.groundTextureInfo });
         if (this.accumulationTextures) this.createBindGroups();
+        if (this.renderPipeline && this.renderRequestedBindings.length && this.sceneBuffers) {
+            this.createRenderBindGroups({ materialBindings: this.renderRequestedBindings, includeHostBindings: this.renderIncludeHostBindings });
+        }
     }
 
     async setEnvironmentTexture(url) {
@@ -546,15 +716,20 @@ export class WebGpuRenderer {
         if (!this.device) { this.pendingEnvironmentUrl = url; return; }
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Environment texture fetch failed: ${response.status} ${url}`);
-        const bitmap = await createImageBitmap(await response.blob());
+        let bitmap = await createImageBitmap(await response.blob());
+        bitmap = await constrainBitmapToDeviceLimits(this.device, bitmap);
         const texture = this.device.createTexture({ size: [bitmap.width, bitmap.height], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
         this.device.queue.copyExternalImageToTexture({ source: bitmap }, { texture }, [bitmap.width, bitmap.height]);
         this.environmentTexture?.destroy();
         this.environmentTexture = texture;
         this.environmentTextureInfo = { url, width: bitmap.width, height: bitmap.height, fallback: false };
+        this.refreshRenderEnvironmentResources();
         bitmap.close();
         this.onStatus({ state: 'ready', environmentTexture: this.environmentTextureInfo });
         if (this.accumulationTextures) this.createBindGroups();
+        if (this.renderPipeline && this.renderRequestedBindings.length) {
+            this.createRenderBindGroups({ materialBindings: this.renderRequestedBindings, includeHostBindings: this.renderIncludeHostBindings });
+        }
     }
 
     async setEnvironmentIrradianceTexture(url) {
@@ -568,16 +743,21 @@ export class WebGpuRenderer {
         if (!this.device) return;
         const response = await fetch(url);
         if (!response.ok) throw new Error(`Environment irradiance texture fetch failed: ${response.status} ${url}`);
-        const bitmap = await createImageBitmap(await response.blob());
+        let bitmap = await createImageBitmap(await response.blob());
+        bitmap = await constrainBitmapToDeviceLimits(this.device, bitmap);
         const texture = this.device.createTexture({ size: [bitmap.width, bitmap.height], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
         this.device.queue.copyExternalImageToTexture({ source: bitmap }, { texture }, [bitmap.width, bitmap.height]);
         this.environmentIrradianceTexture?.destroy();
         this.environmentIrradianceTexture = texture;
         const info = { url, width: bitmap.width, height: bitmap.height, fallback: false };
         this.environmentIrradianceTextureInfo = info;
+        this.refreshRenderEnvironmentResources();
         bitmap.close();
         this.onStatus({ state: 'ready', environmentIrradianceTexture: info });
         if (this.accumulationTextures) this.createBindGroups();
+        if (this.renderPipeline && this.renderRequestedBindings.length && this.sceneBuffers) {
+            this.createRenderBindGroups({ materialBindings: this.renderRequestedBindings, includeHostBindings: this.renderIncludeHostBindings });
+        }
     }
 
     async setMaterialTextureManifest(manifest = []) {
@@ -602,7 +782,8 @@ export class WebGpuRenderer {
             }
             const response = await fetch(entry.url);
             if (!response.ok) throw new Error(`MaterialX texture fetch failed: ${response.status} ${entry.url}`);
-            const bitmap = await createImageBitmap(await response.blob());
+            let bitmap = await createImageBitmap(await response.blob());
+            bitmap = await constrainBitmapToDeviceLimits(this.device, bitmap);
             if (bitmap.width < 1 || bitmap.height < 1) {
                 bitmap.close();
                 throw new Error(`MaterialX texture has invalid dimensions: ${entry.url}`);
@@ -629,15 +810,49 @@ export class WebGpuRenderer {
         }
         this.materialTextureResources.forEach(resource => resource.texture.destroy());
         this.materialTextureResources = resources;
+        this.renderMaterialResources = resources.flatMap(resource => [
+            { binding: resource.textureBinding, resource: resource.texture.createView(), name: resource.textureName, kind: 'texture' },
+            { binding: resource.samplerBinding, resource: resource.samplerResource, name: resource.samplerResource, kind: 'sampler' },
+        ]);
         if (this.accumulationTextures) this.createBindGroups();
+        if (this.renderPipeline && this.renderRequestedBindings.length && this.sceneBuffers) {
+            this.createRenderBindGroups({ materialBindings: this.renderRequestedBindings, includeHostBindings: this.renderIncludeHostBindings });
+        }
         this.onStatus({ state: 'ready', materialBindGroup: Boolean(this.materialComputeBindGroup), materialTextures: resources.map(resource => ({ name: resource.textureName, width: resource.width, height: resource.height, group: resource.group, textureBinding: resource.textureBinding, samplerBinding: resource.samplerBinding, colorSpace: resource.colorSpace })) });
         return { pending: false, count: resources.length, limits: limitSummary };
+    }
+
+    refreshRenderEnvironmentResources() {
+        if (!this.environmentTexture || !this.environmentSampler || !this.environmentIrradianceTexture || !this.environmentIrradianceSampler) return;
+        const latLong = this.environmentTexture.createView();
+        const cube = this.environmentCubeTexture.createView({ dimension: 'cube' });
+        const irradiance = this.environmentIrradianceTexture.createView();
+        const cdf = this.environmentCdfTexture?.createView();
+        this.renderEnvironmentResources = [
+            { binding: 16, resource: cube, name: 'envMap_texture' },
+            { binding: 17, resource: this.environmentSampler, name: 'envMap_sampler' },
+            { binding: 18, resource: latLong, name: 'envMapLatLong_texture' },
+            { binding: 19, resource: this.environmentSampler, name: 'envMapLatLong_sampler' },
+            { binding: 20, resource: irradiance, name: 'envMapIrradiance_texture' },
+            { binding: 21, resource: this.environmentIrradianceSampler, name: 'envMapIrradiance_sampler' },
+            { binding: 36, resource: latLong, name: 'envMapEquirect_texture' },
+            { binding: 37, resource: this.environmentSampler, name: 'envMapEquirect_sampler' },
+            { binding: 38, resource: cdf, name: 'envMapCDFTex_texture' },
+            { binding: 39, resource: this.environmentCdfSampler, name: 'envMapCDFTex_sampler' },
+            { binding: 42, resource: latLong, name: 'u_envRadiance_texture' },
+            { binding: 43, resource: this.environmentSampler, name: 'u_envRadiance_sampler' },
+            { binding: 44, resource: irradiance, name: 'u_envIrradiance_texture' },
+            { binding: 45, resource: this.environmentIrradianceSampler, name: 'u_envIrradiance_sampler' },
+        ];
     }
 
     createMaterialTextureBindGroup(pipeline) {
         if (!pipeline) throw new Error('A MaterialX WebGPU pipeline is required to bind textures.');
         if (pipeline !== this.materialComputePipeline) throw new Error('MaterialX texture bindings must target the active MaterialX compute pipeline.');
         this.createBindGroups();
+        if (this.renderPipeline && this.renderRequestedBindings.length) {
+            this.createRenderBindGroups({ materialBindings: this.renderRequestedBindings, includeHostBindings: this.renderIncludeHostBindings });
+        }
         if (!this.materialComputeBindGroup) throw new Error('MaterialX bind group is incomplete: one or more declared resources are missing.');
         return this.materialComputeBindGroup;
     }
@@ -797,6 +1012,44 @@ export class WebGpuRenderer {
         return true;
     }
 
+    renderPipelineFrame() {
+        if (!this.ready || !this.renderPipeline || !this.renderBindGroup || !this.accumulationTextures) {
+            this.renderFallbackReason = !this.ready ? 'renderer_not_ready' : !this.renderPipeline ? 'render_pipeline_unavailable' : !this.renderBindGroup ? 'render_bind_group_unavailable' : 'accumulation_unavailable';
+            return false;
+        }
+        const output = this.renderIncludeHostBindings
+            ? this.accumulationTextures[this.accumulationIndex]
+            : this.context.getCurrentTexture();
+        const encoder = this.device.createCommandEncoder();
+        const pass = encoder.beginRenderPass({
+            colorAttachments: [{
+                view: output.createView(),
+                loadOp: 'clear',
+                storeOp: 'store',
+                clearValue: [0, 0, 0, 1],
+            }],
+        });
+        pass.setPipeline(this.renderPipeline);
+        pass.setBindGroup(0, this.renderBindGroup);
+        pass.draw(3);
+        pass.end();
+        this.device.queue.submit([encoder.finish()]);
+        this.renderPipelineFrameCount++;
+        console.log('[webgpu-render] frame submitted', { frameCount: this.renderPipelineFrameCount, bindGroup: Boolean(this.renderBindGroup), gpuError: this.lastGpuError || null });
+        if (this.renderIncludeHostBindings) {
+            this.accumulationIndex = 1 - this.accumulationIndex;
+            this.createRenderBindGroups({ materialBindings: this.renderMaterialBindings, includeHostBindings: this.renderIncludeHostBindings });
+        }
+        return true;
+    }
+
+    resetRenderAccumulation() {
+        if (!this.accumulationTextures) return;
+        this.accumulationIndex = 0;
+        this.createBindGroups();
+        if (this.renderPipeline) this.createRenderBindGroups({ materialBindings: this.renderMaterialBindings, includeHostBindings: this.renderIncludeHostBindings });
+    }
+
     async readAccumulationPixel(x = 0, y = 0) {
         if (!this.device || !this.accumulationTextures?.length) return null;
         await this.device.queue.onSubmittedWorkDone();
@@ -912,14 +1165,22 @@ export class WebGpuRenderer {
         this.cameraBuffer = null;
         this.groundTexture?.destroy();
         this.groundTexture = null;
+        this.renderLightsTexture?.destroy();
+        this.renderLightsTexture = null;
         this.environmentTexture?.destroy();
         this.environmentTexture = null;
+        this.environmentCubeTexture?.destroy();
+        this.environmentCubeTexture = null;
         this.environmentIrradianceTexture?.destroy();
         this.environmentIrradianceTexture = null;
+        this.environmentCdfTexture?.destroy();
+        this.environmentCdfTexture = null;
         this.materialPrivateUniformBuffer?.destroy();
         this.materialPrivateUniformBuffer = null;
         this.materialTextureResources.forEach(resource => resource.texture.destroy());
         this.materialTextureResources = [];
+        this.renderEnvironmentResources = [];
+        this.renderMaterialResources = [];
         this.accumulationTextures?.forEach(texture => texture.destroy());
         this.accumulationTextures = null;
         this.frameBuffer?.destroy();

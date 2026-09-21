@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "contract": "webgpu-render-materialx-module",
+  "language": "wgsl",
+  "pipeline": "GPURenderPipeline",
+  "stages": {
+    "vertex": {
+      "entryPoint": "fullscreenTriangleVertex",
+      "source": "src/webgpu/fullscreenTriangle.wgsl.js",
+      "outputs": {
+        "position": "@builtin(position) vec4<f32>",
+        "uv": "@location(0) vec2<f32>"
+      }
+    },
+    "fragment": {
+      "entryPoint": "fragmentMain",
+      "input": "FullscreenVertexOutput",
+      "output": "@location(0) vec4<f32>",
+      "targetFormat": "rgba16float"
+    }
+  },
+  "interfaces": {
+    "FullscreenVertexOutput": {
+      "position": "@builtin(position) vec4<f32>",
+      "uv": "@location(0) vec2<f32>"
+    }
+  },
+  "bindings": [
+    { "group": 0, "binding": 0, "kind": "storage_texture_2d", "name": "accumulation_output", "format": "rgba16float", "access": "write" },
+    { "group": 0, "binding": 1, "kind": "uniform", "name": "frame", "type": "RenderUniforms" },
+    { "group": 0, "binding": 2, "kind": "storage_read", "name": "bvhNodes", "type": "BvhNode[]" },
+    { "group": 0, "binding": 3, "kind": "storage_read", "name": "bvhIndices", "type": "TriangleIndices[]" },
+    { "group": 0, "binding": 4, "kind": "storage_read", "name": "bvhPositions", "type": "vec4<f32>[]" },
+    { "group": 0, "binding": 5, "kind": "storage_atomic", "name": "bvhStackOverflow", "type": "atomic<u32>" },
+    { "group": 0, "binding": 6, "kind": "uniform", "name": "camera", "type": "CameraUniforms" },
+    { "group": 0, "binding": 7, "kind": "texture_2d", "name": "previousAccumulation", "type": "f32" },
+    { "group": 0, "binding": 8, "kind": "texture_2d", "name": "groundTexture", "type": "f32" },
+    { "group": 0, "binding": 9, "kind": "sampler", "name": "groundSampler" },
+    { "group": 0, "binding": 10, "kind": "storage_read", "name": "lights", "type": "Light[]" },
+    { "group": 0, "binding": 11, "kind": "uniform", "name": "lighting", "type": "LightingUniforms" },
+    { "group": 0, "binding": 12, "kind": "texture_2d", "name": "environmentTexture", "type": "f32" },
+    { "group": 0, "binding": 13, "kind": "sampler", "name": "environmentSampler" },
+    { "group": 0, "binding": 14, "kind": "storage_read", "name": "bvhNormals", "type": "vec4<f32>[]" }
+  ],
+  "materialResources": {
+    "group": 0,
+    "firstBinding": 15,
+    "bindingPolicy": "MaterialX resources retain generated names and use bindings at or above 15; JavaScript does not rename them."
+  },
+  "primitive": {
+    "topology": "triangle-list",
+    "vertexCount": 3,
+    "colorTargets": [{ "format": "rgba16float" }]
+  }
+}

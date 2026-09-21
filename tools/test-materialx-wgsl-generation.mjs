@@ -10,8 +10,8 @@ if (!existsSync(runtimePath) || !existsSync(materialPath)) throw new Error('WGSL
 const module = await import(`file://${runtimePath.replaceAll('\\', '/')}`);
 const factory = module.default || module;
 const mx = await factory({ locateFile: file => resolve(runtimeRoot, file) });
-const Host = mx.MtlxPathTracerHostWgslShaderGenerator;
-if (!Host?.create) throw new Error('MtlxPathTracerHostWgslShaderGenerator export is missing.');
+const Host = mx.MtlxPathTracerHostShaderGenerator;
+if (!Host?.create) throw new Error('MtlxPathTracerHostShaderGenerator export is missing.');
 const generator = Host.create();
 const context = new mx.GenContext(generator);
 const document = mx.createDocument();
@@ -23,4 +23,4 @@ const shader = generator.generate(element.getNamePath(), element, context);
 const stage = 'pixel';
 const sources = { pixel: shader.getSourceCode(stage) || '' };
 if (!stage) throw new Error('WGSL host generator returned no stage source.');
-console.log(JSON.stringify({ material: materialPath, stage, sourceLength: sources[stage].length, hostContract: JSON.parse(Host.requiredHostContract()), pass: true }, null, 2));
+console.log(JSON.stringify({ material: materialPath, stage, sourceLength: sources[stage].length, generator: 'MtlxPathTracerHostShaderGenerator', pass: true }, null, 2));

@@ -17,6 +17,36 @@ function createStorageBuffer(device, data) {
     return buffer;
 }
 
+function createRenderTexture(device, data) {
+    const texelCount = Math.max(1, Math.ceil(data.length / 4));
+    const maxDimension = device.limits.maxTextureDimension2D;
+    const preferredWidth = Math.ceil(Math.sqrt(texelCount) / 16) * 16;
+    const width = Math.min(maxDimension, Math.max(16, preferredWidth));
+    const height = Math.ceil(texelCount / width);
+    if (height > maxDimension) {
+        throw new Error(`BVH render texture requires ${texelCount} texels, exceeding the device ${maxDimension}x${maxDimension} texture limit.`);
+    }
+    const texture = device.createTexture({
+        size: [width, height, 1],
+        format: 'rgba32float',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    const paddedTexelCount = width * height;
+    const padded = data.length === paddedTexelCount * 4 ? data : new Float32Array(paddedTexelCount * 4);
+    if (padded !== data) padded.set(data);
+    device.queue.writeTexture(
+        { texture },
+        padded,
+        { bytesPerRow: width * 16, rowsPerImage: height },
+        { width, height, depthOrArrayLayers: 1 },
+    );
+    return texture;
+}
+
+function createRenderSampler(device) {
+    return device.createSampler({ magFilter: 'nearest', minFilter: 'nearest', mipmapFilter: 'nearest' });
+}
+
 export function createWebGpuSceneBuffers(device, bvh) {
     const translated = new BvhTranslator(bvh);
     const triangleIndices = new Uint32Array(translated.triangleIndices.length);
@@ -27,6 +57,7 @@ export function createWebGpuSceneBuffers(device, bvh) {
     const tangents = attributeToVec4(attributes.tangent, [1, 0, 0, 1]);
     const uvs = attributeToVec4(attributes.uv, [0, 0, 0, 0]);
     const neutralFlags = attributeToVec4(attributes.neutralFlag, [0, 0, 0, 0]);
+    const renderSampler = createRenderSampler(device);
     return {
         nodeCount: bvh.nodes.length,
         triangleCount: bvh.packedTriangleIndices.length,
@@ -38,6 +69,21 @@ export function createWebGpuSceneBuffers(device, bvh) {
         tangents: createStorageBuffer(device, tangents),
         uvs: createStorageBuffer(device, uvs),
         neutralFlags: createStorageBuffer(device, neutralFlags),
-        destroy() { for (const value of Object.values(this)) if (value?.destroy) value.destroy(); }
+        renderSampler,
+        renderTextures: {
+            nodes: createRenderTexture(device, translated.nodes),
+            triangleIndices: createRenderTexture(device, triangleIndices),
+            positions: createRenderTexture(device, positions),
+            normals: createRenderTexture(device, normals),
+            tangents: createRenderTexture(device, tangents),
+            uvs: createRenderTexture(device, uvs),
+            neutralFlags: createRenderTexture(device, neutralFlags),
+        },
+        destroy() {
+            for (const value of Object.values(this)) {
+                if (value?.destroy) value.destroy();
+                else if (value && typeof value === 'object') for (const nested of Object.values(value)) if (nested?.destroy) nested.destroy();
+            }
+        }
     };
 }

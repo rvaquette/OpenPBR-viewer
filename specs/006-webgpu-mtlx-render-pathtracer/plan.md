@@ -14,8 +14,8 @@ La spec 006 ne rejoue pas la migration WebGPU generale. Elle reutilise les acqui
 
 - selection explicite `renderer_backend` et cycle de vie du `GPUDevice`;
 - contrat de scene, camera, geometrie, BVH, lumiere et textures;
-- `MtlxPathTracerHostWgslShaderGenerator` et bindings Emscripten;
-- compilation GLSL Vulkan par glslang, SPIR-V intermediaire et transpilation Naga;
+- `MtlxPathTracerHostShaderGenerator` (host GLSL existant, deja responsable du pathtracer et du dispatch multi-materiaux) et bindings Emscripten;
+- compilation GLSL Vulkan par glslang, SPIR-V intermediaire et transpilation Naga, le tout pilote depuis des outils JS/TS du viewer;
 - validation de source WGSL, contrats de bindings et diagnostics navigateur;
 - baselines et metriques de comparaison du `Pathtracer MTLX` WebGL;
 - contrat de generation et/ou de reference du rasterizer MTLX WebGL, notamment le host `EsslHostShaderGenerator` et le jeu de shaders `glsl/rasterization/mtlx/`.
@@ -28,8 +28,8 @@ Le chantier peut commencer quand la generation/transpilation MaterialX de la spe
 |---|---|
 | Reference | `glsl/pathtracing/mtlx/` et `glsl/rasterization/mtlx/`, ainsi que leurs host generators WebGL et captures associees, restent l'autorite fonctionnelle et visuelle. Ils ne sont ni remplaces ni reecrits pour WebGPU. |
 | Nature du pipeline | Employer un `GPURenderPipeline` plein ecran. Un vertex shader WGSL minimal genere un fullscreen triangle; le fragment shader execute le pathtracer porte depuis la route WebGL. Ce pipeline est distinct du `GPUComputePipeline` de la spec 005. |
-| Generation MaterialX | Adapter `MtlxPathTracerHostWgslShaderGenerator` et le host rasterizer MTLX/`EsslHostShaderGenerator` pour produire des fragments GLSL Vulkan complets, stricts et compilables. Malgre leur nom historique, ils n'emettent pas directement de WGSL. |
-| Transpilation | Compiler le GLSL avec glslang vers SPIR-V, puis transpiler avec Naga vers WGSL. Aucune traduction ou correction semantique par regex JavaScript n'est acceptee. |
+| Generation MaterialX | Reutiliser tel quel `MtlxPathTracerHostShaderGenerator` (le meme generateur C++ que la route WebGL, deja responsable de toute la logique GLSL du pathtracer et du dispatch multi-materiaux) et le host rasterizer MTLX/`EsslHostShaderGenerator`, sans aucune modification C++ pour Vulkan/WebGPU. La mise en forme Vulkan-stricte (`#version 450`, layouts, sets/bindings explicites) est ajoutee cote JS/TS en enveloppant le GLSL genere, jamais dans le generateur. Aucun generateur C++ WGSL dedie n'est introduit ni maintenu: `MtlxPathTracerHostWgslShaderGenerator` est supprime car redondant. |
+| Transpilation | Compiler le GLSL avec glslang vers SPIR-V, puis transpiler avec Naga vers WGSL, exclusivement via des outils JS/TS du viewer (`tools/compile-glsl-to-spirv.mjs`, `tools/transpile-glsl-to-wgsl.mjs` ou equivalents). Aucune traduction ou correction semantique par regex JavaScript sur le GLSL/WGSL genere n'est acceptee; seule l'invocation outillee de glslang/Naga est permise cote JS/TS. |
 | Assemblage | Assembler un module vertex WGSL de fullscreen triangle et un module fragment WGSL contenant l'integrateur pathtracer, les helpers host et le dispatch MaterialX transpile. Valider interfaces, declarations et bindings avant creation du pipeline. |
 | Accumulation | Preserver la semantique WebGL de rendu plein ecran et d'accumulation progressive. Utiliser des textures ping-pong ou un passage de composition explicite si WebGPU interdit une lecture/ecriture equivalente dans le meme render pass. |
 | Parite | Comparer WebGPU render et WebGL a scene, camera, materiau, environnement, seed, rebonds, samples, resolution et tonemapping identiques. Aucun fallback compute, legacy ou WebGL masque n'est admis. |
@@ -55,19 +55,22 @@ Le portage du rasterizer MTLX est bien dans le scope du chantier, en parallele a
 
 ## Phase 2 - Host generators pathtracer et rasterizer GLSL Vulkan
 
-1. Conserver les host generators WebGL actuels intacts.
-2. Adapter `MtlxPathTracerHostWgslShaderGenerator` dans `MaterialX-rva` pour emettre le fragment host pathtracer en GLSL Vulkan strict: `#version 450`, entry point `main`, locations, sets, bindings et layouts explicites.
-3. Porter le host rasterizer MTLX, notamment les flux bases sur `EsslHostShaderGenerator`, vers un GLSL Vulkan strict et compilable pour la meme chaine `glslang -> SPIR-V -> Naga -> WGSL`.
+1. Conserver les host generators WebGL actuels intacts, y compris `MtlxPathTracerHostShaderGenerator`; aucune modification C++ n'est apportee pour la route WebGPU.
+2. Cote JS/TS uniquement, envelopper le GLSL brut produit par `MtlxPathTracerHostShaderGenerator` (identique a celui consomme par la route WebGL) avec le preambule Vulkan requis par glslang: `#version 450`, entry point `main`, locations, sets, bindings et layouts explicites issus du contrat de bindings. Aucun generateur C++ distinct n'est cree pour WebGPU: `MtlxPathTracerHostWgslShaderGenerator` est retire du code source et des builds Emscripten, car il duplique inutilement `MtlxPathTracerHostShaderGenerator`.
+3. Envelopper de la meme facon cote JS/TS le host rasterizer MTLX, notamment les flux bases sur `EsslHostShaderGenerator`, pour obtenir un GLSL Vulkan strict et compilable pour la meme chaine `glslang -> SPIR-V -> Naga -> WGSL`, sans modification C++ du generateur rasterizer.
 4. Fournir les helpers et types requis par les dispatch MaterialX sans dependance implicite a un prelude WebGL injecte hors du generateur.
 5. Assembler cote GLSL les fragments pathtracer et rasterizer complets avec une seule autorite pour chaque declaration et chaque ressource.
 6. Ajouter des tests qui compilent chaque fixture avec glslang et conservent le GLSL et les diagnostics en cas d'echec.
+7. Supprimer `MtlxPathTracerHostWgslShaderGenerator` (classe C++, bindings Emscripten `JsMtlxPathTracerHostWgslShaderGenerator.cpp`, references dans `public/mtlx/*.json` et les outils JS/TS) et faire pointer tous les consommateurs WebGPU vers `MtlxPathTracerHostShaderGenerator`.
 
-**Gate:** toutes les fixtures cible produisent des fragments GLSL Vulkan compilables par glslang, sans regex de reecriture et sans modifier leurs dispatch WebGL de reference.
+**Gate:** toutes les fixtures cible produisent des fragments GLSL Vulkan compilables par glslang via `MtlxPathTracerHostShaderGenerator` uniquement, sans regex de reecriture et sans modifier leurs dispatch WebGL de reference; `MtlxPathTracerHostWgslShaderGenerator` n'existe plus dans le code ni dans les artefacts publies.
 
-## Phase 3 - GLSL vers SPIR-V vers WGSL
+## Phase 3 - GLSL vers SPIR-V vers WGSL (JS/TS)
 
-1. Etendre les outils de la spec 005 avec un mode `fragment-render` qui compile le GLSL Vulkan via glslang et conserve le SPIR-V intermediaire.
-2. Transpiler ce SPIR-V avec Naga vers un module fragment WGSL, en fixant les versions et options des outils dans le rapport.
+La conversion GLSL -> WGSL n'est jamais implementee cote C++/MaterialX: elle reste entierement pilotee par les outils JS/TS existants (`tools/compile-glsl-to-spirv.mjs`, `tools/transpile-glsl-to-wgsl.mjs`), qui invoquent glslang puis Naga en boite noire versionnee. Le GLSL fourni en entree est produit tel quel par `MtlxPathTracerHostShaderGenerator`.
+
+1. Etendre les outils JS/TS de la spec 005 avec un mode `fragment-render` qui compile le GLSL Vulkan issu de `MtlxPathTracerHostShaderGenerator` via glslang et conserve le SPIR-V intermediaire.
+2. Transpiler ce SPIR-V avec Naga (invoque depuis JS/TS) vers un module fragment WGSL, en fixant les versions et options des outils dans le rapport.
 3. Generer ou maintenir separement le vertex WGSL minimal de fullscreen triangle avec l'UV et les donnees d'interpolation requises par le fragment.
 4. Valider les deux stages: entry points, builtins, locations, groupes/bindings, uniform layouts, texture sample types et limites du device.
 5. Rejeter les sorties obsoletes: chaque succes doit prouver que GLSL, SPIR-V et WGSL proviennent de la meme invocation et du meme hash source.
