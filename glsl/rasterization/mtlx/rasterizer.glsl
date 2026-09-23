@@ -13,8 +13,6 @@ void main()
     ndcToCameraRay(ndc, invModelMatrix * cameraWorldMatrix, invProjectionMatrix, pW, dW);
     dW = normalize(dW);
 
-    sunBasis = makeBasis(sunDir);
-
     vec3 pW_hit;
     vec3 NsW;
     vec3 NgW;
