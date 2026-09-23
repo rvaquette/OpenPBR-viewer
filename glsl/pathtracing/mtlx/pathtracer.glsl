@@ -83,7 +83,7 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
         Ng = vec3(0.0, 1.0, 0.0);
         Ns = Ng;
         Ts = vec3(1.0, 0.0, 0.0);
-        texCoord = vec2(P.x, -P.z) / 200.0 * 2.0 + 0.5;
+        texCoord = vec2(P.x, P.z) / 200.0 * 2.0 + 0.5;
     }
     return true;
 }
