@@ -231,7 +231,7 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
         Ns = Ng;
         Ts = vec3(1.0, 0.0, 0.0);
         Bs = vec3(0.0, 0.0, -1.0);
-        texCoord = vec2(P.x, -P.z) / 200.0 * 2.0 + 0.5;
+        texCoord = vec2(P.x, P.z) / 200.0 * 2.0 + 0.5;
     }
     return true;
 }
@@ -242,7 +242,7 @@ vec3 ground_albedo(in vec3 pW)
     return texture(ground_texture, uv).rgb;
 }
 
-Basis sunBasis;
+    vec2 uv = vec2(pW.x, pW.z) / 200.0 * 2.0 + 0.5;
 
 vec3 sunRadiance(in vec3 woutputW)
 {

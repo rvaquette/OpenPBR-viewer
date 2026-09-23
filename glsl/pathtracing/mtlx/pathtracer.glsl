@@ -131,7 +131,7 @@ vec3 neutral_brdf_sample(in vec3 pW, in Basis basis, in vec3 winputL, inout uint
 vec3 ground_albedo(in vec3 pW)
 {
     // UV mapping: match rasterizer's repeat=2, offset=0.5 on 200x200 plane
-    vec2 uv = vec2(pW.x, -pW.z) / 200.0 * 2.0 + 0.5;
+    vec2 uv = vec2(pW.x, pW.z) / 200.0 * 2.0 + 0.5;
     return texture(ground_texture, uv).rgb;
 }
 

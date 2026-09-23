@@ -96,7 +96,7 @@ vec3 ground_albedo(in vec3 pW)
     return texture(ground_texture, uv).rgb;
 }
 
-vec3 skyRadiance(in vec3 woutputW)
+    vec2 uv = vec2(pW.x, pW.z) / 200.0 * 2.0 + 0.5;
 {
     vec4 env = textureLod(envMap, vec3(woutputW.x, woutputW.yz), 0.0);
     return env.rgb * skyPower * skyColor;

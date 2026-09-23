@@ -2756,6 +2756,9 @@ function finishCompilationProgress()
     progress_bar.set(1.0);
     progress_finished_timer = performance.now();
     COMPILING = false;
+    const progress_overlay = document.getElementById('progress_overlay');
+    progress_overlay.style.display = 'none';
+    progress_overlay.style.opacity = 0;
     // Signal headless readiness (used by launch_render.mjs)
     window.__openpbrReady   = true;
     window.__openpbrSamples = 0;
