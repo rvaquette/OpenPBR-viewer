@@ -194,7 +194,7 @@ var params =
     //////////////////////////////////////////////////////
 
     scene_name:                         'standard-shader-ball',
-    renderer_mode:                      'Rasterizer legacy',
+    renderer_mode:                      'Rasterizer MTLX',
     // 'threejs' = three-mesh-bvh (battle-tested, kept as the default); 'native'
     // = the local src/bvh/* port (feature 004). Same GLSL traversal call site
     // either way; see adaptBvhGlslForEngine()/buildBvh()/createBvhUniforms().
@@ -736,16 +736,21 @@ async function validateGeneratedShadingContract(generatedGlsl, search)
 
 function getRendererModes()
 {
-    return ['Rasterizer legacy', 'Rasterizer MTLX', 'Pathtracer MTLX', 'Pathtracer legacy'];
+    return [
+        // 'Rasterizer legacy',
+        'Rasterizer MTLX',
+        'Pathtracer MTLX',
+        // 'Pathtracer legacy'
+    ];
 }
 
 function getRendererModeOptions()
 {
     return {
-        'Rasterizer legacy': 'Rasterizer legacy',
+        // 'Rasterizer legacy': 'Rasterizer legacy',
         'Rasterizer MTLX':   'Rasterizer MTLX',
-        'Pathtracer MTLX':   'Pathtracer MTLX',
-        'Pathtracer legacy': 'Pathtracer legacy'
+        'Pathtracer MTLX':   'Pathtracer MTLX'
+        // 'Pathtracer legacy': 'Pathtracer legacy'
     };
 }
 
@@ -1500,6 +1505,10 @@ var scene_names = {
         }
     }
     if (search.has('renderer_mode')) {
+        if (!getRendererModes().includes(params.renderer_mode)) {
+            params.renderer_mode = 'Rasterizer MTLX';
+            console.warn('[URL params] legacy renderer disabled; using Rasterizer MTLX');
+        }
         console.log('[URL params] renderer_mode =', params.renderer_mode);
     }
 
