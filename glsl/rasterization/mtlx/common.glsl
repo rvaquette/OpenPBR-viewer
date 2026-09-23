@@ -251,6 +251,9 @@ vec3 sunRadiance(in vec3 woutputW)
 
 vec3 skyRadiance(in vec3 woutputW)
 {
-    vec4 env = textureLod(envMap, vec3(woutputW.x, woutputW.yz), 0.0);
-    return env.rgb * skyPower * skyColor;
+    vec2 uv = vec2(
+        atan(woutputW.z, woutputW.x) / PI2 + 0.5,
+        asin(clamp(woutputW.y, -1.0, 1.0)) / PI + 0.5
+    );
+    return textureLod(envMapLatLong, uv, 0.0).rgb * skyPower * skyColor;
 }
