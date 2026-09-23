@@ -1160,7 +1160,6 @@ async function generateMtlxRasterDispatch(mtlxText) {
     glsl = glsl.replace(/\bout1\b/g, 'mtlxRasterOut');
     glsl = transformGeneratedMainToFunction(glsl, 'mtlxRasterMain');
     const envPreamble =
-        'uniform sampler2D envMapLatLong;\n' +
         'uniform sampler2D envMapIrradiance;\n' +
         'mat4 mtlxEnvMatrix() {\n' +
         '    float a = 1.57079632679;\n' +

@@ -17,6 +17,7 @@ uniform vec2 resolution;
 uniform sampler2D bvh_surface_nodes;
 uniform sampler2D bvh_surface_indices;
 uniform sampler2D bvh_surface_positions;
+uniform sampler2D envMapLatLong;
 
 // Packed per-vertex attributes, kept under MAX_TEXTURE_IMAGE_UNITS(16):
 //   geomN_surface = vec4(normal.xyz, uv.x)
