@@ -69,9 +69,12 @@ import {
 import { Circle } from 'progressbar.js'
 
 // BVH engine selection (params.bvh_engine): 'threejs' (default, three-mesh-bvh)
-// or 'native' (src/bvh/* port). Both expose the same GLSL call site
-// (bvhIntersectFirstHitWithinDistance), so only construction/uniforms/prelude differ.
-function is_threejs_bvh_engine() { return params.bvh_engine !== 'native'; }
+// or 'native' (src/bvh/* port). The MTLX raster route currently uses the native
+// sampler-based shader interface, so keep its construction and GLSL prelude aligned.
+function is_threejs_bvh_engine()
+{
+    return params.bvh_engine !== 'native' && !is_mtlx_bvh_raster_route();
+}
 
 function buildBvh(geometry)
 {
