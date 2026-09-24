@@ -219,7 +219,8 @@ var params =
 
     skyPower:                            1.0,
     skyColor:                            [1.0, 1.0, 1.0],
-    env_map_path:                        'textures/envmaps/etzwihl_16k.jpg',
+    // Temporary mobile fallback: keep the 16K environment out of the default path.
+    env_map_path:                        'textures/envmaps/9bece62299e5da5ddda7ab10b15e23f7.jpg',
     env_map_provided:                    false,
     env_irradiance_path:                 '',
     // Envmap CDF importance sampling (feature 004, Phase 5): opt-in, default off.
@@ -2398,7 +2399,7 @@ function load_scene(scene_name)
                 failStartup(`[envmap] failed to load ${assetPath}: ${err?.message || err || 'unknown error'}`);
             });
         };
-        const env_map_path = params.env_map_path || 'textures/envmaps/etzwihl_16k.jpg';
+        const env_map_path = params.env_map_path || 'textures/envmaps/9bece62299e5da5ddda7ab10b15e23f7.jpg';
         loadEnvTexture(env_map_path, (texture, importance) => {
             console.log('-> loaded env map: ', env_map_path);
             env_map_texture = texture;
