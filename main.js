@@ -1424,6 +1424,8 @@ var directionalLight, ambientLight;
 var camera_initialized = false;
 var env_map_texture = null;
 var env_irradiance_texture = null;
+var env_map_latlong_texture = null;
+var env_irradiance_latlong_texture = null;
 var env_map_importance = null; // { equirectTexture, cdfTexture, totalSum, width, height } | null
 var sceneGroundY = 0.01;
 
@@ -2268,8 +2270,8 @@ function load_geometry(scene_name)
         for (const pm of get_pathtrace_materials()) {
             pm.envMap = env_map_texture;
             pm.uniforms.envMap.value = env_map_texture;
-            if (pm.uniforms.envMapLatLong) pm.uniforms.envMapLatLong.value = env_map_texture;
-            if (pm.uniforms.envMapIrradiance) pm.uniforms.envMapIrradiance.value = env_irradiance_texture || env_map_texture;
+            if (pm.uniforms.envMapLatLong) pm.uniforms.envMapLatLong.value = env_map_latlong_texture;
+            if (pm.uniforms.envMapIrradiance) pm.uniforms.envMapIrradiance.value = env_irradiance_latlong_texture || env_map_latlong_texture;
             if (pm.uniforms.has_env_cdf) {
                 const importance = env_map_importance;
                 // Gated behind an explicit opt-in (default off): the CDF importance-sampling
@@ -2493,28 +2495,36 @@ function load_scene(scene_name)
         const loadEnvTexture = (path, onLoad) => {
             const assetPath = normalizeAssetPath(path);
             loadEnvironmentTexture(assetPath).then(({ texture, importance }) => {
+                const latLongTexture = texture.clone();
+                latLongTexture.needsUpdate = true;
                 texture.mapping = EquirectangularReflectionMapping;
-                if (!/\.hdr(?:$|[?#])/i.test(assetPath)) texture.colorSpace = SRGBColorSpace;
-                onLoad(texture, importance);
+                if (!/\.hdr(?:$|[?#])/i.test(assetPath)) {
+                    texture.colorSpace = SRGBColorSpace;
+                    latLongTexture.colorSpace = SRGBColorSpace;
+                }
+                onLoad(texture, importance, latLongTexture);
             }).catch(err => {
                 failStartup(`[envmap] failed to load ${assetPath}: ${err?.message || err || 'unknown error'}`);
             });
         };
         const env_map_path = params.env_map_path || 'textures/envmaps/etzwihl_4k.jpg';
-        loadEnvTexture(env_map_path, (texture, importance) => {
+        loadEnvTexture(env_map_path, (texture, importance, latLongTexture) => {
             console.log('-> loaded env map: ', env_map_path);
             env_map_texture = texture;
+            env_map_latlong_texture = latLongTexture;
             env_map_importance = importance;
             const irradiancePath = params.env_irradiance_path || '';
             if (irradiancePath) {
-                loadEnvTexture(irradiancePath, irradianceTexture => {
+                loadEnvTexture(irradiancePath, (irradianceTexture, _importance, irradianceLatLongTexture) => {
                     console.log('-> loaded env irradiance map: ', irradiancePath);
                     env_irradiance_texture = irradianceTexture;
+                    env_irradiance_latlong_texture = irradianceLatLongTexture;
                     load_geometry(scene_name);
                 });
             }
             else {
                 env_irradiance_texture = env_map_texture;
+                env_irradiance_latlong_texture = env_map_latlong_texture;
                 load_geometry(scene_name);
             }
         });
