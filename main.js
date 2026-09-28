@@ -68,6 +68,15 @@ import {
 
 import { Circle } from 'progressbar.js'
 
+let gpuDebugStage = { name: 'startup', since: performance.now() };
+
+function setGpuDebugStage(name)
+{
+    if (gpuDebugStage.name === name) return;
+    gpuDebugStage = { name, since: performance.now() };
+    window.__openpbrGpuStage = gpuDebugStage;
+}
+
 // BVH engine selection (params.bvh_engine): 'threejs' (default, three-mesh-bvh)
 // or 'native' (src/bvh/* port). The MTLX raster route currently uses the native
 // sampler-based shader interface, so keep its construction and GLSL prelude aligned.
@@ -78,9 +87,12 @@ function is_threejs_bvh_engine()
 
 function buildBvh(geometry)
 {
-    return is_threejs_bvh_engine()
+    setGpuDebugStage('building-bvh');
+    const bvh = is_threejs_bvh_engine()
         ? new MeshBVH(geometry, { strategy: SAH })
         : new Bvh(geometry);
+    setGpuDebugStage('bvh-built');
+    return bvh;
 }
 
 function createBvhUniforms(prefix)
@@ -1454,6 +1466,104 @@ var FULLSCREEN_BVH_ROUTE;
 var samples = 0;
 var pauseController = null;
 
+function installWebGLDiagnostics(gl)
+{
+    const contextLossStorageKey = 'openpbr-last-context-loss';
+    const canvas = renderer.domElement;
+    const debugRendererInfo = gl.getExtension('WEBGL_debug_renderer_info');
+    const robustness = gl.getExtension('WEBGL_robustness');
+
+    const getParameter = (parameter) => {
+        try { return parameter === undefined ? null : gl.getParameter(parameter); }
+        catch { return null; }
+    };
+    const getResetStatus = () => {
+        if (!robustness?.getGraphicsResetStatus) return 'unavailable';
+        const status = robustness.getGraphicsResetStatus();
+        if (status === gl.NO_ERROR) return 'NO_ERROR';
+        if (status === robustness.GUILTY_CONTEXT_RESET_WEBGL) return 'GUILTY_CONTEXT_RESET_WEBGL';
+        if (status === robustness.INNOCENT_CONTEXT_RESET_WEBGL) return 'INNOCENT_CONTEXT_RESET_WEBGL';
+        if (status === robustness.UNKNOWN_CONTEXT_RESET_WEBGL) return 'UNKNOWN_CONTEXT_RESET_WEBGL';
+        return `0x${status.toString(16)}`;
+    };
+    const createReport = () => ({
+        timestamp: new Date().toISOString(),
+        stage: gpuDebugStage.name,
+        stageDurationMs: Math.round(performance.now() - gpuDebugStage.since),
+        resetStatus: getResetStatus(),
+        contextLost: gl.isContextLost(),
+        renderer: debugRendererInfo
+            ? getParameter(debugRendererInfo.UNMASKED_RENDERER_WEBGL)
+            : getParameter(gl.RENDERER),
+        vendor: debugRendererInfo
+            ? getParameter(debugRendererInfo.UNMASKED_VENDOR_WEBGL)
+            : getParameter(gl.VENDOR),
+        version: getParameter(gl.VERSION),
+        limits: {
+            maxTextureSize: getParameter(gl.MAX_TEXTURE_SIZE),
+            maxCubeMapTextureSize: getParameter(gl.MAX_CUBE_MAP_TEXTURE_SIZE),
+            maxRenderbufferSize: getParameter(gl.MAX_RENDERBUFFER_SIZE),
+            maxTextureImageUnits: getParameter(gl.MAX_TEXTURE_IMAGE_UNITS),
+            maxCombinedTextureImageUnits: getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS)
+        },
+        canvas: {
+            width: canvas.width,
+            height: canvas.height,
+            cssWidth: canvas.clientWidth,
+            cssHeight: canvas.clientHeight,
+            devicePixelRatio: window.devicePixelRatio
+        },
+        three: {
+            geometries: renderer.info.memory.geometries,
+            textures: renderer.info.memory.textures,
+            programs: renderer.info.programs?.length ?? null,
+            calls: renderer.info.render.calls,
+            triangles: renderer.info.render.triangles
+        },
+        app: {
+            scene: params.scene_name,
+            rendererMode: params.renderer_mode,
+            bvhEngine: params.bvh_engine,
+            renderSize: params.render_size,
+            loaded: LOADED,
+            compiling: COMPILING
+        },
+        device: {
+            userAgent: navigator.userAgent,
+            deviceMemoryGiB: navigator.deviceMemory ?? null,
+            hardwareConcurrency: navigator.hardwareConcurrency ?? null,
+            jsHeap: performance.memory ? {
+                used: performance.memory.usedJSHeapSize,
+                total: performance.memory.totalJSHeapSize,
+                limit: performance.memory.jsHeapSizeLimit
+            } : null
+        }
+    });
+
+    try {
+        const previousReport = localStorage.getItem(contextLossStorageKey);
+        window.__openpbrPreviousContextLossReport = previousReport ? JSON.parse(previousReport) : null;
+    } catch {
+        window.__openpbrPreviousContextLossReport = null;
+    }
+
+    window.__openpbrGpuInfo = createReport();
+    console.info('[WebGL GPU info]', window.__openpbrGpuInfo);
+
+    canvas.addEventListener('webglcontextlost', (event) => {
+        event.preventDefault();
+        const report = createReport();
+        window.__openpbrContextLossReport = report;
+        try { localStorage.setItem(contextLossStorageKey, JSON.stringify(report)); }
+        catch { /* Diagnostics must not interfere with context recovery. */ }
+        console.error('[WebGL context lost]', report);
+    }, false);
+    canvas.addEventListener('webglcontextrestored', () => {
+        setGpuDebugStage('context-restored');
+        console.warn('[WebGL context restored]');
+    }, false);
+}
+
 function is_legacy_pt() { return params.renderer_mode === 'Pathtracer legacy'; }
 function uses_legacy_fullscreen_shader() { return is_legacy_pt() || is_legacy_bvh_raster_route(); }
 function active_pathtrace_material() { return uses_legacy_fullscreen_shader() ? pathtracedMaterial_legacy : pathtracedMaterial; }
@@ -2061,6 +2171,7 @@ function init()
     BVH_PROPS = null;
 
     // renderer setup
+    setGpuDebugStage('creating-renderer');
     renderer = new WebGLRenderer( { antialias: true, preserveDrawingBuffer: true } );
     renderer.setPixelRatio( window.devicePixelRatio );
     renderer.setClearColor( 0x09141a );
@@ -2124,6 +2235,8 @@ function init()
 
     // Enable parallel shader compilation if available
     const gl = renderer.getContext();
+    installWebGLDiagnostics(gl);
+    setGpuDebugStage('renderer-ready');
     const parallelShaderCompileExt = gl.getExtension('KHR_parallel_shader_compile');
     if (parallelShaderCompileExt) {
         console.log('Parallel shader compilation enabled');
@@ -2162,6 +2275,7 @@ function init()
 
 function load_geometry(scene_name)
 {
+    setGpuDebugStage('loading-geometry');
     scene.background = env_map_texture;
     env_map_texture.mapping = EquirectangularReflectionMapping ;
     env_map_texture.colorSpace = SRGBColorSpace;
@@ -2346,6 +2460,7 @@ function load_geometry(scene_name)
             }
 
             LOADED = true;
+            setGpuDebugStage('scene-loaded');
 
             post_load_setup();
 
@@ -2360,6 +2475,7 @@ function load_geometry(scene_name)
 
 function load_scene(scene_name)
 {
+    setGpuDebugStage('loading-scene');
     console.log('Loading scene: ', scene_name);
     LOADED = false;
 
@@ -2690,6 +2806,7 @@ const SHADER_COMPILE_ABORT_MS = 600000;  // timeout d'abandon après 600 s
 
 function trigger_recompile()
 {
+    setGpuDebugStage('compiling-shaders');
     let tmp_cam = new OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
     startCompilationProgress();
 
@@ -2728,11 +2845,13 @@ function trigger_recompile()
         console.log('shaders successfully compiled.');
         // Warm-up render to flush any remaining GPU pipeline stalls
         if (FULLSCREEN_BVH_ROUTE && pathtracedQuad && pathtracingRenderTarget) {
+            setGpuDebugStage('warmup-render');
             renderer.setRenderTarget(pathtracingRenderTarget);
             pathtracedQuad.render(renderer);
             renderer.setRenderTarget(null);
             resetSamples();
         }
+        setGpuDebugStage('shaders-ready');
         finishCompilationProgress();
     }).catch((err) => {
         clearTimeout(warnTimer);
@@ -2949,6 +3068,7 @@ function render()
         return;
     }
 
+    setGpuDebugStage('rendering');
     renderer.domElement.style.imageRendering = 'auto';
 
     if (samples >= params.max_samples)
