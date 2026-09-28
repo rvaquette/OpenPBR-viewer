@@ -45,9 +45,8 @@ bool nativeBvhIntersectFirstHitWithinDistance(
     stack[0] = 0;
     float closest = maxDistance;
     bool found = false;
-    int traversalIterations = 0;
-    while (pointer >= 0 && pointer < 64 && traversalIterations < 256) {
-        traversalIterations++;
+    for (int traversalIterations = 0; traversalIterations < 256; traversalIterations++) {
+        if (pointer < 0 || pointer >= 64) break;
         int nodeIndex = stack[pointer--];
         vec4 minimum = nativeBvhTexelFetch1D(nodes, nodeIndex * 3);
         vec4 maximum = nativeBvhTexelFetch1D(nodes, nodeIndex * 3 + 1);
