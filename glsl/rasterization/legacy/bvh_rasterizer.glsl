@@ -35,12 +35,11 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
     if (hit_surface) dist_closest = min(dist_closest, dist_surface);
     if (hit_props) dist_closest = min(dist_closest, dist_props);
 
-    const float GROUND_Y = 0.01;
     float dist_ground = HUGE_DIST;
     bool hit_ground = false;
     if (abs(rayDir.y) > DENOM_TOLERANCE)
     {
-        float t = (GROUND_Y - rayOrigin.y) / rayDir.y;
+        float t = (ground_y - rayOrigin.y) / rayDir.y;
         if (t > 0.0 && t < min(dist_closest, maxDistance))
         {
             dist_ground = t;

@@ -30,6 +30,7 @@ uniform bool has_tangents_surface;
 uniform bool has_uvs_surface;
 
 uniform sampler2D ground_texture;
+uniform float ground_y;
 
 //////////////////////////////////////////////////////
 // renderer uniforms

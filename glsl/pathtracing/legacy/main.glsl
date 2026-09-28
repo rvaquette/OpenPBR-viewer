@@ -31,6 +31,7 @@ uniform bool has_normals_props;
 uniform bool has_tangents_props;
 
 uniform sampler2D ground_texture;
+uniform float ground_y;
 
 //////////////////////////////////////////////////////
 // renderer uniforms

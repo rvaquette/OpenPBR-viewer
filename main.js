@@ -1451,6 +1451,7 @@ var camera_initialized = false;
 var env_map_texture = null;
 var env_irradiance_texture = null;
 var env_map_importance = null; // { equirectTexture, cdfTexture, totalSum, width, height } | null
+var sceneGroundY = 0.01;
 
 var MESH_SURFACE;
 var MESH_PROPS;
@@ -1911,6 +1912,7 @@ function create_materials()
                 has_uvs_surface:         { value: 0 },
 
                 ground_texture:        { value: null },
+                ground_y:              { value: sceneGroundY },
 
                 cameraWorldMatrix:     { value: new Matrix4() },
                 invProjectionMatrix:   { value: new Matrix4() },
@@ -2027,6 +2029,7 @@ function create_materials()
                 has_normals_props:     { value: 1 },
                 has_tangents_props:    { value: 0 },
                 ground_texture:        { value: null },
+                ground_y:              { value: sceneGroundY },
                 cameraWorldMatrix:     { value: new Matrix4() },
                 invProjectionMatrix:   { value: new Matrix4() },
                 invModelMatrix:        { value: new Matrix4() },
@@ -2433,6 +2436,15 @@ function load_geometry(scene_name)
                 console.log("===> LOADED");
             }
 
+            const groundBounds = new Box3();
+            for (const mesh of [MESH_PROPS, MESH_SURFACE])
+            {
+                if (!mesh?.geometry) continue;
+                mesh.geometry.computeBoundingBox();
+                if (mesh.geometry.boundingBox) groundBounds.union(mesh.geometry.boundingBox);
+            }
+            sceneGroundY = groundBounds.isEmpty() ? 0.01 : groundBounds.min.y - 0.01;
+
             // Ground plane texture
             const groundTex = loadNativeTexture(getPublicAssetUrl('textures/ground.png'));
             groundTex.wrapS = RepeatWrapping;
@@ -2448,7 +2460,7 @@ function load_geometry(scene_name)
                 const groundMat = new MeshLambertMaterial({ map: groundTex, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
                 const groundMesh = new Mesh(groundGeom, groundMat);
                 groundMesh.rotation.x = -Math.PI / 2;
-                groundMesh.position.y = 0.01;
+                groundMesh.position.y = sceneGroundY;
                 groundMesh.receiveShadow = true;
                 scene.add(groundMesh);
             }
@@ -2619,7 +2631,7 @@ function reset_camera(scene_name)
             const corner = new Vector3();
             const offset = new Vector3();
             let requiredRetreat = 0.0;
-            const margin = 1.08;
+            const margin = 1.25;
 
             for (let cornerIndex = 0; cornerIndex < 8; cornerIndex++)
             {
@@ -3053,6 +3065,7 @@ function sync_shader_uniforms(uniforms)
     uniforms.resolution.value.copy(resolution);
     uniforms.accumulation_weight.value                    = 1.0 / (samples + 1.0); // implements Monte-Carlo accumulation
     uniforms.samples.value                                = samples;
+    if (uniforms.ground_y) uniforms.ground_y.value         = sceneGroundY;
 
     uniforms.wireframe.value                              = params.wireframe;
     uniforms.neutral_color.value.copy(get_vector3(          params.neutral_color));

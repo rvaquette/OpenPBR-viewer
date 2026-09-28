@@ -31,6 +31,7 @@ uniform bool has_tangents_surface;
 uniform bool has_uvs_surface;
 
 uniform sampler2D ground_texture;
+uniform float ground_y;
 
 //////////////////////////////////////////////////////
 // renderer uniforms
@@ -193,12 +194,11 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
     float dist_closest = HUGE_DIST;
     if (hit_surface) dist_closest = min(dist_closest, dist_surface);
 
-    const float GROUND_Y = 0.01;
     float dist_ground = HUGE_DIST;
     bool hit_ground = false;
     if (abs(rayDir.y) > DENOM_TOLERANCE)
     {
-        float t = (GROUND_Y - rayOrigin.y) / rayDir.y;
+        float t = (ground_y - rayOrigin.y) / rayDir.y;
         if (t > 0.0 && t < min(dist_closest, maxDistance))
         {
             dist_ground = t;
