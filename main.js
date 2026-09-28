@@ -2595,6 +2595,57 @@ function reset_camera(scene_name)
     orbitControls.zoomSpeed = 1.5;
     orbitControls.flySpeed = 0.01;
     orbitControls.update();
+
+    if (params.render_size !== 'max')
+    {
+        const bounds = new Box3();
+        for (const mesh of [MESH_PROPS, MESH_SURFACE])
+        {
+            if (!mesh?.geometry) continue;
+            mesh.geometry.computeBoundingBox();
+            if (mesh.geometry.boundingBox) bounds.union(mesh.geometry.boundingBox);
+        }
+
+        if (!bounds.isEmpty())
+        {
+            const renderDimensions = getRenderDimensions();
+            const aspect = renderDimensions.w / renderDimensions.h;
+            const tanHalfVerticalFov = Math.tan(camera.fov * Math.PI / 360.0);
+            const tanHalfHorizontalFov = tanHalfVerticalFov * aspect;
+            const forward = new Vector3();
+            camera.getWorldDirection(forward);
+            const right = new Vector3().crossVectors(forward, camera.up).normalize();
+            const up = new Vector3().crossVectors(right, forward).normalize();
+            const corner = new Vector3();
+            const offset = new Vector3();
+            let requiredRetreat = 0.0;
+            const margin = 1.08;
+
+            for (let cornerIndex = 0; cornerIndex < 8; cornerIndex++)
+            {
+                corner.set(
+                    cornerIndex & 1 ? bounds.max.x : bounds.min.x,
+                    cornerIndex & 2 ? bounds.max.y : bounds.min.y,
+                    cornerIndex & 4 ? bounds.max.z : bounds.min.z
+                );
+                offset.subVectors(corner, camera.position);
+                const depth = offset.dot(forward);
+                requiredRetreat = Math.max(
+                    requiredRetreat,
+                    Math.abs(offset.dot(right)) * margin / tanHalfHorizontalFov - depth,
+                    Math.abs(offset.dot(up)) * margin / tanHalfVerticalFov - depth,
+                    camera.near * 2.0 - depth
+                );
+            }
+
+            if (requiredRetreat > 0.0)
+            {
+                camera.position.addScaledVector(forward, -requiredRetreat);
+                camera.updateMatrixWorld();
+                orbitControls.update();
+            }
+        }
+    }
 }
 
 
@@ -3080,7 +3131,7 @@ function render()
 
     // Paused: freeze the pathtracer accumulation, keep the last frame on screen.
     // The rasterizer route is single-pass/cheap and keeps rendering normally.
-    if (params.paused && FULLSCREEN_BVH_ROUTE)
+    if (params.paused && is_pathtracing_route())
     {
         if (pathtracedFinalQuad) {
             renderer.setRenderTarget( null );
