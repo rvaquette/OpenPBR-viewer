@@ -23,17 +23,9 @@ import { loadNativeTexture } from './src/textures/textureLoader.js';
 //import Stats from 'stats.js';
 
 import {
-    Bvh,
-} from './src/bvh/bvh.js';
-import {
-    NativeAttributeTexture,
-    assignNativeBvhUniforms,
-    createNativeBvhUniforms,
-} from './src/bvh/gpu.js';
-import { nativeBvhShader } from './src/bvh/shader.js';
-import {
     MeshBVH,
     MeshBVHUniformStruct,
+    FloatVertexAttributeTexture,
     shaderStructs,
     shaderIntersectFunction,
     SAH,
@@ -77,45 +69,30 @@ function setGpuDebugStage(name)
     window.__openpbrGpuStage = gpuDebugStage;
 }
 
-// BVH engine selection (params.bvh_engine): 'threejs' (default, three-mesh-bvh)
-// or 'native' (src/bvh/* port). The MTLX raster route currently uses the native
-// sampler-based shader interface, so keep its construction and GLSL prelude aligned.
-function is_threejs_bvh_engine()
-{
-    return params.bvh_engine !== 'native' && !is_mtlx_bvh_raster_route();
-}
-
 function buildBvh(geometry)
 {
     setGpuDebugStage('building-bvh');
-    const bvh = is_threejs_bvh_engine()
-        ? new MeshBVH(geometry, { strategy: SAH })
-        : new Bvh(geometry);
+    const bvh = new MeshBVH(geometry, { strategy: SAH });
     setGpuDebugStage('bvh-built');
     return bvh;
 }
 
 function createBvhUniforms(prefix)
 {
-    return is_threejs_bvh_engine()
-        ? { [prefix]: { value: new MeshBVHUniformStruct() } }
-        : createNativeBvhUniforms(prefix);
+    return { [prefix]: { value: new MeshBVHUniformStruct() } };
 }
 
 function assignBvhUniforms(uniforms, prefix, bvh)
 {
-    if (is_threejs_bvh_engine()) uniforms[prefix].value.updateFrom(bvh);
-    else assignNativeBvhUniforms(uniforms, prefix, bvh);
+    uniforms[prefix].value.updateFrom(bvh);
 }
 
-// Rewrites the native-engine GLSL (3 sampler2D uniforms + nativeBvhShader) into
-// the three-mesh-bvh GLSL interface (one `BVH` struct uniform + shaderStructs/
-// shaderIntersectFunction), or returns the source unchanged for the native engine.
+// Rewrites the sampler-based route GLSL into the three-mesh-bvh interface
+// (one `BVH` struct uniform + shaderStructs/shaderIntersectFunction).
 // The bvhIntersectFirstHitWithinDistance(...) call site is identical text in every
 // *.glsl file, so a single pair of regexes covers all of them.
 function adaptBvhGlslForEngine(source)
 {
-    if (!is_threejs_bvh_engine()) return source;
     return source
         .replace(
             /uniform sampler2D (\w+)_nodes;\s*uniform sampler2D \1_indices;\s*uniform sampler2D \1_positions;/g,
@@ -125,11 +102,12 @@ function adaptBvhGlslForEngine(source)
             /bool bvhIntersectFirstHitWithinDistance\(\s*sampler2D nodes,\s*sampler2D indices,\s*sampler2D positions,\s*vec3 rayOrigin,\s*vec3 rayDirection,\s*in float maxDistance,[\s\S]*?\n\}/,
             `bool bvhIntersectFirstHitWithinDistance(
     BVH bvhData, vec3 rayOrigin, vec3 rayDirection, in float maxDistance,
-    inout uvec4 faceIndices, inout vec3 faceNormal, inout vec3 barycoord,
-    inout float side, inout float dist)
+                out uvec4 faceIndices, out vec3 faceNormal, out vec3 barycoord,
+                out float side, out float dist)
 {
     uvec4 localFaceIndices; vec3 localFaceNormal; vec3 localBarycoord; float localSide; float localDist;
-    bool found = bvhIntersectFirstHit(bvhData, rayOrigin, rayDirection, localFaceIndices, localFaceNormal, localBarycoord, localSide, localDist);
+    bool found = bvhIntersectFirstHit(bvhData.index, bvhData.position, bvhData.bvhBounds, bvhData.bvhContents,
+                                      rayOrigin, rayDirection, localFaceIndices, localFaceNormal, localBarycoord, localSide, localDist);
     if (found && localDist < maxDistance) {
         faceIndices = localFaceIndices; faceNormal = localFaceNormal; barycoord = localBarycoord; side = localSide; dist = localDist;
         return true;
@@ -146,7 +124,7 @@ function adaptBvhGlslForEngine(source)
 // GLSL prelude providing the BVH struct/intersection primitives, chosen per engine.
 function bvhGlslPrelude()
 {
-    return is_threejs_bvh_engine() ? (shaderStructs + shaderIntersectFunction) : nativeBvhShader;
+    return shaderStructs + shaderIntersectFunction;
 }
 
 class MeshLoader
@@ -210,10 +188,6 @@ var params =
 
     scene_name:                         'standard-shader-ball',
     renderer_mode:                      'Rasterizer MTLX',
-    // 'threejs' = three-mesh-bvh (battle-tested, kept as the default); 'native'
-    // = the local src/bvh/* port (feature 004). Same GLSL traversal call site
-    // either way; see adaptBvhGlslForEngine()/buildBvh()/createBvhUniforms().
-    bvh_engine:                          'threejs',
     mtlx_material:                      '',
     paused:                             true,   // pathtracer accumulation starts paused; toggle in GUI or ?paused=false
     smooth_normals:                     true,
@@ -1524,8 +1498,7 @@ function installWebGLDiagnostics(gl)
         app: {
             scene: params.scene_name,
             rendererMode: params.renderer_mode,
-            requestedBvhEngine: params.bvh_engine,
-            effectiveBvhEngine: is_threejs_bvh_engine() ? 'threejs' : 'native',
+            bvhEngine: 'threejs',
             renderSize: params.render_size,
             loaded: LOADED,
             compiling: COMPILING
@@ -1904,9 +1877,9 @@ function create_materials()
             UniformsUtils.clone(ShaderLib.phong.uniforms),
             {
                 ...createBvhUniforms('bvh_surface'),
-                geomN_surface:           { value: new NativeAttributeTexture() },
-                geomT_surface:           { value: new NativeAttributeTexture() },
-                geomS_surface:           { value: new NativeAttributeTexture() },
+                geomN_surface:           { value: new FloatVertexAttributeTexture() },
+                geomT_surface:           { value: new FloatVertexAttributeTexture() },
+                geomS_surface:           { value: new FloatVertexAttributeTexture() },
                 has_normals_surface:     { value: 1 },
                 has_tangents_surface:    { value: 0 },
                 has_uvs_surface:         { value: 0 },
@@ -2019,13 +1992,13 @@ function create_materials()
             UniformsUtils.clone(ShaderLib.phong.uniforms),
             {
                 ...createBvhUniforms('bvh_surface'),
-                normalAttribute_surface: { value: new NativeAttributeTexture() },
-                tangentAttribute_surface:{ value: new NativeAttributeTexture() },
+                normalAttribute_surface: { value: new FloatVertexAttributeTexture() },
+                tangentAttribute_surface:{ value: new FloatVertexAttributeTexture() },
                 has_normals_surface:     { value: 1 },
                 has_tangents_surface:    { value: 0 },
                 ...createBvhUniforms('bvh_props'),
-                normalAttribute_props: { value: new NativeAttributeTexture() },
-                tangentAttribute_props:{ value: new NativeAttributeTexture() },
+                normalAttribute_props: { value: new FloatVertexAttributeTexture() },
+                tangentAttribute_props:{ value: new FloatVertexAttributeTexture() },
                 has_normals_props:     { value: 1 },
                 has_tangents_props:    { value: 0 },
                 ground_texture:        { value: null },
@@ -2770,7 +2743,6 @@ function setup_gui()
         catch (e) { showMtlxLibraryError(e); return; }
         load_scene(params.scene_name);
     });
-    renderer_folder.add(params, 'bvh_engine', ['threejs', 'native']).name('BVH engine').onChange(     v => { setPaused(true); load_scene(params.scene_name); });
     renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => { setPaused(true); load_scene(v); });
     renderer_folder.add( params, 'smooth_normals' ).onChange(                                         v => { resetSamples(); });
     renderer_folder.add( params, 'wireframe' ).onChange(                                              v => { resetSamples(); });
