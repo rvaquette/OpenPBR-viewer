@@ -2614,8 +2614,8 @@ function reset_camera(scene_name)
             const tanHalfHorizontalFov = tanHalfVerticalFov * aspect;
             const forward = new Vector3();
             camera.getWorldDirection(forward);
-            const right = new Vector3().crossVectors(forward, camera.up).normalize();
-            const up = new Vector3().crossVectors(right, forward).normalize();
+            const right = new Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+            const up = new Vector3().setFromMatrixColumn(camera.matrixWorld, 1).normalize();
             const corner = new Vector3();
             const offset = new Vector3();
             let requiredRetreat = 0.0;
