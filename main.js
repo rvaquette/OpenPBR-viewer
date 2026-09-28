@@ -2892,6 +2892,8 @@ function trigger_recompile()
         // Warm-up render to flush any remaining GPU pipeline stalls
         if (FULLSCREEN_BVH_ROUTE && pathtracedQuad && pathtracingRenderTarget) {
             setGpuDebugStage('warmup-render');
+            camera.updateMatrixWorld();
+            sync_shader_uniforms(active_pathtrace_material().uniforms);
             renderer.setRenderTarget(pathtracingRenderTarget);
             pathtracedQuad.render(renderer);
             renderer.setRenderTarget(null);
