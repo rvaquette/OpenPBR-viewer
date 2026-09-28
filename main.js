@@ -1523,7 +1523,8 @@ function installWebGLDiagnostics(gl)
         app: {
             scene: params.scene_name,
             rendererMode: params.renderer_mode,
-            bvhEngine: params.bvh_engine,
+            requestedBvhEngine: params.bvh_engine,
+            effectiveBvhEngine: is_threejs_bvh_engine() ? 'threejs' : 'native',
             renderSize: params.render_size,
             loaded: LOADED,
             compiling: COMPILING
