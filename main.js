@@ -105,11 +105,14 @@ function adaptBvhGlslForEngine(source)
                 out uvec4 faceIndices, out vec3 faceNormal, out vec3 barycoord,
                 out float side, out float dist)
 {
-    uvec4 localFaceIndices; vec3 localFaceNormal; vec3 localBarycoord; float localSide; float localDist;
     bool found = bvhIntersectFirstHit(bvhData.index, bvhData.position, bvhData.bvhBounds, bvhData.bvhContents,
-                                      rayOrigin, rayDirection, localFaceIndices, localFaceNormal, localBarycoord, localSide, localDist);
-    if (found && localDist < maxDistance) {
-        faceIndices = localFaceIndices; faceNormal = localFaceNormal; barycoord = localBarycoord; side = localSide; dist = localDist;
+                                      rayOrigin, rayDirection);
+    if (found && bvhHitDistance < maxDistance) {
+        faceIndices = bvhHitFaceIndices;
+        faceNormal = bvhHitFaceNormal;
+        barycoord = bvhHitBarycoord;
+        side = bvhHitSide;
+        dist = bvhHitDistance;
         return true;
     }
     return false;
