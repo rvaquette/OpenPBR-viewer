@@ -31,6 +31,7 @@ uniform bool has_uvs_surface;
 
 uniform sampler2D ground_texture;
 uniform float ground_y;
+uniform sampler2D envMapLatLong;
 
 //////////////////////////////////////////////////////
 // renderer uniforms

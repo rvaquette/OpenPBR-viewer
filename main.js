@@ -2268,8 +2268,6 @@ function load_geometry(scene_name)
     else
     {
         for (const pm of get_pathtrace_materials()) {
-            pm.envMap = env_map_texture;
-            pm.uniforms.envMap.value = env_map_texture;
             if (pm.uniforms.envMapLatLong) pm.uniforms.envMapLatLong.value = env_map_latlong_texture;
             if (pm.uniforms.envMapIrradiance) pm.uniforms.envMapIrradiance.value = env_irradiance_latlong_texture || env_map_latlong_texture;
             if (pm.uniforms.has_env_cdf) {
