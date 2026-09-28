@@ -3234,7 +3234,7 @@ function render()
 }
 
 
-document.onkeydown = function (event)
+document.onkeydown = async function (event)
 {
     event = event || window.event;
     var charCode = (event.which) ? event.which : event.keyCode;
@@ -3352,8 +3352,9 @@ document.onkeydown = function (event)
         {
             const modes = getRendererModes();
             params.renderer_mode = modes[(modes.indexOf(params.renderer_mode) + 1) % modes.length];
-            FULLSCREEN_BVH_ROUTE = is_fullscreen_bvh_route();
             setPaused(true);
+            try { await ensureMtlxRouteDispatch(); }
+            catch (error) { showMtlxLibraryError(error); return; }
             load_scene(params.scene_name);
             break;
         }
