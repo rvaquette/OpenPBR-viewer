@@ -100,30 +100,22 @@ function adaptBvhGlslForEngine(source)
         )
         .replace(
             /bool bvhIntersectFirstHitWithinDistance\(\s*sampler2D nodes,\s*sampler2D indices,\s*sampler2D positions,\s*vec3 rayOrigin,\s*vec3 rayDirection,\s*in float maxDistance,[\s\S]*?\n\}/,
-            `bool bvhIntersectFirstHitWithinDistance(
-    BVH bvhData, vec3 rayOrigin, vec3 rayDirection, in float maxDistance)
-{
-    bool found = bvhIntersectFirstHit(bvhData.index, bvhData.position, bvhData.bvhBounds, bvhData.bvhContents,
-                                      rayOrigin, rayDirection);
-    return found && bvhHitDistance < maxDistance;
-}`
+            ''
         )
         .replace(
             /([ \t]*)bool\s+(\w+)\s*=\s*bvhIntersectFirstHitWithinDistance\(\s*(\w+)_nodes,\s*\3_indices,\s*\3_positions,\s*([^,]+),\s*([^,]+),([\s\S]*?),\s*(\w+),\s*(\w+),\s*(\w+),\s*(\w+),\s*(\w+)\s*\);/g,
             (_match, indent, hit, bvh, rayOrigin, rayDirection, maxDistance, faceIndices, faceNormal, barycoord, side, dist) => [
-                `${indent}bool ${hit} = bvhIntersectFirstHitWithinDistance(${bvh}, ${rayOrigin}, ${rayDirection}, ${maxDistance});`,
-                `${indent}if (${hit}) {`,
+                `${indent}bool ${hit} = bvhIntersectFirstHit(${bvh}.index, ${bvh}.position, ${bvh}.bvhBounds, ${bvh}.bvhContents, ${rayOrigin}, ${rayDirection});`,
+                `${indent}if (${hit} && bvhHitDistance < ${maxDistance}) {`,
                 `${indent}    ${faceIndices} = bvhHitFaceIndices;`,
                 `${indent}    ${faceNormal} = bvhHitFaceNormal;`,
                 `${indent}    ${barycoord} = bvhHitBarycoord;`,
                 `${indent}    ${side} = bvhHitSide;`,
                 `${indent}    ${dist} = bvhHitDistance;`,
-                indent + '}'
+                `${indent}} else {`,
+                `${indent}    ${hit} = false;`,
+                `${indent}}`
             ].join('\n')
-        )
-        .replace(
-            /bvhIntersectFirstHitWithinDistance\(\s*(\w+)_nodes,\s*\1_indices,\s*\1_positions,/g,
-            (_match, name) => `bvhIntersectFirstHitWithinDistance(${name},`
         );
 }
 
