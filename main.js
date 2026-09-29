@@ -1148,7 +1148,7 @@ async function generateMtlxRasterDispatch(mtlxText) {
         'mat4 mtlxEnvMatrix() {\n' +
         '    float a = 1.57079632679;\n' +
         '    float c = cos(a), s = sin(a);\n' +
-        '    return mat4(c,0.,-s,0., 0.,-1.,0.,0., s,0.,c,0., 0.,0.,0.,1.);\n' +
+        '    return mat4(c,0.,-s,0., 0.,1.,0.,0., s,0.,c,0., 0.,0.,0.,1.);\n' +
         '}\n' +
         '#define u_envMatrix    mtlxEnvMatrix()\n' +
         '#define u_envRadiance  envMapLatLong\n' +
