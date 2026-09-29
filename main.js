@@ -101,21 +101,24 @@ function adaptBvhGlslForEngine(source)
         .replace(
             /bool bvhIntersectFirstHitWithinDistance\(\s*sampler2D nodes,\s*sampler2D indices,\s*sampler2D positions,\s*vec3 rayOrigin,\s*vec3 rayDirection,\s*in float maxDistance,[\s\S]*?\n\}/,
             `bool bvhIntersectFirstHitWithinDistance(
-    BVH bvhData, vec3 rayOrigin, vec3 rayDirection, in float maxDistance,
-                inout uvec4 faceIndices, inout vec3 faceNormal, inout vec3 barycoord,
-                inout float side, inout float dist)
+    BVH bvhData, vec3 rayOrigin, vec3 rayDirection, in float maxDistance)
 {
     bool found = bvhIntersectFirstHit(bvhData.index, bvhData.position, bvhData.bvhBounds, bvhData.bvhContents,
                                       rayOrigin, rayDirection);
-    if (found && bvhHitDistance < maxDistance) {
-        faceIndices = bvhHitFaceIndices;
-        faceNormal = bvhHitFaceNormal;
-        barycoord = bvhHitBarycoord;
-        side = bvhHitSide;
-        dist = bvhHitDistance;
-        return true;
-    }
-    return false;
+    return found && bvhHitDistance < maxDistance;
+}`
+        )
+        .replace(
+            /([ \t]*)bool\s+(\w+)\s*=\s*bvhIntersectFirstHitWithinDistance\(\s*(\w+)_nodes,\s*\3_indices,\s*\3_positions,\s*([^,]+),\s*([^,]+),([\s\S]*?),\s*(\w+),\s*(\w+),\s*(\w+),\s*(\w+),\s*(\w+)\s*\);/g,
+            (_match, indent, hit, bvh, rayOrigin, rayDirection, maxDistance, faceIndices, faceNormal, barycoord, side, dist) =>
+                `${indent}bool ${hit} = bvhIntersectFirstHitWithinDistance(${bvh}, ${rayOrigin}, ${rayDirection}, ${maxDistance});\n` +
+                `${indent}if (${hit}) {\n` +
+                `${indent}    ${faceIndices} = bvhHitFaceIndices;\n` +
+                `${indent}    ${faceNormal} = bvhHitFaceNormal;\n` +
+                `${indent}    ${barycoord} = bvhHitBarycoord;\n` +
+                `${indent}    ${side} = bvhHitSide;\n` +
+                `${indent}    ${dist} = bvhHitDistance;\n` +
+                `${indent}}`
 }`
         )
         .replace(
