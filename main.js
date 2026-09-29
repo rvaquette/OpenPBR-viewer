@@ -3037,7 +3037,6 @@ function setup_gui()
     ///// Renderer folder /////////////////////////////////////
     const renderer_folder = gui.addFolder('Renderer');
     renderer_folder.add(params, 'renderer_mode', getRendererModeOptions()).onChange(              async v => {
-        setPaused(true);
         try { await ensureMtlxRouteDispatch(); }
         catch (e) { showMtlxLibraryError(e); return; }
         load_scene(params.scene_name);
@@ -3706,7 +3705,6 @@ document.onkeydown = async function (event)
         {
             const modes = getRendererModes();
             params.renderer_mode = modes[(modes.indexOf(params.renderer_mode) + 1) % modes.length];
-            setPaused(true);
             try { await ensureMtlxRouteDispatch(); }
             catch (error) { showMtlxLibraryError(error); return; }
             load_scene(params.scene_name);
