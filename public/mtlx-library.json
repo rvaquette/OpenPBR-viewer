@@ -2,6 +2,17 @@
   "root": "/mtlx-library",
   "directories": [
     {
+      "name": "displacements/Rock063_1K-JPG",
+      "path": "displacements/Rock063_1K-JPG",
+      "materials": [
+        {
+          "name": "Rock063_1K-JPG",
+          "file": "Rock063_1K-JPG.mtlx",
+          "url": "/mtlx-library/displacements/Rock063_1K-JPG/Rock063_1K-JPG.mtlx"
+        }
+      ]
+    },
+    {
       "name": "nodes/absval",
       "path": "nodes/absval",
       "materials": [
