@@ -2889,6 +2889,8 @@ function makeGuiDraggable()
     let dragState = null;
 
     handle.style.cursor = 'move';
+    handle.style.touchAction = 'none';
+    handle.style.userSelect = 'none';
     handle.addEventListener('pointerdown', event => {
         if (event.button !== 0) return;
 
