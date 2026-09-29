@@ -203,7 +203,7 @@ var params =
 
     skyPower:                            1.0,
     skyColor:                            [1.0, 1.0, 1.0],
-    env_map_path:                        'textures/envmaps/etzwihl_4k.jpg',
+    env_map_path:                        'textures/envmaps/Malibu_Overlook_8k.jpg',
     env_map_provided:                    false,
     env_irradiance_path:                 '',
     // Envmap CDF importance sampling (feature 004, Phase 5): opt-in, default off.
