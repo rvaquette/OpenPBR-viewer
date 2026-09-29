@@ -36,4 +36,5 @@ if (Test-Path $packagePath) { Remove-Item $packagePath -Force }
 Compress-Archive -Path (Join-Path $apiRoot '*') -DestinationPath $packagePath -Force
 az functionapp deployment source config-zip --resource-group $ResourceGroup --name $FunctionAppName --src $packagePath
 Remove-Item $packagePath -Force
-Write-Output "Deployed https://$FunctionAppName.azurewebsites.net/api/copilot/mtlx"
+Write-Output "Copilot endpoint: https://$FunctionAppName.azurewebsites.net/api/copilot/mtlx"
+Write-Output "AmbientCG ZIP endpoint: https://$FunctionAppName.azurewebsites.net/api/mtlx/archive"

@@ -150,3 +150,4 @@ resource functionDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-p
 output functionAppName string = functionApp.name
 output functionAppUrl string = 'https://${functionApp.properties.defaultHostName}'
 output functionEndpoint string = 'https://${functionApp.properties.defaultHostName}/api/copilot/mtlx'
+output ambientCgArchiveEndpoint string = 'https://${functionApp.properties.defaultHostName}/api/mtlx/archive'

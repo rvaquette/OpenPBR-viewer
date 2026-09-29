@@ -5,7 +5,8 @@ const AMBIENTCG_HOSTS = new Set(['ambientcg.com', 'www.ambientcg.com']);
 const DOWNLOAD_HOST = 'acg-download.struffelproductions.com';
 
 function corsHeaders(origin, contentType = 'application/json') {
-    const allowed = (process.env.ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean);
+    const allowed = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://127.0.0.1:5173')
+        .split(',').map(value => value.trim()).filter(Boolean);
     const allowOrigin = allowed.includes(origin) ? origin : allowed.includes('*') ? '*' : allowed[0] || '';
     return {
         'Content-Type': contentType,
