@@ -288,6 +288,7 @@ var mtlxRouteLights = [];
 var mtlxRouteParamDescriptors = [];
 var mtlxRouteLightsTexture = null;
 var activeMtlxArchiveSource = null;
+var activeMtlxArchiveSelection = null;
 var mtlxArchiveDisplacement = null;
 var mtlxRouteMaterialSummary = {
     opaque: true,
@@ -479,7 +480,7 @@ function findMtlxNodeByName(document, name)
     ) || null;
 }
 
-async function loadMtlxDisplacement(mtlxText, archiveSource)
+async function loadMtlxDisplacement(mtlxText, archiveSource, materialBaseUrl)
 {
     const xmlDocument = new DOMParser().parseFromString(mtlxText, 'application/xml');
     if (xmlDocument.querySelector('parsererror'))
@@ -515,7 +516,8 @@ async function loadMtlxDisplacement(mtlxText, archiveSource)
         throw new Error('[mtlx-displacement] custom texture coordinates are not supported; use UV0');
 
     const fileValue = getMtlxInput(imageNode, 'file')?.getAttribute('value');
-    const imageUrl = archiveSource?.resolveTexture(fileValue) || resolveMtlxTextureUrl(fileValue, getPublicAssetUrl(''));
+    const imageUrl = archiveSource?.resolveTexture(fileValue) ||
+        resolveMtlxTextureUrl(fileValue, materialBaseUrl || getPublicAssetUrl(''));
     if (!imageUrl) throw new Error('[mtlx-displacement] displacement image file is missing');
     const response = await fetch(imageUrl);
     if (!response.ok) throw new Error(`[mtlx-displacement] image fetch failed (${response.status})`);
@@ -542,7 +544,6 @@ async function loadMtlxDisplacement(mtlxText, archiveSource)
     };
     return {
         pixels,
-        width: bitmap.width,
         width,
         height,
         scale,
@@ -1644,7 +1645,6 @@ function getMtlxMaterialOptions(directoryPath)
 }
 
 let mtlxPickerElements = null;
-let loadedMtlxArchiveBundle = null;
 
 function ensureMtlxPicker()
 {
@@ -1852,7 +1852,6 @@ async function loadAmbientCgArchive(elements)
     setMtlxArchiveStatus(elements, 'Downloading and inspecting ZIP...');
     try {
         const archive = await loadMtlxArchive(url, ambientCgArchiveEndpoint);
-        loadedMtlxArchiveBundle = archive;
         const label = archive.materials.length === 1
             ? 'MaterialX file found:'
             : `${archive.materials.length} MaterialX files found:`;
@@ -1893,6 +1892,7 @@ async function applyMtlxArchiveMaterial(archive, material, elements)
         setPaused(true);
         await configureSingleMtlxMaterial('', material.name, archiveSource.mtlxText, archiveSource);
         activeMtlxArchiveSource = archiveSource;
+        activeMtlxArchiveSelection = { archive, material };
         retireMtlxArchiveSource(previousArchiveSource);
         load_scene(params.scene_name);
         elements.picker.classList.remove('is-open', 'is-materials');
@@ -2022,6 +2022,7 @@ async function applyGeneratedMtlx(mtlxText, materialName)
     setPaused(true);
     await configureSingleMtlxMaterial('', materialName || 'copilot-generated', mtlxText);
     activeMtlxArchiveSource = null;
+    activeMtlxArchiveSelection = null;
     retireMtlxArchiveSource(previousArchiveSource);
     load_scene(params.scene_name);
 }
@@ -2159,7 +2160,7 @@ async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText =
         archiveSource.textureLoadsPending = mtlxRouteTextureBindings.length;
         archiveSource.retired = false;
     }
-    mtlxArchiveDisplacement = await loadMtlxDisplacement(mtlxText, archiveSource);
+    mtlxArchiveDisplacement = await loadMtlxDisplacement(mtlxText, archiveSource, mtlxMaterialBaseUrl);
     mtlxRouteLights = extractMtlxLights(mtlxText);
     mtlxRouteMaterialSummary = summary;
     const parameterBinding = bindMtlxParametersToTexture(result.glsl, mtlxText);
@@ -2192,6 +2193,7 @@ async function applyMtlxMaterialFromLibrary(value)
         setPaused(true);
         await configureSingleMtlxMaterial(url, materialId);
         activeMtlxArchiveSource = null;
+        activeMtlxArchiveSelection = null;
         retireMtlxArchiveSource(previousArchiveSource);
         load_scene(params.scene_name);
     } catch (e) {
@@ -2207,9 +2209,18 @@ async function ensureMtlxRouteDispatch()
 {
     if (!uses_mtlx_fullscreen_shader()) return;
 
-    if (activeMtlxArchiveSource) {
-        const source = activeMtlxArchiveSource;
-        await configureSingleMtlxMaterial('', source.materialId, source.mtlxText, source);
+    if (activeMtlxArchiveSelection) {
+        const selection = activeMtlxArchiveSelection;
+        const source = await selection.archive.selectMaterial(selection.material.path);
+        const previousArchiveSource = activeMtlxArchiveSource;
+        try {
+            await configureSingleMtlxMaterial('', selection.material.name, source.mtlxText, source);
+        } catch (error) {
+            retireMtlxArchiveSource(source);
+            throw error;
+        }
+        activeMtlxArchiveSource = source;
+        retireMtlxArchiveSource(previousArchiveSource);
         return;
     }
 
@@ -3128,12 +3139,6 @@ function load_geometry(scene_name)
         if (FULLSCREEN_BVH_ROUTE)
         {
             // Set up mesh properties for pathtracing
-                    if (uses_mtlx_fullscreen_shader() && mtlxArchiveDisplacement)
-                    {
-                        MESH_SURFACE.geometry = applyMtlxDisplacement(MESH_SURFACE.geometry, mtlxArchiveDisplacement);
-                        console.log('[mtlx-displacement] deformed vertices', MESH_SURFACE.geometry.attributes.position.count,
-                            '| scale:', mtlxArchiveDisplacement.scale);
-                    }
             BVH_PROPS  = mesh_loader.result.bvh;
                 for (const pm of get_pathtrace_materials()) {
                 if (!pm.uniforms.bvh_props) continue; // MTLX route dropped the props BVH
