@@ -5,7 +5,7 @@
   "description": "Azure Function that generates MaterialX through a Copilot-compatible endpoint",
   "main": "src/functions/*.js",
   "scripts": {
-    "build": "node --check src/functions/generateMtlx.js && node --check src/lib/copilotClient.js && node --check src/lib/mtlxValidation.js",
+    "build": "node --check src/functions/generateMtlx.js && node --check src/functions/downloadMtlxArchive.js && node --check src/lib/copilotClient.js && node --check src/lib/mtlxValidation.js",
     "start": "func start"
   },
   "dependencies": {

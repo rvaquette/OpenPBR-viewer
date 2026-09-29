@@ -5,7 +5,7 @@
 // instead of an <img> element.
 import { Texture } from 'three';
 
-export function loadNativeTexture(url, onError) {
+export function loadNativeTexture(url, onError, onLoad) {
     const texture = new Texture();
     fetch(url)
         .then(response => {
@@ -19,6 +19,7 @@ export function loadNativeTexture(url, onError) {
         .then(bitmap => {
             texture.image = bitmap;
             texture.needsUpdate = true;
+            onLoad?.(texture);
         })
         .catch(err => {
             if (onError) onError(err);

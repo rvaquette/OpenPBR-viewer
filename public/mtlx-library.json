@@ -2,6 +2,17 @@
   "root": "/mtlx-library",
   "directories": [
     {
+      "name": "displacements/Fabric022_1K-JPG",
+      "path": "displacements/Fabric022_1K-JPG",
+      "materials": [
+        {
+          "name": "Fabric022_1K-JPG",
+          "file": "Fabric022_1K-JPG.mtlx",
+          "url": "/mtlx-library/displacements/Fabric022_1K-JPG/Fabric022_1K-JPG.mtlx"
+        }
+      ]
+    },
+    {
       "name": "displacements/Rock063_1K-JPG",
       "path": "displacements/Rock063_1K-JPG",
       "materials": [
