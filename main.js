@@ -186,6 +186,7 @@ var params =
 
     scene_name:                         'standard-shader-ball',
     renderer_mode:                      'Rasterizer MTLX',
+    mtlx_directory:                     '',
     mtlx_material:                      '',
     paused:                             true,   // pathtracer accumulation starts paused; toggle in GUI or ?paused=false
     smooth_normals:                     true,
@@ -298,6 +299,7 @@ var mtlxRouteMaterialSummary = {
     transmissionWeight: 0.0
 };
 var mtlxMaterialLibrary = [];
+var mtlxMaterialDirectories = [];
 
 const LEGACY_COMPARISON_ENABLED_BY_DEFAULT = false;
 const legacyComparisonEnabled = (() => {
@@ -359,8 +361,22 @@ function readXmlAttr(attrs, name)
 function resolveMtlxTextureUrl(fileValue, materialBaseUrl)
 {
     if (/^(?:[a-z]+:)?\/\//i.test(fileValue)) return fileValue;
-    if (fileValue.startsWith('/')) return getPublicAssetUrl(fileValue);
-    return new URL(fileValue, materialBaseUrl || getPublicAssetUrl('')).toString();
+    const libraryRoot = new URL(getPublicAssetUrl('mtlx-library/'));
+    if (fileValue.startsWith('/')) {
+        const absoluteUrl = new URL(getPublicAssetUrl(fileValue));
+        if (absoluteUrl.pathname.includes('/mtlx-library/')) return absoluteUrl.toString();
+        return new URL(fileValue.replace(/^\/+/, ''), libraryRoot).toString();
+    }
+
+    const relativeUrl = new URL(fileValue, materialBaseUrl || libraryRoot).toString();
+    if (relativeUrl.includes('/mtlx-library/')) return relativeUrl;
+
+    // Keep legacy paths such as ../../Images/... inside the replacement library.
+    const libraryRelativePath = fileValue
+        .replace(/^(?:\.\.\/)+/, '')
+        .replace(/^Images\//i, '')
+        .replace(/^textures\//i, 'textures/');
+    return new URL(libraryRelativePath, libraryRoot).toString();
 }
 
 function extractMtlxTextureBindings(mtlxText, materialBaseUrl)
@@ -1231,7 +1247,7 @@ async function generateMtlxGlsl(mtlxText) {
         '}\n' +
         '#define u_envMatrix    mtlxEnvMatrix()\n' +
         '#define u_envRadiance  envMapLatLong\n' +
-        '#define u_envIrradiance envMapIrradiance\n' +
+        '#define u_envIrradiance envMapLatLong\n' +
         '#define u_envLightIntensity skyPower\n' +
         '#define u_envRadianceMips   1\n' +
         '#define u_envRadianceSamples 1\n' +
@@ -1299,7 +1315,6 @@ async function generateMtlxRasterDispatch(mtlxText) {
     glsl = glsl.replace(/\bout1\b/g, 'mtlxRasterOut');
     glsl = transformGeneratedMainToFunction(glsl, 'mtlxRasterMain');
     const envPreamble =
-        'uniform sampler2D envMapIrradiance;\n' +
         'mat4 mtlxEnvMatrix() {\n' +
         '    float a = 1.57079632679;\n' +
         '    float c = cos(a), s = sin(a);\n' +
@@ -1307,7 +1322,7 @@ async function generateMtlxRasterDispatch(mtlxText) {
         '}\n' +
         '#define u_envMatrix    mtlxEnvMatrix()\n' +
         '#define u_envRadiance  envMapLatLong\n' +
-        '#define u_envIrradiance envMapIrradiance\n' +
+        '#define u_envIrradiance envMapLatLong\n' +
         '#define u_envLightIntensity skyPower\n' +
         '#define u_envRadianceMips   1\n' +
         '#define u_envRadianceSamples 1\n' +
@@ -1393,7 +1408,6 @@ async function generateMtlxRouteDispatch(mtlxText) {
     glsl = glsl.replace(/^[ \t]*sampler2D[ \t]+([A-Za-z_][A-Za-z0-9_]*)[ \t]*;[ \t]*\r?\n/gm, 'uniform sampler2D $1;\n');
     const envPreamble =
         'uniform sampler2D envMapLatLong;\n' +
-        'uniform sampler2D envMapIrradiance;\n' +
         'mat4 mtlxEnvMatrix() {\n' +
         '    float a = 1.57079632679;\n' +
         '    float c = cos(a), s = sin(a);\n' +
@@ -1401,7 +1415,7 @@ async function generateMtlxRouteDispatch(mtlxText) {
         '}\n' +
         '#define u_envMatrix    mtlxEnvMatrix()\n' +
         '#define u_envRadiance  envMapLatLong\n' +
-        '#define u_envIrradiance envMapIrradiance\n' +
+        '#define u_envIrradiance envMapLatLong\n' +
         '#define u_envLightIntensity skyPower\n' +
         '#define u_envRadianceMips   1\n' +
         '#define u_envRadianceSamples 1\n' +
@@ -1469,7 +1483,17 @@ async function loadMtlxMaterialLibrary()
             return;
         }
         const payload = await resp.json();
-        mtlxMaterialLibrary = Array.isArray(payload?.materials) ? payload.materials : [];
+        mtlxMaterialDirectories = Array.isArray(payload?.directories) ? payload.directories : [];
+        mtlxMaterialLibrary = mtlxMaterialDirectories.flatMap(directory =>
+            (Array.isArray(directory.materials) ? directory.materials : []).map(material => ({
+                ...material,
+                directory: directory.name,
+                directoryPath: directory.path
+            }))
+        );
+        if (mtlxMaterialDirectories.length === 0 && Array.isArray(payload?.materials)) {
+            mtlxMaterialLibrary = payload.materials;
+        }
         console.log('[mtlx-library] loaded', mtlxMaterialLibrary.length, 'materials');
     } catch (e) {
         console.warn('[mtlx-library] manifest fetch error:', e?.message || e);
@@ -1477,10 +1501,20 @@ async function loadMtlxMaterialLibrary()
     }
 }
 
-function getMtlxMaterialOptions()
+function getMtlxDirectoryOptions()
 {
-    const options = { 'Default MaterialX': '' };
-    for (const material of mtlxMaterialLibrary) {
+    const options = {};
+    for (const directory of mtlxMaterialDirectories) {
+        options[directory.name || directory.path] = directory.path;
+    }
+    return options;
+}
+
+function getMtlxMaterialOptions(directoryPath)
+{
+    const options = { 'Select material': '' };
+    const directory = mtlxMaterialDirectories.find(item => item.path === directoryPath);
+    for (const material of directory?.materials || []) {
         options[material.name || material.file] = material.url;
     }
     return options;
@@ -2943,7 +2977,20 @@ function setup_gui()
     ///// Material folder /////////////////////////////////////
     const material_folder = gui.addFolder('Material');
     const mtlx_library_folder = material_folder.addFolder('MaterialX Library');
-    mtlx_library_folder.add(params, 'mtlx_material', getMtlxMaterialOptions()).name('material').onChange( v => { applyMtlxMaterialFromLibrary(v); });
+    const directoryOptions = getMtlxDirectoryOptions();
+    const directoryPaths = Object.values(directoryOptions);
+    if (!directoryPaths.includes(params.mtlx_directory)) params.mtlx_directory = directoryPaths[0] || '';
+    const directoryController = mtlx_library_folder
+        .add(params, 'mtlx_directory', directoryOptions)
+        .name('directory');
+    const materialController = mtlx_library_folder
+        .add(params, 'mtlx_material', getMtlxMaterialOptions(params.mtlx_directory))
+        .name('material')
+        .onChange(v => { applyMtlxMaterialFromLibrary(v); });
+    directoryController.onChange(directoryPath => {
+        params.mtlx_material = '';
+        materialController.options(getMtlxMaterialOptions(directoryPath));
+    });
     mtlx_library_folder.close();
 
     if (uses_mtlx_fullscreen_shader()) setupMtlxParameterControls(material_folder);
