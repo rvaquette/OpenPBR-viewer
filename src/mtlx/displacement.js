@@ -135,15 +135,39 @@ export function applyMtlxDisplacement(sourceGeometry, displacement)
     const position = geometry.attributes.position;
     const normal = geometry.attributes.normal;
     const uv = geometry.attributes.uv;
+    const seamGroups = new Map();
     for (let i = 0; i < position.count; i++) {
+        const sourceX = position.getX(i);
+        const sourceY = position.getY(i);
+        const sourceZ = position.getZ(i);
         const height = displacement.pixels ? sampleHeight(displacement, uv.getX(i), uv.getY(i)) : displacement.value;
         const distance = height * displacement.scale;
-        position.setXYZ(
-            i,
-            position.getX(i) + normal.getX(i) * distance,
-            position.getY(i) + normal.getY(i) * distance,
-            position.getZ(i) + normal.getZ(i) * distance
-        );
+        const displaced = [
+            sourceX + normal.getX(i) * distance,
+            sourceY + normal.getY(i) * distance,
+            sourceZ + normal.getZ(i) * distance
+        ];
+        position.setXYZ(i, displaced[0], displaced[1], displaced[2]);
+
+        const key = `${Math.round(sourceX * 1.0e6)}:${Math.round(sourceY * 1.0e6)}:${Math.round(sourceZ * 1.0e6)}`;
+        let group = seamGroups.get(key);
+        if (!group) {
+            group = { indices: [], sum: [0, 0, 0] };
+            seamGroups.set(key, group);
+        }
+        group.indices.push(i);
+        group.sum[0] += displaced[0];
+        group.sum[1] += displaced[1];
+        group.sum[2] += displaced[2];
+    }
+
+    for (const group of seamGroups.values()) {
+        if (group.indices.length < 2) continue;
+        const inverseCount = 1 / group.indices.length;
+        const x = group.sum[0] * inverseCount;
+        const y = group.sum[1] * inverseCount;
+        const z = group.sum[2] * inverseCount;
+        for (const index of group.indices) position.setXYZ(index, x, y, z);
     }
 
     position.needsUpdate = true;
