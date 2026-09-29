@@ -1524,6 +1524,207 @@ function getMtlxMaterialOptions(directoryPath)
     return options;
 }
 
+let mtlxPickerElements = null;
+
+function ensureMtlxPicker()
+{
+    if (mtlxPickerElements) return mtlxPickerElements;
+
+    const style = document.createElement('style');
+    style.textContent = `
+        .mtlx-picker {
+            position: fixed;
+            inset: 0;
+            z-index: 11000;
+            display: none;
+            flex-direction: column;
+            background: #101315;
+            color: #e7ecec;
+            font: 14px/1.35 monospace;
+        }
+        .mtlx-picker.is-open { display: flex; }
+        .mtlx-picker__header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-height: 52px;
+            padding: 8px 14px;
+            background: #182022;
+            border-bottom: 1px solid #334044;
+        }
+        .mtlx-picker__title { flex: 1; font-weight: 700; }
+        .mtlx-picker__close,
+        .mtlx-picker__back {
+            min-width: 42px;
+            min-height: 38px;
+            border: 1px solid #526267;
+            border-radius: 4px;
+            background: #273237;
+            color: inherit;
+            font: inherit;
+            cursor: pointer;
+        }
+        .mtlx-picker__back { display: none; }
+        .mtlx-picker__body {
+            display: grid;
+            grid-template-columns: minmax(240px, 0.85fr) minmax(280px, 1.15fr);
+            min-height: 0;
+            flex: 1;
+        }
+        .mtlx-picker__pane {
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            padding: 12px;
+        }
+        .mtlx-picker__pane + .mtlx-picker__pane { border-left: 1px solid #334044; }
+        .mtlx-picker__label { margin-bottom: 7px; color: #a9b9bc; }
+        .mtlx-picker__search {
+            width: 100%;
+            box-sizing: border-box;
+            margin-bottom: 10px;
+            padding: 10px;
+            border: 1px solid #526267;
+            border-radius: 4px;
+            background: #0b0e0f;
+            color: inherit;
+            font: inherit;
+        }
+        .mtlx-picker__list {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            min-height: 0;
+            overflow: auto;
+            overscroll-behavior: contain;
+        }
+        .mtlx-picker__item {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #334044;
+            border-radius: 4px;
+            background: #1a2225;
+            color: inherit;
+            text-align: left;
+            font: inherit;
+            cursor: pointer;
+        }
+        .mtlx-picker__item:hover,
+        .mtlx-picker__item.is-selected { background: #29434a; border-color: #6caab5; }
+        .mtlx-picker__empty { padding: 10px 2px; color: #87979a; }
+        @media (max-width: 600px) {
+            .mtlx-picker__body { display: block; }
+            .mtlx-picker__pane { height: 100%; box-sizing: border-box; }
+            .mtlx-picker__pane + .mtlx-picker__pane { display: none; border-left: 0; }
+            .mtlx-picker.is-materials .mtlx-picker__pane--directories { display: none; }
+            .mtlx-picker.is-materials .mtlx-picker__pane--materials { display: flex; }
+            .mtlx-picker.is-materials .mtlx-picker__back { display: block; }
+        }
+    `;
+    document.head.appendChild(style);
+
+    const picker = document.createElement('section');
+    picker.className = 'mtlx-picker';
+    picker.setAttribute('aria-label', 'MaterialX library');
+    picker.innerHTML = `
+        <header class="mtlx-picker__header">
+            <button class="mtlx-picker__back" type="button" aria-label="Back">&lt;</button>
+            <div class="mtlx-picker__title">MaterialX library</div>
+            <button class="mtlx-picker__close" type="button" aria-label="Close">X</button>
+        </header>
+        <div class="mtlx-picker__body">
+            <section class="mtlx-picker__pane mtlx-picker__pane--directories">
+                <div class="mtlx-picker__label">Directory</div>
+                <input class="mtlx-picker__search mtlx-picker__directory-search" type="search" placeholder="Filter directories">
+                <div class="mtlx-picker__list mtlx-picker__directory-list"></div>
+            </section>
+            <section class="mtlx-picker__pane mtlx-picker__pane--materials">
+                <div class="mtlx-picker__label mtlx-picker__material-label">Material</div>
+                <input class="mtlx-picker__search mtlx-picker__material-search" type="search" placeholder="Filter materials">
+                <div class="mtlx-picker__list mtlx-picker__material-list"></div>
+            </section>
+        </div>
+    `;
+    document.body.appendChild(picker);
+
+    const elements = {
+        picker,
+        directorySearch: picker.querySelector('.mtlx-picker__directory-search'),
+        directoryList: picker.querySelector('.mtlx-picker__directory-list'),
+        materialSearch: picker.querySelector('.mtlx-picker__material-search'),
+        materialList: picker.querySelector('.mtlx-picker__material-list'),
+        materialLabel: picker.querySelector('.mtlx-picker__material-label'),
+    };
+    picker.querySelector('.mtlx-picker__close').addEventListener('click', () => picker.classList.remove('is-open'));
+    picker.querySelector('.mtlx-picker__back').addEventListener('click', () => picker.classList.remove('is-materials'));
+    elements.directorySearch.addEventListener('input', () => renderMtlxPickerDirectories(elements));
+    elements.materialSearch.addEventListener('input', () => renderMtlxPickerMaterials(elements));
+    mtlxPickerElements = elements;
+    return elements;
+}
+
+function renderMtlxPickerDirectories(elements)
+{
+    const query = elements.directorySearch.value.trim().toLowerCase();
+    elements.directoryList.replaceChildren();
+    const directories = mtlxMaterialDirectories.filter(directory =>
+        (directory.path || directory.name || '').toLowerCase().includes(query)
+    );
+    if (directories.length === 0) {
+        elements.directoryList.innerHTML = '<div class="mtlx-picker__empty">No directory found</div>';
+        return;
+    }
+    for (const directory of directories) {
+        const button = document.createElement('button');
+        button.className = 'mtlx-picker__item';
+        button.type = 'button';
+        button.textContent = `${directory.path} (${directory.materials?.length || 0})`;
+        button.addEventListener('click', () => {
+            params.mtlx_directory = directory.path;
+            elements.materialLabel.textContent = directory.path;
+            elements.materialSearch.value = '';
+            renderMtlxPickerMaterials(elements);
+            elements.picker.classList.add('is-materials');
+        });
+        elements.directoryList.appendChild(button);
+    }
+}
+
+function renderMtlxPickerMaterials(elements)
+{
+    const directory = mtlxMaterialDirectories.find(item => item.path === params.mtlx_directory);
+    const query = elements.materialSearch.value.trim().toLowerCase();
+    elements.materialList.replaceChildren();
+    const materials = (directory?.materials || []).filter(material =>
+        `${material.name} ${material.file}`.toLowerCase().includes(query)
+    );
+    if (materials.length === 0) {
+        elements.materialList.innerHTML = '<div class="mtlx-picker__empty">No material found</div>';
+        return;
+    }
+    for (const material of materials) {
+        const button = document.createElement('button');
+        button.className = 'mtlx-picker__item';
+        button.type = 'button';
+        button.textContent = material.name || material.file;
+        button.addEventListener('click', async () => {
+            elements.picker.classList.remove('is-open', 'is-materials');
+            await applyMtlxMaterialFromLibrary(material.url);
+        });
+        elements.materialList.appendChild(button);
+    }
+}
+
+function openMtlxPicker()
+{
+    const elements = ensureMtlxPicker();
+    elements.picker.classList.add('is-open');
+    elements.picker.classList.remove('is-materials');
+    elements.directorySearch.value = '';
+    renderMtlxPickerDirectories(elements);
+    elements.directorySearch.focus();
+}
+
 function showMtlxLibraryError(error)
 {
     const message = `[mtlx-library] ${error?.message || error}`;
@@ -2981,20 +3182,7 @@ function setup_gui()
     ///// Material folder /////////////////////////////////////
     const material_folder = gui.addFolder('Material');
     const mtlx_library_folder = material_folder.addFolder('MaterialX Library');
-    const directoryOptions = getMtlxDirectoryOptions();
-    const directoryPaths = Object.values(directoryOptions);
-    if (!directoryPaths.includes(params.mtlx_directory)) params.mtlx_directory = directoryPaths[0] || '';
-    const directoryController = mtlx_library_folder
-        .add(params, 'mtlx_directory', directoryOptions)
-        .name('directory');
-    const materialController = mtlx_library_folder
-        .add(params, 'mtlx_material', getMtlxMaterialOptions(params.mtlx_directory))
-        .name('material')
-        .onChange(v => { applyMtlxMaterialFromLibrary(v); });
-    directoryController.onChange(directoryPath => {
-        params.mtlx_material = '';
-        materialController.options(getMtlxMaterialOptions(directoryPath));
-    });
+    mtlx_library_folder.add({ open: openMtlxPicker }, 'open').name('choose material');
     mtlx_library_folder.close();
 
     if (uses_mtlx_fullscreen_shader()) setupMtlxParameterControls(material_folder);
