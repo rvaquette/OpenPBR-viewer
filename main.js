@@ -1998,7 +1998,6 @@ function extractCopilotMtlxText(payload)
 
 async function generateMtlxWithCopilot(prompt)
 {
-    /*
     const response = await fetch(copilotMtlxEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2013,8 +2012,7 @@ async function generateMtlxWithCopilot(prompt)
     let payload = responseText;
     try { payload = JSON.parse(responseText); } catch {}
     const mtlxText = extractCopilotMtlxText(payload);
-    */
-    const mtlxText = prompt;
+    //const mtlxText = prompt;
     validateGeneratedMtlx(mtlxText);
     return mtlxText;
 }
