@@ -1,6 +1,3 @@
-
-    const fileValue = getMtlxInput(imageNode, 'file')?.getAttribute('value');
-    if (!fileValue) throw new Error('[mtlx-displacement] displacement image file is missing');
 import { Scene,
     Vector2, Vector3, Matrix4, Box3, Color,
     Mesh, MeshBasicMaterial, MeshStandardMaterial, MeshLambertMaterial, ShaderMaterial,
