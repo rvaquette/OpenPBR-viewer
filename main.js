@@ -1440,7 +1440,11 @@ var COMPILING;
 var FULLSCREEN_BVH_ROUTE;
 var samples = 0;
 const PATH_TRACER_TILE_SIZE = 64;
+const PATH_TRACER_INTERACTIVE_SCALE = 0.25;
+const PATH_TRACER_CAMERA_SETTLE_MS = 200;
 let pathtracerTileIndex = 0;
+let pathtracerInteractivePreview = false;
+let pathtracerCameraIdleTimer = null;
 var pauseController = null;
 
 function installWebGLDiagnostics(gl)
@@ -2539,7 +2543,7 @@ function reset_camera(scene_name)
     camera = new PerspectiveCamera( camera_fov, window.innerWidth / window.innerHeight, camera_near, camera_far );
 
     orbitControls = new OrbitControls( camera, renderer.domElement );
-    orbitControls.addEventListener( 'change', () => { resetSamples(); } );
+    orbitControls.addEventListener( 'change', handleCameraChange );
     let matrixWorld = new Matrix4();
 
     if (scene_name == 'standard-shader-ball')
@@ -2951,6 +2955,40 @@ function getRenderDimensions()
     return { w: Math.min(side, W), h: Math.min(side, H) };
 }
 
+function getPathtracerRenderDimensions()
+{
+    const dimensions = getRenderDimensions();
+    if (!pathtracerInteractivePreview) return dimensions;
+    return {
+        w: Math.max(1, Math.round(dimensions.w * PATH_TRACER_INTERACTIVE_SCALE)),
+        h: Math.max(1, Math.round(dimensions.h * PATH_TRACER_INTERACTIVE_SCALE)),
+    };
+}
+
+function updatePathtracingRenderTargetSize()
+{
+    if (!pathtracingRenderTarget) return;
+    const dimensions = getPathtracerRenderDimensions();
+    if (pathtracingRenderTarget.width !== dimensions.w || pathtracingRenderTarget.height !== dimensions.h)
+        pathtracingRenderTarget.setSize(dimensions.w, dimensions.h);
+}
+
+function handleCameraChange()
+{
+    resetSamples();
+    if (!is_pathtracing_route()) return;
+
+    pathtracerInteractivePreview = true;
+    updatePathtracingRenderTargetSize();
+    clearTimeout(pathtracerCameraIdleTimer);
+    pathtracerCameraIdleTimer = setTimeout(() => {
+        pathtracerInteractivePreview = false;
+        pathtracerCameraIdleTimer = null;
+        updatePathtracingRenderTargetSize();
+        resetSamples();
+    }, PATH_TRACER_CAMERA_SETTLE_MS);
+}
+
 function resize()
 {
     // render_size drives the actual canvas size. updateStyle=true makes three set the
@@ -2970,8 +3008,7 @@ function resize()
     renderer.domElement.style.top = '0';
     renderer.domElement.style.left = '0';
     renderer.domElement.style.transform = 'none';
-    if (FULLSCREEN_BVH_ROUTE)
-        pathtracingRenderTarget.setSize(rd.w, rd.h);
+    if (FULLSCREEN_BVH_ROUTE) updatePathtracingRenderTargetSize();
     resetSamples();
 }
 
@@ -3037,7 +3074,7 @@ function updateProgressOverlay()
 function sync_shader_uniforms(uniforms)
 {
     // Resolution must match the canvas / render target the shader draws into.
-    const rd = getRenderDimensions();
+    const rd = is_pathtracing_route() ? getPathtracerRenderDimensions() : getRenderDimensions();
 
     // sync camera
     uniforms.cameraWorldMatrix.value.copy( camera.matrixWorld );
@@ -3154,23 +3191,25 @@ function render()
         {
             const pathtracing = is_pathtracing_route();
             const dimensions = getRenderDimensions();
-            const tilesX = Math.ceil(dimensions.w / PATH_TRACER_TILE_SIZE);
-            const tilesY = Math.ceil(dimensions.h / PATH_TRACER_TILE_SIZE);
-            const tileX = pathtracing ? pathtracerTileIndex % tilesX : 0;
-            const tileY = pathtracing ? Math.floor(pathtracerTileIndex / tilesX) : 0;
+            const renderDimensions = pathtracing ? getPathtracerRenderDimensions() : dimensions;
+            const tiledPathtracing = pathtracing && !pathtracerInteractivePreview;
+            const tilesX = Math.ceil(renderDimensions.w / PATH_TRACER_TILE_SIZE);
+            const tilesY = Math.ceil(renderDimensions.h / PATH_TRACER_TILE_SIZE);
+            const tileX = tiledPathtracing ? pathtracerTileIndex % tilesX : 0;
+            const tileY = tiledPathtracing ? Math.floor(pathtracerTileIndex / tilesX) : 0;
             const viewportX = tileX * PATH_TRACER_TILE_SIZE;
             const viewportY = tileY * PATH_TRACER_TILE_SIZE;
-            const viewportWidth = pathtracing
-                ? Math.min(PATH_TRACER_TILE_SIZE, dimensions.w - viewportX)
-                : dimensions.w;
-            const viewportHeight = pathtracing
-                ? Math.min(PATH_TRACER_TILE_SIZE, dimensions.h - viewportY)
-                : dimensions.h;
+            const viewportWidth = tiledPathtracing
+                ? Math.min(PATH_TRACER_TILE_SIZE, renderDimensions.w - viewportX)
+                : renderDimensions.w;
+            const viewportHeight = tiledPathtracing
+                ? Math.min(PATH_TRACER_TILE_SIZE, renderDimensions.h - viewportY)
+                : renderDimensions.h;
 
             sync_shader_uniforms(active_pathtrace_material().uniforms);
 
             // Clear once at the start of accumulation, then render one pathtrace tile per frame.
-            renderer.autoClear = samples === 0 && (!pathtracing || pathtracerTileIndex === 0);
+            renderer.autoClear = samples === 0 && (!tiledPathtracing || pathtracerTileIndex === 0);
             renderer.setRenderTarget( pathtracingRenderTarget );
             renderer.setViewport(viewportX, viewportY, viewportWidth, viewportHeight);
             pathtracedQuad.render( renderer );
@@ -3181,14 +3220,14 @@ function render()
             renderer.autoClear = true;
             pathtracedFinalQuad.render( renderer );
 
-            if (pathtracing) {
+            if (tiledPathtracing) {
                 pathtracerTileIndex++;
                 if (pathtracerTileIndex >= tilesX * tilesY) {
                     pathtracerTileIndex = 0;
                     samples++;
                     window.__openpbrSamples = samples;
                 }
-            } else {
+            } else if (!pathtracing) {
                 samples++;
                 window.__openpbrSamples = samples;
             }
