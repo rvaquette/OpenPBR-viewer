@@ -677,6 +677,10 @@ function extractMtlxParameterMetadata(mtlxText)
 
 function bindMtlxParametersToTexture(glsl, mtlxText)
 {
+    if (/\bIMPL_gltf_pbr_surfaceshader\b/.test(String(glsl || ''))) {
+        return { glsl, parameters: [] };
+    }
+
     const blockPattern = /\/\/\s*__MTLX_PARAMS_BEGIN__([\s\S]*?)\/\/\s*__MTLX_PARAMS_END__/;
     const block = String(glsl || '').match(blockPattern);
     if (!block) return { glsl, parameters: [] };
