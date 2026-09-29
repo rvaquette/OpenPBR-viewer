@@ -20,6 +20,8 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { loadEnvironmentTexture } from './src/envmap/envLoader.js';
 import { loadNativeTexture } from './src/textures/textureLoader.js';
+import { applyMtlxDisplacement } from './src/mtlx/displacement.js';
+import { loadMtlxArchive } from './src/mtlx/archive.js';
 //import Stats from 'stats.js';
 
 import {
@@ -287,6 +289,8 @@ var mtlxRouteTextureBindings = [];
 var mtlxRouteLights = [];
 var mtlxRouteParamDescriptors = [];
 var mtlxRouteLightsTexture = null;
+var activeMtlxArchiveSource = null;
+var mtlxArchiveDisplacement = null;
 var mtlxRouteMaterialSummary = {
     opaque: true,
     thinWalled: false,
@@ -303,6 +307,11 @@ var mtlxMaterialDirectories = [];
 const generatedMtlxStorageKey = 'openpbr-viewer.generated-mtlx.v1';
 const copilotMtlxEndpoint = import.meta.env?.VITE_COPILOT_MTLX_ENDPOINT ||
     window.OPENPBR_COPILOT_MTLX_ENDPOINT || '/api/copilot/mtlx';
+const ambientCgArchiveEndpoint = import.meta.env?.VITE_AMBIENTCG_ARCHIVE_ENDPOINT ||
+    window.OPENPBR_AMBIENTCG_ARCHIVE_ENDPOINT ||
+    (copilotMtlxEndpoint.startsWith('http')
+        ? new URL('/api/mtlx/archive', copilotMtlxEndpoint).toString()
+        : '/api/mtlx/archive');
 
 const LEGACY_COMPARISON_ENABLED_BY_DEFAULT = false;
 const legacyComparisonEnabled = (() => {
@@ -361,8 +370,10 @@ function readXmlAttr(attrs, name)
     return m ? m[1] : '';
 }
 
-function resolveMtlxTextureUrl(fileValue, materialBaseUrl)
+function resolveMtlxTextureUrl(fileValue, materialBaseUrl, textureResolver = null)
 {
+    const archiveUrl = textureResolver?.(fileValue);
+    if (archiveUrl) return archiveUrl;
     if (/^(?:[a-z]+:)?\/\//i.test(fileValue)) return fileValue;
     const libraryRoot = new URL(getPublicAssetUrl('mtlx-library/'));
     if (fileValue.startsWith('/')) {
@@ -382,7 +393,7 @@ function resolveMtlxTextureUrl(fileValue, materialBaseUrl)
     return new URL(libraryRelativePath, libraryRoot).toString();
 }
 
-function extractMtlxTextureBindings(mtlxText, materialBaseUrl)
+function extractMtlxTextureBindings(mtlxText, materialBaseUrl, archiveSource = null)
 {
     // Type-agnostic: bind every <input type="filename"> to its enclosing node,
     // whatever that node is (image, tiledimage, hextiledimage, triplanar, custom...).
@@ -405,9 +416,10 @@ function extractMtlxTextureBindings(mtlxText, materialBaseUrl)
                 if (fileValue && parent && parent.name) {
                     bindings.push({
                         sampler: `${parent.name}_file`,
-                        url: resolveMtlxTextureUrl(fileValue, materialBaseUrl),
+                        url: resolveMtlxTextureUrl(fileValue, materialBaseUrl, archiveSource?.resolveTexture),
                         source: fileValue,
-                        type: parent.type
+                        type: parent.type,
+                        archiveSource
                     });
                 }
             }
@@ -432,7 +444,15 @@ function createMtlxRouteTextureUniforms()
     const uniforms = {};
     if (mtlxRouteTextureBindings.length === 0) return uniforms;
     for (const binding of mtlxRouteTextureBindings) {
-        const texture = loadNativeTexture(binding.url);
+        let settled = false;
+        const finishArchiveTextureLoad = () => {
+            if (settled || !binding.archiveSource) return;
+            settled = true;
+            const source = binding.archiveSource;
+            source.textureLoadsPending = Math.max(0, source.textureLoadsPending - 1);
+            if (source.retired && source.textureLoadsPending === 0) source.release();
+        };
+        const texture = loadNativeTexture(binding.url, finishArchiveTextureLoad, finishArchiveTextureLoad);
         texture.wrapS = RepeatWrapping;
         texture.wrapT = RepeatWrapping;
         texture.flipY = false;
@@ -443,6 +463,101 @@ function createMtlxRouteTextureUniforms()
         uniforms[binding.sampler] = { value: texture };
     }
     return uniforms;
+}
+
+function getMtlxInput(node, inputName)
+{
+    return Array.from(node?.children || []).find(child =>
+        child.tagName === 'input' && child.getAttribute('name') === inputName
+    ) || null;
+}
+
+function findMtlxNodeByName(document, name)
+{
+    if (!name) return null;
+    return Array.from(document.getElementsByTagName('*')).find(element =>
+        !['input', 'output', 'nodedef', 'implementation'].includes(element.tagName) &&
+        element.getAttribute('name') === name
+    ) || null;
+}
+
+async function loadMtlxDisplacement(mtlxText, archiveSource)
+{
+    const xmlDocument = new DOMParser().parseFromString(mtlxText, 'application/xml');
+    if (xmlDocument.querySelector('parsererror'))
+        throw new Error('[mtlx-displacement] invalid MaterialX XML');
+
+    const material = Array.from(xmlDocument.querySelectorAll('surfacematerial, material')).find(node =>
+        getMtlxInput(node, 'displacementshader')
+    );
+    const shaderInput = getMtlxInput(material, 'displacementshader');
+    if (!shaderInput?.getAttribute('nodename')) return null;
+
+    const displacementNode = findMtlxNodeByName(xmlDocument, shaderInput.getAttribute('nodename'));
+    if (displacementNode?.tagName !== 'displacement')
+        throw new Error('[mtlx-displacement] expected a displacement node connected to surfacematerial');
+    const valueInput = getMtlxInput(displacementNode, 'displacement');
+    if (valueInput?.getAttribute('type') !== 'float')
+        throw new Error('[mtlx-displacement] only scalar displacement nodes are supported');
+
+    const scale = Number(getMtlxInput(displacementNode, 'scale')?.getAttribute('value') ?? 1);
+    if (!Number.isFinite(scale)) throw new Error('[mtlx-displacement] scale must be finite');
+    const valueNodeName = valueInput.getAttribute('nodename');
+    if (!valueNodeName) {
+        const value = Number(valueInput.getAttribute('value') ?? 0);
+        if (!Number.isFinite(value)) throw new Error('[mtlx-displacement] value must be finite');
+        return { value, scale };
+    }
+
+    const imageNode = findMtlxNodeByName(xmlDocument, valueNodeName);
+    if (!['image', 'tiledimage'].includes(imageNode?.tagName) || imageNode.getAttribute('type') !== 'float')
+        throw new Error('[mtlx-displacement] displacement must connect directly to image or tiledimage float');
+    const texcoordInput = getMtlxInput(imageNode, 'texcoord');
+    if (texcoordInput?.getAttribute('nodename') || texcoordInput?.getAttribute('nodegraph'))
+        throw new Error('[mtlx-displacement] custom texture coordinates are not supported; use UV0');
+
+    const fileValue = getMtlxInput(imageNode, 'file')?.getAttribute('value');
+    const imageUrl = archiveSource?.resolveTexture(fileValue) || resolveMtlxTextureUrl(fileValue, getPublicAssetUrl(''));
+    if (!imageUrl) throw new Error('[mtlx-displacement] displacement image file is missing');
+    const response = await fetch(imageUrl);
+    if (!response.ok) throw new Error(`[mtlx-displacement] image fetch failed (${response.status})`);
+    const bitmap = await createImageBitmap(await response.blob());
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext('2d', { willReadFrequently: true });
+    if (!context) {
+        bitmap.close?.();
+        throw new Error('[mtlx-displacement] unable to read image pixels');
+    }
+    context.drawImage(bitmap, 0, 0);
+    const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+    bitmap.close?.();
+
+    const readVector2 = (name, fallback) => {
+        const raw = getMtlxInput(imageNode, name)?.getAttribute('value');
+        if (!raw) return fallback;
+        const values = raw.split(',').map(value => Number(value.trim()));
+        return values.length === 2 && values.every(Number.isFinite) ? values : fallback;
+    };
+    return {
+        pixels,
+        width: bitmap.width,
+        height: bitmap.height,
+        scale,
+        uvtiling: readVector2('uvtiling', [1, 1]),
+        uvoffset: readVector2('uvoffset', [0, 0]),
+        uaddressmode: getMtlxInput(imageNode, 'uaddressmode')?.getAttribute('value') || 'periodic',
+        vaddressmode: getMtlxInput(imageNode, 'vaddressmode')?.getAttribute('value') || 'periodic',
+        filtertype: getMtlxInput(imageNode, 'filtertype')?.getAttribute('value') || 'linear'
+    };
+}
+
+function retireMtlxArchiveSource(source)
+{
+    if (!source) return;
+    source.retired = true;
+    if (source.textureLoadsPending === 0) source.release();
 }
 
 function parseNumberList(value, fallback, expectedLength)
@@ -1528,6 +1643,7 @@ function getMtlxMaterialOptions(directoryPath)
 }
 
 let mtlxPickerElements = null;
+let loadedMtlxArchiveBundle = null;
 
 function ensureMtlxPicker()
 {
@@ -1568,6 +1684,41 @@ function ensureMtlxPicker()
             cursor: pointer;
         }
         .mtlx-picker__back { display: none; }
+        .mtlx-picker__archive {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 7px 10px;
+            padding: 12px 14px;
+            border-bottom: 1px solid #334044;
+        }
+        .mtlx-picker__archive-label,
+        .mtlx-picker__archive-status,
+        .mtlx-picker__archive-list { grid-column: 1 / -1; }
+        .mtlx-picker__archive-label { color: #a9b9bc; }
+        .mtlx-picker__archive-url {
+            box-sizing: border-box;
+            width: 100%;
+            min-width: 0;
+            padding: 10px;
+            border: 1px solid #526267;
+            border-radius: 4px;
+            background: #0b0e0f;
+            color: inherit;
+            font: inherit;
+        }
+        .mtlx-picker__archive-load {
+            min-width: 110px;
+            border: 1px solid #6caab5;
+            border-radius: 4px;
+            background: #28606a;
+            color: inherit;
+            font: inherit;
+            cursor: pointer;
+        }
+        .mtlx-picker__archive-load:disabled { opacity: 0.6; cursor: wait; }
+        .mtlx-picker__archive-status { min-height: 1.35em; color: #a9b9bc; }
+        .mtlx-picker__archive-status[data-state="error"] { color: #ff9d91; }
+        .mtlx-picker__archive-list { display: flex; flex-wrap: wrap; gap: 5px; }
         .mtlx-picker__body {
             display: grid;
             grid-template-columns: minmax(240px, 0.85fr) minmax(280px, 1.15fr);
@@ -1635,6 +1786,13 @@ function ensureMtlxPicker()
             <div class="mtlx-picker__title">MaterialX library</div>
             <button class="mtlx-picker__close" type="button" aria-label="Close">X</button>
         </header>
+        <section class="mtlx-picker__archive">
+            <label class="mtlx-picker__archive-label" for="mtlx-picker-archive-url">AmbientCG ZIP URL</label>
+            <input class="mtlx-picker__archive-url" id="mtlx-picker-archive-url" type="url" placeholder="https://ambientcg.com/get?file=Ground112_1K-JPG.zip">
+            <button class="mtlx-picker__archive-load" type="button">Load ZIP</button>
+            <div class="mtlx-picker__archive-status" role="status" aria-live="polite"></div>
+            <div class="mtlx-picker__archive-list"></div>
+        </section>
         <div class="mtlx-picker__body">
             <section class="mtlx-picker__pane mtlx-picker__pane--directories">
                 <div class="mtlx-picker__label">Directory</div>
@@ -1657,13 +1815,93 @@ function ensureMtlxPicker()
         materialSearch: picker.querySelector('.mtlx-picker__material-search'),
         materialList: picker.querySelector('.mtlx-picker__material-list'),
         materialLabel: picker.querySelector('.mtlx-picker__material-label'),
+        archiveUrl: picker.querySelector('.mtlx-picker__archive-url'),
+        archiveLoad: picker.querySelector('.mtlx-picker__archive-load'),
+        archiveStatus: picker.querySelector('.mtlx-picker__archive-status'),
+        archiveList: picker.querySelector('.mtlx-picker__archive-list'),
     };
     picker.querySelector('.mtlx-picker__close').addEventListener('click', () => picker.classList.remove('is-open'));
     picker.querySelector('.mtlx-picker__back').addEventListener('click', () => picker.classList.remove('is-materials'));
     elements.directorySearch.addEventListener('input', () => renderMtlxPickerDirectories(elements));
     elements.materialSearch.addEventListener('input', () => renderMtlxPickerMaterials(elements));
+    elements.archiveLoad.addEventListener('click', () => loadAmbientCgArchive(elements));
+    elements.archiveUrl.addEventListener('keydown', event => {
+        if (event.key === 'Enter') loadAmbientCgArchive(elements);
+    });
     mtlxPickerElements = elements;
     return elements;
+}
+
+function setMtlxArchiveStatus(elements, message, state = '')
+{
+    elements.archiveStatus.textContent = message;
+    elements.archiveStatus.dataset.state = state;
+}
+
+async function loadAmbientCgArchive(elements)
+{
+    const url = elements.archiveUrl.value.trim();
+    if (!url) {
+        setMtlxArchiveStatus(elements, 'Enter an AmbientCG ZIP URL.', 'error');
+        return;
+    }
+
+    elements.archiveLoad.disabled = true;
+    elements.archiveList.replaceChildren();
+    setMtlxArchiveStatus(elements, 'Downloading and inspecting ZIP...');
+    try {
+        const archive = await loadMtlxArchive(url, ambientCgArchiveEndpoint);
+        loadedMtlxArchiveBundle = archive;
+        const label = archive.materials.length === 1
+            ? 'MaterialX file found:'
+            : `${archive.materials.length} MaterialX files found:`;
+        setMtlxArchiveStatus(elements, label);
+
+        for (const material of archive.materials) {
+            const button = document.createElement('button');
+            button.className = 'mtlx-picker__item';
+            button.type = 'button';
+            button.textContent = material.path;
+            button.addEventListener('click', async () => {
+                try {
+                    await applyMtlxArchiveMaterial(archive, material, elements);
+                } catch (error) {
+                    setMtlxArchiveStatus(elements, error.message || String(error), 'error');
+                }
+            });
+            elements.archiveList.appendChild(button);
+        }
+        if (archive.materials.length === 1)
+            await applyMtlxArchiveMaterial(archive, archive.materials[0], elements);
+    } catch (error) {
+        setMtlxArchiveStatus(elements, error.message || String(error), 'error');
+    } finally {
+        elements.archiveLoad.disabled = false;
+    }
+}
+
+async function applyMtlxArchiveMaterial(archive, material, elements)
+{
+    const archiveSource = await archive.selectMaterial(material.path);
+    const previousArchiveSource = activeMtlxArchiveSource;
+    elements.archiveLoad.disabled = true;
+    setMtlxArchiveStatus(elements, `Loading ${material.name}...`);
+    try {
+        params.mtlx_material = '';
+        params.renderer_mode = 'Rasterizer MTLX';
+        setPaused(true);
+        await configureSingleMtlxMaterial('', material.name, archiveSource.mtlxText, archiveSource);
+        activeMtlxArchiveSource = archiveSource;
+        retireMtlxArchiveSource(previousArchiveSource);
+        load_scene(params.scene_name);
+        elements.picker.classList.remove('is-open', 'is-materials');
+        setMtlxArchiveStatus(elements, `Loaded ${material.name}.`);
+    } catch (error) {
+        retireMtlxArchiveSource(archiveSource);
+        throw error;
+    } finally {
+        elements.archiveLoad.disabled = false;
+    }
 }
 
 function renderMtlxPickerDirectories(elements)
@@ -1896,7 +2134,7 @@ function showMtlxLibraryError(error)
     }
 }
 
-async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText = null)
+async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText = null, archiveSource = null)
 {
     let mtlxText = inlineMtlxText || DEFAULT_MTLX;
     let mtlxMaterialBaseUrl = getPublicAssetUrl('');
@@ -1914,7 +2152,12 @@ async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText =
     const summary = summarizeMtlxRouteMaterialParams(result.mtlxParams);
     const hasTransmission = result.mtlxParams.transmissionWeight > 0;
 
-    mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
+    mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl, archiveSource);
+    if (archiveSource) {
+        archiveSource.textureLoadsPending = mtlxRouteTextureBindings.length;
+        archiveSource.retired = false;
+    }
+    mtlxArchiveDisplacement = await loadMtlxDisplacement(mtlxText, archiveSource);
     mtlxRouteLights = extractMtlxLights(mtlxText);
     mtlxRouteMaterialSummary = summary;
     const parameterBinding = bindMtlxParametersToTexture(result.glsl, mtlxText);
@@ -1938,6 +2181,7 @@ async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText =
 async function applyMtlxMaterialFromLibrary(value)
 {
     try {
+        const previousArchiveSource = activeMtlxArchiveSource;
         const material = mtlxMaterialLibrary.find(item => item.url === value || item.file === value || item.name === value);
         const url = material?.url || value || '';
         const materialId = material?.name || 'default-material';
@@ -1945,6 +2189,8 @@ async function applyMtlxMaterialFromLibrary(value)
         params.renderer_mode = 'Pathtracer MTLX';
         setPaused(true);
         await configureSingleMtlxMaterial(url, materialId);
+        activeMtlxArchiveSource = null;
+        retireMtlxArchiveSource(previousArchiveSource);
         load_scene(params.scene_name);
     } catch (e) {
         showMtlxLibraryError(e);
@@ -1958,6 +2204,12 @@ async function applyMtlxMaterialFromLibrary(value)
 async function ensureMtlxRouteDispatch()
 {
     if (!uses_mtlx_fullscreen_shader()) return;
+
+    if (activeMtlxArchiveSource) {
+        const source = activeMtlxArchiveSource;
+        await configureSingleMtlxMaterial('', source.materialId, source.mtlxText, source);
+        return;
+    }
 
     const material = mtlxMaterialLibrary.find(item => item.url === params.mtlx_material || item.name === params.mtlx_material);
     const materialId = material?.name || 'default-material';
@@ -2925,6 +3177,12 @@ function load_geometry(scene_name)
             scene.add(mesh_loader.result.scene);
 
             MESH_SURFACE = mesh_loader.result.mesh;
+            if (uses_mtlx_fullscreen_shader() && mtlxArchiveDisplacement)
+            {
+                MESH_SURFACE.geometry = applyMtlxDisplacement(MESH_SURFACE.geometry, mtlxArchiveDisplacement);
+                console.log('[mtlx-displacement] deformed vertices', MESH_SURFACE.geometry.attributes.position.count,
+                    '| scale:', mtlxArchiveDisplacement.scale);
+            }
 
             if (FULLSCREEN_BVH_ROUTE)
             {
