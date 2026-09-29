@@ -102,8 +102,8 @@ function adaptBvhGlslForEngine(source)
             /bool bvhIntersectFirstHitWithinDistance\(\s*sampler2D nodes,\s*sampler2D indices,\s*sampler2D positions,\s*vec3 rayOrigin,\s*vec3 rayDirection,\s*in float maxDistance,[\s\S]*?\n\}/,
             `bool bvhIntersectFirstHitWithinDistance(
     BVH bvhData, vec3 rayOrigin, vec3 rayDirection, in float maxDistance,
-                out uvec4 faceIndices, out vec3 faceNormal, out vec3 barycoord,
-                out float side, out float dist)
+                inout uvec4 faceIndices, inout vec3 faceNormal, inout vec3 barycoord,
+                inout float side, inout float dist)
 {
     bool found = bvhIntersectFirstHit(bvhData.index, bvhData.position, bvhData.bvhBounds, bvhData.bvhContents,
                                       rayOrigin, rayDirection);
