@@ -1444,6 +1444,8 @@ var LOADED;
 var COMPILING;
 var FULLSCREEN_BVH_ROUTE;
 var samples = 0;
+const PATH_TRACER_TILE_SIZE = 64;
+let pathtracerTileIndex = 0;
 var pauseController = null;
 
 function installWebGLDiagnostics(gl)
@@ -2985,6 +2987,7 @@ function get_vector3(array3)
 function resetSamples()
 {
     samples = 0;
+    pathtracerTileIndex = 0;
 }
 
 // Force the render into (or out of) pause and keep the GUI toggle in sync.
@@ -3153,20 +3156,46 @@ function render()
 
         if (FULLSCREEN_BVH_ROUTE)
         {
+            const pathtracing = is_pathtracing_route();
+            const dimensions = getRenderDimensions();
+            const tilesX = Math.ceil(dimensions.w / PATH_TRACER_TILE_SIZE);
+            const tilesY = Math.ceil(dimensions.h / PATH_TRACER_TILE_SIZE);
+            const tileX = pathtracing ? pathtracerTileIndex % tilesX : 0;
+            const tileY = pathtracing ? Math.floor(pathtracerTileIndex / tilesX) : 0;
+            const viewportX = tileX * PATH_TRACER_TILE_SIZE;
+            const viewportY = tileY * PATH_TRACER_TILE_SIZE;
+            const viewportWidth = pathtracing
+                ? Math.min(PATH_TRACER_TILE_SIZE, dimensions.w - viewportX)
+                : dimensions.w;
+            const viewportHeight = pathtracing
+                ? Math.min(PATH_TRACER_TILE_SIZE, dimensions.h - viewportY)
+                : dimensions.h;
+
             sync_shader_uniforms(active_pathtrace_material().uniforms);
 
-            // render float target
-            renderer.autoClear = (samples === 0);
+            // Clear once at the start of accumulation, then render one pathtrace tile per frame.
+            renderer.autoClear = samples === 0 && (!pathtracing || pathtracerTileIndex === 0);
             renderer.setRenderTarget( pathtracingRenderTarget );
+            renderer.setViewport(viewportX, viewportY, viewportWidth, viewportHeight);
             pathtracedQuad.render( renderer );
 
             // render to screen
             renderer.setRenderTarget( null );
+            renderer.setViewport(0, 0, dimensions.w, dimensions.h);
             renderer.autoClear = true;
             pathtracedFinalQuad.render( renderer );
 
-            samples++;
-            window.__openpbrSamples = samples;
+            if (pathtracing) {
+                pathtracerTileIndex++;
+                if (pathtracerTileIndex >= tilesX * tilesY) {
+                    pathtracerTileIndex = 0;
+                    samples++;
+                    window.__openpbrSamples = samples;
+                }
+            } else {
+                samples++;
+                window.__openpbrSamples = samples;
+            }
         }
         else
         {
