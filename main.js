@@ -691,7 +691,7 @@ function bindMtlxParametersToTexture(glsl, mtlxText)
             type,
             value: Array.isArray(value) ? [...value] : value,
             uiType: info.type || '',
-            uiName: info.name || name.replace(/_/g, ' '),
+            uiName: info.name || formatMtlxParameterLabel(name),
             uiFolder: info.folder || 'Surface',
             min: Number.isFinite(info.min) ? info.min : null,
             max: Number.isFinite(info.max) ? info.max : null,
