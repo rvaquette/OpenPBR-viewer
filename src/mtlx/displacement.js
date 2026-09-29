@@ -120,6 +120,43 @@ function subdivideForDisplacement(geometry)
     return result;
 }
 
+function hasInvertedTriangles(geometry, offsets, factor)
+{
+    if (!geometry.index) return false;
+    const positions = geometry.attributes.position.array;
+    const indices = geometry.index.array;
+    const x = (vertex, component) => positions[vertex * 3 + component] + offsets[vertex * 3 + component] * factor;
+
+    for (let i = 0; i < indices.length; i += 3) {
+        const a = indices[i];
+        const b = indices[i + 1];
+        const c = indices[i + 2];
+        const e1x = positions[b * 3] - positions[a * 3];
+        const e1y = positions[b * 3 + 1] - positions[a * 3 + 1];
+        const e1z = positions[b * 3 + 2] - positions[a * 3 + 2];
+        const e2x = positions[c * 3] - positions[a * 3];
+        const e2y = positions[c * 3 + 1] - positions[a * 3 + 1];
+        const e2z = positions[c * 3 + 2] - positions[a * 3 + 2];
+        const nx = e1y * e2z - e1z * e2y;
+        const ny = e1z * e2x - e1x * e2z;
+        const nz = e1x * e2y - e1y * e2x;
+        const originalAreaSquared = nx * nx + ny * ny + nz * nz;
+        if (originalAreaSquared < 1.0e-20) continue;
+
+        const de1x = x(b, 0) - x(a, 0);
+        const de1y = x(b, 1) - x(a, 1);
+        const de1z = x(b, 2) - x(a, 2);
+        const de2x = x(c, 0) - x(a, 0);
+        const de2y = x(c, 1) - x(a, 1);
+        const de2z = x(c, 2) - x(a, 2);
+        const dnx = de1y * de2z - de1z * de2y;
+        const dny = de1z * de2x - de1x * de2z;
+        const dnz = de1x * de2y - de1y * de2x;
+        if (nx * dnx + ny * dny + nz * dnz <= originalAreaSquared * 1.0e-3) return true;
+    }
+    return false;
+}
+
 export function applyMtlxDisplacement(sourceGeometry, displacement)
 {
     if (!displacement) return sourceGeometry;
@@ -135,6 +172,7 @@ export function applyMtlxDisplacement(sourceGeometry, displacement)
     const position = geometry.attributes.position;
     const normal = geometry.attributes.normal;
     const uv = geometry.attributes.uv;
+    const offsets = new Float32Array(position.count * 3);
     const seamGroups = new Map();
     for (let i = 0; i < position.count; i++) {
         const sourceX = position.getX(i);
@@ -142,12 +180,10 @@ export function applyMtlxDisplacement(sourceGeometry, displacement)
         const sourceZ = position.getZ(i);
         const height = displacement.pixels ? sampleHeight(displacement, uv.getX(i), uv.getY(i)) : displacement.value;
         const distance = height * displacement.scale;
-        const displaced = [
-            sourceX + normal.getX(i) * distance,
-            sourceY + normal.getY(i) * distance,
-            sourceZ + normal.getZ(i) * distance
-        ];
-        position.setXYZ(i, displaced[0], displaced[1], displaced[2]);
+        const offset = [normal.getX(i) * distance, normal.getY(i) * distance, normal.getZ(i) * distance];
+        offsets[i * 3] = offset[0];
+        offsets[i * 3 + 1] = offset[1];
+        offsets[i * 3 + 2] = offset[2];
 
         const key = `${Math.round(sourceX * 1.0e6)}:${Math.round(sourceY * 1.0e6)}:${Math.round(sourceZ * 1.0e6)}`;
         let group = seamGroups.get(key);
@@ -156,9 +192,9 @@ export function applyMtlxDisplacement(sourceGeometry, displacement)
             seamGroups.set(key, group);
         }
         group.indices.push(i);
-        group.sum[0] += displaced[0];
-        group.sum[1] += displaced[1];
-        group.sum[2] += displaced[2];
+        group.sum[0] += offset[0];
+        group.sum[1] += offset[1];
+        group.sum[2] += offset[2];
     }
 
     for (const group of seamGroups.values()) {
@@ -167,8 +203,34 @@ export function applyMtlxDisplacement(sourceGeometry, displacement)
         const x = group.sum[0] * inverseCount;
         const y = group.sum[1] * inverseCount;
         const z = group.sum[2] * inverseCount;
-        for (const index of group.indices) position.setXYZ(index, x, y, z);
+        for (const index of group.indices) {
+            offsets[index * 3] = x;
+            offsets[index * 3 + 1] = y;
+            offsets[index * 3 + 2] = z;
+        }
     }
+
+    let safeFactor = 1;
+    if (hasInvertedTriangles(geometry, offsets, safeFactor)) {
+        let low = 0;
+        let high = 1;
+        for (let iteration = 0; iteration < 10; iteration++) {
+            const middle = (low + high) * 0.5;
+            if (hasInvertedTriangles(geometry, offsets, middle)) high = middle;
+            else low = middle;
+        }
+        safeFactor = low;
+    }
+
+    for (let i = 0; i < position.count; i++) {
+        position.setXYZ(
+            i,
+            position.getX(i) + offsets[i * 3] * safeFactor,
+            position.getY(i) + offsets[i * 3 + 1] * safeFactor,
+            position.getZ(i) + offsets[i * 3 + 2] * safeFactor
+        );
+    }
+    displacement.appliedScale = displacement.scale * safeFactor;
 
     position.needsUpdate = true;
     geometry.computeVertexNormals();
