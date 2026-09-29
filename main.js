@@ -1,5 +1,6 @@
 
-
+    const fileValue = getMtlxInput(imageNode, 'file')?.getAttribute('value');
+    if (!fileValue) throw new Error('[mtlx-displacement] displacement image file is missing');
 import { Scene,
     Vector2, Vector3, Matrix4, Box3, Color,
     Mesh, MeshBasicMaterial, MeshStandardMaterial, MeshLambertMaterial, ShaderMaterial,
@@ -522,16 +523,18 @@ async function loadMtlxDisplacement(mtlxText, archiveSource)
     const response = await fetch(imageUrl);
     if (!response.ok) throw new Error(`[mtlx-displacement] image fetch failed (${response.status})`);
     const bitmap = await createImageBitmap(await response.blob());
+    const width = bitmap.width;
+    const height = bitmap.height;
     const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
+    canvas.width = width;
+    canvas.height = height;
     const context = canvas.getContext('2d', { willReadFrequently: true });
     if (!context) {
         bitmap.close?.();
         throw new Error('[mtlx-displacement] unable to read image pixels');
     }
     context.drawImage(bitmap, 0, 0);
-    const pixels = context.getImageData(0, 0, bitmap.width, bitmap.height).data;
+    const pixels = context.getImageData(0, 0, width, height).data;
     bitmap.close?.();
 
     const readVector2 = (name, fallback) => {
@@ -543,7 +546,8 @@ async function loadMtlxDisplacement(mtlxText, archiveSource)
     return {
         pixels,
         width: bitmap.width,
-        height: bitmap.height,
+        width,
+        height,
         scale,
         uvtiling: readVector2('uvtiling', [1, 1]),
         uvoffset: readVector2('uvoffset', [0, 0]),
@@ -2017,10 +2021,13 @@ async function generateMtlxWithCopilot(prompt)
 
 async function applyGeneratedMtlx(mtlxText, materialName)
 {
+    const previousArchiveSource = activeMtlxArchiveSource;
     params.mtlx_material = '';
     params.renderer_mode = 'Rasterizer MTLX';
     setPaused(true);
     await configureSingleMtlxMaterial('', materialName || 'copilot-generated', mtlxText);
+    activeMtlxArchiveSource = null;
+    retireMtlxArchiveSource(previousArchiveSource);
     load_scene(params.scene_name);
 }
 
@@ -3126,6 +3133,12 @@ function load_geometry(scene_name)
         if (FULLSCREEN_BVH_ROUTE)
         {
             // Set up mesh properties for pathtracing
+                    if (uses_mtlx_fullscreen_shader() && mtlxArchiveDisplacement)
+                    {
+                        MESH_SURFACE.geometry = applyMtlxDisplacement(MESH_SURFACE.geometry, mtlxArchiveDisplacement);
+                        console.log('[mtlx-displacement] deformed vertices', MESH_SURFACE.geometry.attributes.position.count,
+                            '| scale:', mtlxArchiveDisplacement.scale);
+                    }
             BVH_PROPS  = mesh_loader.result.bvh;
                 for (const pm of get_pathtrace_materials()) {
                 if (!pm.uniforms.bvh_props) continue; // MTLX route dropped the props BVH
