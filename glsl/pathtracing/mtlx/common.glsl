@@ -79,6 +79,11 @@ uniform bool has_env_cdf;
 uniform int mtlxLightCount;
 uniform sampler2D mtlxLightsTex;
 
+vec4 mtlxGetMaterialParam(int index)
+{
+    return texelFetch(mtlxLightsTex, ivec2(0, max(1, mtlxLightCount) + index), 0);
+}
+
 //////////////////////////////////////////////////////
 // UVs
 //////////////////////////////////////////////////////

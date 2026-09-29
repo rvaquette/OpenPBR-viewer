@@ -71,6 +71,12 @@ uniform float mtlxLightIntensity[MAX_MTLX_LIGHTS];
 uniform float mtlxLightDecayRate[MAX_MTLX_LIGHTS];
 uniform float mtlxLightInnerCone[MAX_MTLX_LIGHTS];
 uniform float mtlxLightOuterCone[MAX_MTLX_LIGHTS];
+uniform sampler2D mtlxLightsTex;
+
+vec4 mtlxGetMaterialParam(int index)
+{
+    return texelFetch(mtlxLightsTex, ivec2(0, max(1, mtlxLightCount) + index), 0);
+}
 
 //////////////////////////////////////////////////////
 // UVs

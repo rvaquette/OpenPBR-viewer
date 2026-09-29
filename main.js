@@ -284,6 +284,8 @@ var mtlxGeneratedGlsl = '';
 var mtlxRouteDispatchGlsl = '';
 var mtlxRouteTextureBindings = [];
 var mtlxRouteLights = [];
+var mtlxRouteParamDescriptors = [];
+var mtlxRouteLightsTexture = null;
 var mtlxRouteMaterialSummary = {
     opaque: true,
     thinWalled: false,
@@ -564,7 +566,8 @@ const MTLX_LIGHT_TEXELS_PER_LIGHT = 6;
 function createMtlxLightsTexture()
 {
     const lights = mtlxRouteLights;
-    const height = Math.max(1, lights.length);
+    const parameterRowOffset = Math.max(1, lights.length);
+    const height = parameterRowOffset + mtlxRouteParamDescriptors.length;
     const data = new Float32Array(MTLX_LIGHT_TEXELS_PER_LIGHT * height * 4);
     lights.forEach((l, i) => {
         const base = i * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
@@ -576,12 +579,19 @@ function createMtlxLightsTexture()
         data[base + 16] = u[0]; data[base + 17] = u[1]; data[base + 18] = u[2]; data[base + 19] = 0;
         data[base + 20] = v[0]; data[base + 21] = v[1]; data[base + 22] = v[2]; data[base + 23] = 0;
     });
-    const texture = new DataTexture(data, MTLX_LIGHT_TEXELS_PER_LIGHT, height, RGBAFormat, FloatType);
-    texture.minFilter = NearestFilter;
-    texture.magFilter = NearestFilter;
-    texture.generateMipmaps = false;
-    texture.needsUpdate = true;
-    return texture;
+    mtlxRouteParamDescriptors.forEach((parameter, i) => {
+        const base = (parameterRowOffset + i) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
+        const values = Array.isArray(parameter.value) ? parameter.value : [parameter.value];
+        values.forEach((value, component) => {
+            if (component < 4) data[base + component] = Number(value);
+        });
+    });
+    mtlxRouteLightsTexture = new DataTexture(data, MTLX_LIGHT_TEXELS_PER_LIGHT, height, RGBAFormat, FloatType);
+    mtlxRouteLightsTexture.minFilter = NearestFilter;
+    mtlxRouteLightsTexture.magFilter = NearestFilter;
+    mtlxRouteLightsTexture.generateMipmaps = false;
+    mtlxRouteLightsTexture.needsUpdate = true;
+    return mtlxRouteLightsTexture;
 }
 
 function createMtlxLightUniforms()
@@ -605,6 +615,119 @@ function replaceIdentifiers(source, replacements)
         result = result.replace(new RegExp(`\\b${escapeRegExp(from)}\\b`, 'g'), to);
     }
     return result;
+}
+
+function parseMtlxParameterDefault(type, expression)
+{
+    const value = String(expression || '').trim();
+    if (type === 'bool') return value === 'true' ? true : value === 'false' ? false : null;
+    if (type === 'float' || type === 'int') {
+        const number = Number(value);
+        return Number.isFinite(number) ? (type === 'int' ? Math.trunc(number) : number) : null;
+    }
+    const vectorMatch = value.match(/^vec([234])\s*\(([^)]+)\)$/);
+    if (!vectorMatch) return null;
+    const size = Number(vectorMatch[1]);
+    const components = vectorMatch[2].split(',').map(component => Number(component.trim()));
+    if (components.length === 1) return Array(size).fill(components[0]);
+    return components.length === size && components.every(Number.isFinite) ? components : null;
+}
+
+function extractMtlxParameterMetadata(mtlxText)
+{
+    const metadata = new Map();
+    try {
+        const document = new DOMParser().parseFromString(mtlxText, 'application/xml');
+        for (const input of Array.from(document.getElementsByTagName('input'))) {
+            const name = input.getAttribute('name');
+            if (!name) continue;
+            const candidate = {
+                type: input.getAttribute('type') || '',
+                name: input.getAttribute('uiname') || '',
+                folder: input.getAttribute('uifolder') || '',
+                min: Number.parseFloat(input.getAttribute('uisoftmin') ?? input.getAttribute('uimin')),
+                max: Number.parseFloat(input.getAttribute('uisoftmax') ?? input.getAttribute('uimax')),
+                step: Number.parseFloat(input.getAttribute('uisoftstep')),
+            };
+            const current = metadata.get(name);
+            if (!current || (!current.name && candidate.name) || (!current.folder && candidate.folder))
+                metadata.set(name, candidate);
+        }
+    } catch (error) {
+        console.warn('[mtlx-route] unable to read UI metadata:', error?.message || error);
+    }
+    return metadata;
+}
+
+function bindMtlxParametersToTexture(glsl, mtlxText)
+{
+    const blockPattern = /\/\/\s*__MTLX_PARAMS_BEGIN__([\s\S]*?)\/\/\s*__MTLX_PARAMS_END__/;
+    const block = String(glsl || '').match(blockPattern);
+    if (!block) return { glsl, parameters: [] };
+
+    const metadata = extractMtlxParameterMetadata(mtlxText);
+    const parameters = [];
+    const replacements = [];
+    const retainedLines = [];
+    const declarationPattern = /^([ \t]*)(float|int|bool|vec[234])\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+);\s*$/;
+
+    for (const line of block[1].split('\n')) {
+        const declaration = line.match(declarationPattern);
+        if (!declaration) {
+            retainedLines.push(line);
+            continue;
+        }
+        const [, , type, name, expression] = declaration;
+        const value = parseMtlxParameterDefault(type, expression);
+        if (value === null) {
+            retainedLines.push(line);
+            continue;
+        }
+
+        const info = metadata.get(name) || {};
+        const parameter = {
+            index: parameters.length,
+            name,
+            type,
+            value: Array.isArray(value) ? [...value] : value,
+            uiType: info.type || '',
+            uiName: info.name || name.replace(/_/g, ' '),
+            uiFolder: info.folder || 'Surface',
+            min: Number.isFinite(info.min) ? info.min : null,
+            max: Number.isFinite(info.max) ? info.max : null,
+            step: Number.isFinite(info.step) ? info.step : null,
+        };
+        parameters.push(parameter);
+
+        const texel = `mtlxGetMaterialParam(${parameter.index})`;
+        const accessor = type === 'bool' ? `(${texel}.x > 0.5)`
+            : type === 'int' ? `int(${texel}.x)`
+            : type === 'vec2' ? `${texel}.xy`
+            : type === 'vec3' ? `${texel}.xyz`
+            : type === 'vec4' ? texel
+            : `${texel}.x`;
+        replacements.push([name, accessor]);
+    }
+
+    const transformedBlock = `// __MTLX_PARAMS_BEGIN__\n${retainedLines.join('\n')}\n// __MTLX_PARAMS_END__`;
+    const transformedGlsl = String(glsl).replace(blockPattern, transformedBlock);
+    return { glsl: replaceMtlxParameterReferences(transformedGlsl, replacements), parameters };
+}
+
+function updateMtlxParameterTexture(parameter)
+{
+    const texture = mtlxRouteLightsTexture;
+    if (!texture) return;
+    const row = Math.max(1, mtlxRouteLights.length) + parameter.index;
+    const offset = row * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
+    const data = texture.image.data;
+    data.fill(0, offset, offset + 4);
+    const values = Array.isArray(parameter.value) ? parameter.value : [parameter.value];
+    values.forEach((value, component) => {
+        if (component < 4) data[offset + component] = Number(value);
+    });
+    texture.needsUpdate = true;
+    resetSamples();
 }
 
 function findMatchingBrace(source, openIndex)
@@ -638,6 +761,38 @@ function extractFunctionBlocks(source)
         re.lastIndex = end;
     }
     return blocks;
+}
+
+function replaceMtlxParameterReferences(source, replacements)
+{
+    let result = source;
+    const blocks = extractFunctionBlocks(source);
+    for (const block of [...blocks].sort((a, b) => b.start - a.start)) {
+        const open = source.indexOf('{', block.start);
+        const close = block.end - 1;
+        if (open < 0 || close <= open) continue;
+
+        const parametersStart = block.signature.indexOf('(');
+        const parametersEnd = block.signature.lastIndexOf(')');
+        const parameterNames = new Set();
+        if (parametersStart >= 0 && parametersEnd > parametersStart) {
+            for (const declaration of block.signature.slice(parametersStart + 1, parametersEnd).split(',')) {
+                const tokens = declaration.trim().split(/\s+/);
+                const name = tokens[tokens.length - 1]?.replace(/\[.*$/, '');
+                if (name) parameterNames.add(name);
+            }
+        }
+
+        const body = source.slice(open + 1, close);
+        const bodyReplacements = replacements.filter(([name]) => {
+            if (parameterNames.has(name)) return false;
+            const escapedName = escapeRegExp(name);
+            return !new RegExp(`\\b(?:float|int|bool|vec[234])\\s+${escapedName}\\b`).test(body);
+        });
+        const updatedBody = replaceIdentifiers(body, bodyReplacements);
+        result = result.slice(0, open + 1) + updatedBody + result.slice(close);
+    }
+    return result;
 }
 
 function removeFunctionBlocks(source, removeBlocks)
@@ -1366,7 +1521,9 @@ async function configureSingleMtlxMaterial(mtlxUrl, materialId)
     mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
     mtlxRouteLights = extractMtlxLights(mtlxText);
     mtlxRouteMaterialSummary = summary;
-    mtlxRouteDispatchGlsl = result.glsl;
+    const parameterBinding = bindMtlxParametersToTexture(result.glsl, mtlxText);
+    mtlxRouteParamDescriptors = parameterBinding.parameters;
+    mtlxRouteDispatchGlsl = parameterBinding.glsl;
 
     materialDefines.MAX_MTLX_LIGHTS = Math.max(1, mtlxRouteLights.length);
     materialDefines.VOLUME_ENABLED = hasTransmission && result.mtlxParams.transmissionDepth > 0 && !result.mtlxParams.geometry_thin_walled;
@@ -1632,7 +1789,9 @@ var scene_names = {
             const result = is_mtlx_bvh_raster_route()
                 ? await generateMtlxRasterDispatch(mtlxText)
                 : await generateMtlxRouteDispatch(mtlxText);
-            mtlxRouteDispatchGlsl = result.glsl;
+            const parameterBinding = bindMtlxParametersToTexture(result.glsl, mtlxText);
+            mtlxRouteParamDescriptors = parameterBinding.parameters;
+            mtlxRouteDispatchGlsl = parameterBinding.glsl;
             mtlxRouteMaterialSummary = summarizeMtlxRouteMaterialParams(result.mtlxParams);
             mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
             mtlxRouteLights = extractMtlxLights(mtlxText);
@@ -1687,6 +1846,11 @@ var scene_names = {
 function create_materials()
 {
     renderer.outputColorSpace = SRGBColorSpace;
+
+    if (mtlxRouteLightsTexture) {
+        mtlxRouteLightsTexture.dispose();
+        mtlxRouteLightsTexture = null;
+    }
 
     if (openpbrMaterial)
         openpbrMaterial.dispose();
@@ -1968,6 +2132,8 @@ function create_materials()
             // Assign texture uniforms directly (not via UniformsUtils.merge, which would
             // clone them and miss async TextureLoader updates -> black samplers).
             Object.assign(pathtracedMaterial.uniforms, createMtlxRouteTextureUniforms());
+            if (pathtracedMaterial.uniforms.mtlxLightsTex)
+                pathtracedMaterial.uniforms.mtlxLightsTex.value = mtlxRouteLightsTexture;
         }
         else {
             pathtracedMaterial = null;
@@ -2647,6 +2813,73 @@ function reset_camera(scene_name)
 }
 
 
+function formatMtlxParameterLabel(name)
+{
+    return String(name).replace(/_/g, ' ').replace(/\b\w/g, character => character.toUpperCase());
+}
+
+function setupMtlxParameterControls(materialFolder)
+{
+    const parametersFolder = materialFolder.addFolder('Material Parameters');
+    const folders = new Map();
+
+    for (const parameter of mtlxRouteParamDescriptors)
+    {
+        const folderName = parameter.uiFolder || 'Surface';
+        let folder = folders.get(folderName);
+        if (!folder)
+        {
+            folder = parametersFolder.addFolder(folderName);
+            folders.set(folderName, folder);
+        }
+
+        const label = parameter.uiName || formatMtlxParameterLabel(parameter.name);
+        const isColor = parameter.uiType === 'color3' || parameter.uiType === 'color4' || /_color$/.test(parameter.name);
+        const assignValue = value => {
+            parameter.value = Array.isArray(value) ? value.map(Number)
+                : parameter.type === 'bool' ? Boolean(value)
+                : parameter.type === 'int' ? Math.trunc(Number(value))
+                : Number(value);
+            updateMtlxParameterTexture(parameter);
+        };
+
+        if (Array.isArray(parameter.value) && !isColor)
+        {
+            const vectorFolder = folder.addFolder(label);
+            const componentNames = ['X', 'Y', 'Z', 'W'];
+            parameter.value.forEach((component, index) => {
+                const control = { value: component };
+                vectorFolder.add(control, 'value').name(componentNames[index]).onChange(value => {
+                    parameter.value[index] = Number(value);
+                    updateMtlxParameterTexture(parameter);
+                });
+            });
+            continue;
+        }
+
+        const control = { value: Array.isArray(parameter.value) ? [...parameter.value] : parameter.value };
+        let controller;
+        if (isColor && Array.isArray(parameter.value) && parameter.value.length >= 3)
+        {
+            controller = folder.addColor(control, 'value');
+        }
+        else if (Number.isFinite(parameter.min) && Number.isFinite(parameter.max))
+        {
+            const step = Number.isFinite(parameter.step) ? parameter.step : (parameter.type === 'int' ? 1 : undefined);
+            controller = step === undefined
+                ? folder.add(control, 'value', parameter.min, parameter.max)
+                : folder.add(control, 'value', parameter.min, parameter.max, step);
+        }
+        else
+        {
+            controller = folder.add(control, 'value');
+        }
+        controller.name(label).onChange(assignValue);
+    }
+
+    parametersFolder.open();
+}
+
 function setup_gui()
 {
     if (gui)
@@ -2662,6 +2895,9 @@ function setup_gui()
     mtlx_library_folder.add(params, 'mtlx_material', getMtlxMaterialOptions()).name('material').onChange( v => { applyMtlxMaterialFromLibrary(v); });
     mtlx_library_folder.close();
 
+    if (uses_mtlx_fullscreen_shader()) setupMtlxParameterControls(material_folder);
+    else
+    {
     // Base folder
     const base_folder = material_folder.addFolder('Base');
     base_folder.add(params,          'base_weight', 0.0, 1.0).onChange(                               v => { resetSamples(); });
@@ -2736,6 +2972,7 @@ function setup_gui()
     geometry_folder.add(params,      'geometry_opacity', 0.0, 1.0).onChange(                          v => { resetSamples(); });
     geometry_folder.add(params,      'geometry_thin_walled').onChange(                                v => { resetSamples(); });
     geometry_folder.close();
+    }
 
     ///// Lighting folder /////////////////////////////////////
     const lighting_folder = gui.addFolder('Lighting');
