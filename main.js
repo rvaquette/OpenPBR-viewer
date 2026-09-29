@@ -300,6 +300,9 @@ var mtlxRouteMaterialSummary = {
 };
 var mtlxMaterialLibrary = [];
 var mtlxMaterialDirectories = [];
+const generatedMtlxStorageKey = 'openpbr-viewer.generated-mtlx.v1';
+const copilotMtlxEndpoint = import.meta.env?.VITE_COPILOT_MTLX_ENDPOINT ||
+    window.OPENPBR_COPILOT_MTLX_ENDPOINT || '/api/copilot/mtlx';
 
 const LEGACY_COMPARISON_ENABLED_BY_DEFAULT = false;
 const legacyComparisonEnabled = (() => {
@@ -1715,6 +1718,157 @@ function renderMtlxPickerMaterials(elements)
     }
 }
 
+function getGeneratedMtlxMaterials()
+{
+    try {
+        const materials = JSON.parse(localStorage.getItem(generatedMtlxStorageKey) || '[]');
+        return Array.isArray(materials) ? materials : [];
+    } catch {
+        return [];
+    }
+}
+
+function setGeneratedMtlxMaterials(materials)
+{
+    localStorage.setItem(generatedMtlxStorageKey, JSON.stringify(materials));
+}
+
+function validateGeneratedMtlx(mtlxText)
+{
+    const document = new DOMParser().parseFromString(mtlxText, 'application/xml');
+    const parserError = document.querySelector('parsererror');
+    const root = document.documentElement;
+    if (parserError || !root || root.nodeName !== 'materialx') {
+        throw new Error('The Copilot response is not valid MaterialX XML.');
+    }
+    if (!document.querySelector('surfacematerial, material')) {
+        throw new Error('The generated MaterialX document has no material element.');
+    }
+}
+
+function extractCopilotMtlxText(payload)
+{
+    if (typeof payload === 'string') return payload;
+    const text = payload?.mtlx || payload?.xml || payload?.content || payload?.message;
+    if (typeof text !== 'string') throw new Error('The Copilot endpoint did not return MTLX text.');
+    return text.replace(/^```xml\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
+}
+
+async function generateMtlxWithCopilot(prompt)
+{
+    const response = await fetch(copilotMtlxEndpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            prompt,
+            format: 'materialx-1.39',
+            instruction: 'Return only a complete MaterialX 1.39 XML document with a surfacematerial and no Markdown fences.'
+        })
+    });
+    if (!response.ok) throw new Error(`Copilot endpoint failed: ${response.status}`);
+    const responseText = await response.text();
+    let payload = responseText;
+    try { payload = JSON.parse(responseText); } catch {}
+    const mtlxText = extractCopilotMtlxText(payload);
+    validateGeneratedMtlx(mtlxText);
+    return mtlxText;
+}
+
+async function applyGeneratedMtlx(mtlxText, materialName)
+{
+    params.mtlx_material = '';
+    params.renderer_mode = 'Rasterizer MTLX';
+    setPaused(true);
+    await configureSingleMtlxMaterial('', materialName || 'copilot-generated', mtlxText);
+    load_scene(params.scene_name);
+}
+
+function openMtlxCopilotDialog()
+{
+    ensureMtlxCopilotDialog();
+    const dialog = document.getElementById('mtlx-copilot-dialog');
+    if (!dialog) return;
+    dialog.showModal();
+    dialog.querySelector('[data-copilot-prompt]').focus();
+    renderGeneratedMtlxList(dialog);
+}
+
+function renderGeneratedMtlxList(dialog)
+{
+    const list = dialog.querySelector('[data-generated-mtlx-list]');
+    list.replaceChildren();
+    for (const material of getGeneratedMtlxMaterials()) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = material.name;
+        button.addEventListener('click', async () => {
+            try {
+                await applyGeneratedMtlx(material.mtlx, material.name);
+                dialog.close();
+            } catch (error) {
+                dialog.querySelector('[data-copilot-status]').textContent = error.message;
+            }
+        });
+        list.appendChild(button);
+    }
+}
+
+function ensureMtlxCopilotDialog()
+{
+    if (document.getElementById('mtlx-copilot-dialog')) return;
+    const style = document.createElement('style');
+    style.textContent = `
+        #mtlx-copilot-dialog { width: min(680px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); padding: 0; border: 1px solid #526267; border-radius: 6px; background: #101315; color: #e7ecec; font: 14px/1.4 monospace; }
+        #mtlx-copilot-dialog::backdrop { background: rgba(0, 0, 0, .7); }
+        .mtlx-copilot__header, .mtlx-copilot__footer { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: #182022; }
+        .mtlx-copilot__header { border-bottom: 1px solid #334044; }
+        .mtlx-copilot__footer { border-top: 1px solid #334044; justify-content: flex-end; }
+        .mtlx-copilot__title { flex: 1; font-weight: 700; }
+        .mtlx-copilot__body { display: grid; gap: 10px; padding: 14px; overflow: auto; }
+        .mtlx-copilot__body label { display: grid; gap: 6px; color: #a9b9bc; }
+        .mtlx-copilot__body input, .mtlx-copilot__body textarea { box-sizing: border-box; width: 100%; padding: 10px; border: 1px solid #526267; border-radius: 4px; background: #0b0e0f; color: #e7ecec; font: inherit; }
+        .mtlx-copilot__body textarea { min-height: 130px; resize: vertical; }
+        .mtlx-copilot__button { padding: 9px 12px; border: 1px solid #526267; border-radius: 4px; background: #273237; color: inherit; font: inherit; cursor: pointer; }
+        .mtlx-copilot__button--primary { background: #28606a; border-color: #6caab5; }
+        .mtlx-copilot__status { min-height: 1.4em; color: #e5bd69; white-space: pre-wrap; }
+        .mtlx-copilot__saved { display: flex; flex-wrap: wrap; gap: 6px; }
+    `;
+    document.head.appendChild(style);
+    const dialog = document.createElement('dialog');
+    dialog.id = 'mtlx-copilot-dialog';
+    dialog.innerHTML = `
+        <header class="mtlx-copilot__header"><div class="mtlx-copilot__title">Generate MaterialX with GitHub Copilot</div><button class="mtlx-copilot__button" type="button" data-copilot-close>Close</button></header>
+        <form class="mtlx-copilot__body" method="dialog">
+            <label>Name for this material <input data-copilot-name required maxlength="80" placeholder="e.g. translucent blue ceramic"></label>
+            <label>Material description <textarea data-copilot-prompt required placeholder="Describe color, roughness, metallic, coat, transmission, thin film, textures..."></textarea></label>
+            <div class="mtlx-copilot__status" data-copilot-status></div>
+            <div><div>Saved generated materials</div><div class="mtlx-copilot__saved" data-generated-mtlx-list></div></div>
+        </form>
+        <footer class="mtlx-copilot__footer"><button class="mtlx-copilot__button" type="button" data-copilot-cancel>Cancel</button><button class="mtlx-copilot__button mtlx-copilot__button--primary" type="button" data-copilot-generate>Generate and render</button></footer>
+    `;
+    document.body.appendChild(dialog);
+    dialog.querySelector('[data-copilot-close]').addEventListener('click', () => dialog.close());
+    dialog.querySelector('[data-copilot-cancel]').addEventListener('click', () => dialog.close());
+    dialog.querySelector('[data-copilot-generate]').addEventListener('click', async () => {
+        const name = dialog.querySelector('[data-copilot-name]').value.trim();
+        const prompt = dialog.querySelector('[data-copilot-prompt]').value.trim();
+        const status = dialog.querySelector('[data-copilot-status]');
+        if (!name || !prompt) return;
+        status.textContent = 'Generating and compiling...';
+        try {
+            const mtlxText = await generateMtlxWithCopilot(prompt);
+            const materials = getGeneratedMtlxMaterials().filter(item => item.name !== name);
+            materials.unshift({ name, mtlx: mtlxText, savedAt: new Date().toISOString() });
+            setGeneratedMtlxMaterials(materials);
+            await applyGeneratedMtlx(mtlxText, name);
+            status.textContent = 'Rendered successfully.';
+            renderGeneratedMtlxList(dialog);
+        } catch (error) {
+            status.textContent = error.message || String(error);
+        }
+    });
+}
+
 function openMtlxPicker()
 {
     const elements = ensureMtlxPicker();
@@ -1739,11 +1893,11 @@ function showMtlxLibraryError(error)
     }
 }
 
-async function configureSingleMtlxMaterial(mtlxUrl, materialId)
+async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText = null)
 {
-    let mtlxText = DEFAULT_MTLX;
+    let mtlxText = inlineMtlxText || DEFAULT_MTLX;
     let mtlxMaterialBaseUrl = getPublicAssetUrl('');
-    if (mtlxUrl) {
+    if (mtlxUrl && !inlineMtlxText) {
         const resolvedUrl = resolveViewerAssetUrl(mtlxUrl);
         mtlxMaterialBaseUrl = new URL(resolvedUrl, window.location.origin).toString().replace(/[^/]*$/, '');
         const resp = await fetch(resolvedUrl);
@@ -3183,6 +3337,7 @@ function setup_gui()
     const material_folder = gui.addFolder('Material');
     const mtlx_library_folder = material_folder.addFolder('MaterialX Library');
     mtlx_library_folder.add({ open: openMtlxPicker }, 'open').name('choose material');
+    mtlx_library_folder.add({ open: openMtlxCopilotDialog }, 'open').name('generate with Copilot');
     mtlx_library_folder.close();
 
     if (uses_mtlx_fullscreen_shader()) setupMtlxParameterControls(material_folder);

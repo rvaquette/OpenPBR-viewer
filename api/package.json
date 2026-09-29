@@ -1,0 +1,15 @@
+{
+  "name": "openpbr-copilot-function",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Azure Function that generates MaterialX through a Copilot-compatible endpoint",
+  "main": "src/functions/*.js",
+  "scripts": {
+    "build": "node --check src/functions/generateMtlx.js && node --check src/lib/copilotClient.js && node --check src/lib/mtlxValidation.js",
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.7.2",
+    "fast-xml-parser": "^5.2.5"
+  }
+}

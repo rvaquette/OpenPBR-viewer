@@ -9,6 +9,7 @@ dist
 *.log
 .env
 .env.*
+.copilot-azure/
 coverage/
 .DS_Store
 Thumbs.db

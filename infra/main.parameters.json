@@ -1,0 +1,11 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": { "value": "dev" },
+    "copilotApiUrl": { "value": "https://your-copilot-gateway.example/v1/chat/completions" },
+    "copilotApiKey": { "value": "REPLACE_WITH_SECURE_DEPLOYMENT_VALUE" },
+    "copilotModel": { "value": "your-model" },
+    "allowedOrigins": { "value": "https://YOUR_GITHUB_USER.github.io,http://localhost:5173,http://localhost:4173" }
+  }
+}
