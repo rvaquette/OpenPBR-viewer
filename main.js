@@ -3189,7 +3189,8 @@ function load_geometry(scene_name)
             {
                 MESH_SURFACE.geometry = applyMtlxDisplacement(MESH_SURFACE.geometry, mtlxArchiveDisplacement);
                 console.log('[mtlx-displacement] deformed vertices', MESH_SURFACE.geometry.attributes.position.count,
-                    '| scale:', mtlxArchiveDisplacement.scale);
+                    '| scale:', mtlxArchiveDisplacement.appliedScale,
+                    '(requested:', mtlxArchiveDisplacement.scale, ')');
             }
 
             if (FULLSCREEN_BVH_ROUTE)
