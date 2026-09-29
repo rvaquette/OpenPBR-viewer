@@ -2597,11 +2597,11 @@ function reset_camera(scene_name)
     if (params.render_size !== 'max')
     {
         const bounds = new Box3();
-        for (const mesh of [MESH_PROPS, MESH_SURFACE])
+        const framingMesh = MESH_SURFACE || MESH_PROPS;
+        if (framingMesh?.geometry)
         {
-            if (!mesh?.geometry) continue;
-            mesh.geometry.computeBoundingBox();
-            if (mesh.geometry.boundingBox) bounds.union(mesh.geometry.boundingBox);
+            framingMesh.geometry.computeBoundingBox();
+            if (framingMesh.geometry.boundingBox) bounds.union(framingMesh.geometry.boundingBox);
         }
 
         if (!bounds.isEmpty())
