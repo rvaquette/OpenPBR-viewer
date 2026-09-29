@@ -2880,6 +2880,55 @@ function setupMtlxParameterControls(materialFolder)
     parametersFolder.open();
 }
 
+function makeGuiDraggable()
+{
+    const panel = gui.domElement;
+    const handle = panel.querySelector(':scope > .title');
+    if (!handle) return;
+
+    let dragState = null;
+
+    handle.style.cursor = 'move';
+    handle.addEventListener('pointerdown', event => {
+        if (event.button !== 0) return;
+
+        const bounds = panel.getBoundingClientRect();
+        dragState = {
+            offsetX: event.clientX - bounds.left,
+            offsetY: event.clientY - bounds.top,
+            width: bounds.width,
+            height: bounds.height
+        };
+        panel.style.left = `${bounds.left}px`;
+        panel.style.top = `${bounds.top}px`;
+        panel.style.right = 'auto';
+        panel.style.bottom = 'auto';
+        handle.setPointerCapture(event.pointerId);
+        event.preventDefault();
+    });
+
+    handle.addEventListener('pointermove', event => {
+        if (!dragState) return;
+
+        const maxLeft = Math.max(0, window.innerWidth - dragState.width);
+        const maxTop = Math.max(0, window.innerHeight - dragState.height);
+        const left = Math.min(maxLeft, Math.max(0, event.clientX - dragState.offsetX));
+        const top = Math.min(maxTop, Math.max(0, event.clientY - dragState.offsetY));
+        panel.style.left = `${left}px`;
+        panel.style.top = `${top}px`;
+    });
+
+    const stopDragging = event => {
+        if (!dragState) return;
+        dragState = null;
+        if (handle.hasPointerCapture(event.pointerId)) {
+            handle.releasePointerCapture(event.pointerId);
+        }
+    };
+    handle.addEventListener('pointerup', stopDragging);
+    handle.addEventListener('pointercancel', stopDragging);
+}
+
 function setup_gui()
 {
     if (gui)
@@ -3006,6 +3055,7 @@ function setup_gui()
 
     gui.add( params, 'reset_camera' );
     gui.open();
+    makeGuiDraggable();
 }
 
 function post_load_setup()
