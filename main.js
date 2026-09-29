@@ -110,16 +110,16 @@ function adaptBvhGlslForEngine(source)
         )
         .replace(
             /([ \t]*)bool\s+(\w+)\s*=\s*bvhIntersectFirstHitWithinDistance\(\s*(\w+)_nodes,\s*\3_indices,\s*\3_positions,\s*([^,]+),\s*([^,]+),([\s\S]*?),\s*(\w+),\s*(\w+),\s*(\w+),\s*(\w+),\s*(\w+)\s*\);/g,
-            (_match, indent, hit, bvh, rayOrigin, rayDirection, maxDistance, faceIndices, faceNormal, barycoord, side, dist) =>
-                `${indent}bool ${hit} = bvhIntersectFirstHitWithinDistance(${bvh}, ${rayOrigin}, ${rayDirection}, ${maxDistance});\n` +
-                `${indent}if (${hit}) {\n` +
-                `${indent}    ${faceIndices} = bvhHitFaceIndices;\n` +
-                `${indent}    ${faceNormal} = bvhHitFaceNormal;\n` +
-                `${indent}    ${barycoord} = bvhHitBarycoord;\n` +
-                `${indent}    ${side} = bvhHitSide;\n` +
-                `${indent}    ${dist} = bvhHitDistance;\n` +
-                `${indent}}`
-}`
+            (_match, indent, hit, bvh, rayOrigin, rayDirection, maxDistance, faceIndices, faceNormal, barycoord, side, dist) => [
+                `${indent}bool ${hit} = bvhIntersectFirstHitWithinDistance(${bvh}, ${rayOrigin}, ${rayDirection}, ${maxDistance});`,
+                `${indent}if (${hit}) {`,
+                `${indent}    ${faceIndices} = bvhHitFaceIndices;`,
+                `${indent}    ${faceNormal} = bvhHitFaceNormal;`,
+                `${indent}    ${barycoord} = bvhHitBarycoord;`,
+                `${indent}    ${side} = bvhHitSide;`,
+                `${indent}    ${dist} = bvhHitDistance;`,
+                indent + '}'
+            ].join('\n')
         )
         .replace(
             /bvhIntersectFirstHitWithinDistance\(\s*(\w+)_nodes,\s*\1_indices,\s*\1_positions,/g,
@@ -2587,10 +2587,19 @@ function reset_camera(scene_name)
     camera.matrixAutoUpdate = true;
     camera.updateMatrixWorld();
 
+    const bounds = new Box3();
+    const framingMesh = MESH_SURFACE || MESH_PROPS;
+    if (framingMesh?.geometry)
+    {
+        framingMesh.geometry.computeBoundingBox();
+        if (framingMesh.geometry.boundingBox) bounds.union(framingMesh.geometry.boundingBox);
+    }
+
     let dir = new Vector3();
     camera.getWorldDirection(dir);
     let cam_target = camera.position.clone();
     cam_target.addScaledVector(dir, 23.39613);
+    if (!bounds.isEmpty()) bounds.getCenter(cam_target);
     orbitControls.target.copy(cam_target);
 
     orbitControls.zoomSpeed = 1.5;
@@ -2599,14 +2608,6 @@ function reset_camera(scene_name)
 
     if (params.render_size !== 'max')
     {
-        const bounds = new Box3();
-        const framingMesh = MESH_SURFACE || MESH_PROPS;
-        if (framingMesh?.geometry)
-        {
-            framingMesh.geometry.computeBoundingBox();
-            if (framingMesh.geometry.boundingBox) bounds.union(framingMesh.geometry.boundingBox);
-        }
-
         if (!bounds.isEmpty())
         {
             const renderDimensions = getRenderDimensions();
