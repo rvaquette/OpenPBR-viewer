@@ -29,8 +29,9 @@ material name and a complete MaterialX XML document, then select **Render and sa
 Saved materials remain in the browser's local storage. No AI API is called.
 
 Choose **choose material** to open the library and load a local ZIP containing
-`.mtlx` files and their textures. Download AmbientCG archives manually, select the
-ZIP file, and click **Load ZIP**. Archives containing a single material load
+`.mtlx` files and their textures. Enter an AmbientCG ZIP URL and click **Download ZIP**
+to open the download link in a new tab. Then select the downloaded local ZIP file
+and click **Load ZIP**. Archives containing a single material load
 automatically; otherwise, select a material from the list. The ZIP is read entirely
 in the browser, without uploading it or using a proxy. Limits are 200 MiB compressed,
 512 MiB uncompressed, and 5,000 files.

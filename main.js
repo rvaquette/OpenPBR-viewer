@@ -1690,6 +1690,7 @@ function ensureMtlxPicker()
         .mtlx-picker__archive-status,
         .mtlx-picker__archive-list { grid-column: 1 / -1; }
         .mtlx-picker__archive-label { color: #a9b9bc; }
+        .mtlx-picker__archive-url,
         .mtlx-picker__archive-file {
             box-sizing: border-box;
             width: 100%;
@@ -1701,8 +1702,10 @@ function ensureMtlxPicker()
             color: inherit;
             font: inherit;
         }
+        .mtlx-picker__archive-download,
         .mtlx-picker__archive-load {
             min-width: 110px;
+            min-height: 38px;
             border: 1px solid #6caab5;
             border-radius: 4px;
             background: #28606a;
@@ -1783,6 +1786,9 @@ function ensureMtlxPicker()
             <button class="mtlx-picker__close" type="button" aria-label="Close">X</button>
         </header>
         <section class="mtlx-picker__archive">
+            <label class="mtlx-picker__archive-label" for="mtlx-picker-archive-url">AmbientCG ZIP URL</label>
+            <input class="mtlx-picker__archive-url" id="mtlx-picker-archive-url" type="url" placeholder="https://ambientcg.com/get?file=Ground112_1K-JPG.zip">
+            <button class="mtlx-picker__archive-download" type="button">Download ZIP</button>
             <label class="mtlx-picker__archive-label" for="mtlx-picker-archive-file">MaterialX ZIP</label>
             <input class="mtlx-picker__archive-file" id="mtlx-picker-archive-file" type="file" accept=".zip,application/zip,application/x-zip-compressed">
             <button class="mtlx-picker__archive-load" type="button">Load ZIP</button>
@@ -1811,6 +1817,8 @@ function ensureMtlxPicker()
         materialSearch: picker.querySelector('.mtlx-picker__material-search'),
         materialList: picker.querySelector('.mtlx-picker__material-list'),
         materialLabel: picker.querySelector('.mtlx-picker__material-label'),
+        archiveUrl: picker.querySelector('.mtlx-picker__archive-url'),
+        archiveDownload: picker.querySelector('.mtlx-picker__archive-download'),
         archiveFile: picker.querySelector('.mtlx-picker__archive-file'),
         archiveLoad: picker.querySelector('.mtlx-picker__archive-load'),
         archiveStatus: picker.querySelector('.mtlx-picker__archive-status'),
@@ -1820,6 +1828,13 @@ function ensureMtlxPicker()
     picker.querySelector('.mtlx-picker__back').addEventListener('click', () => picker.classList.remove('is-materials'));
     elements.directorySearch.addEventListener('input', () => renderMtlxPickerDirectories(elements));
     elements.materialSearch.addEventListener('input', () => renderMtlxPickerMaterials(elements));
+    elements.archiveDownload.addEventListener('click', () => openAmbientCgDownload(elements));
+    elements.archiveUrl.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            openAmbientCgDownload(elements);
+        }
+    });
     elements.archiveLoad.addEventListener('click', () => loadLocalMtlxArchive(elements));
     mtlxPickerElements = elements;
     return elements;
@@ -1829,6 +1844,26 @@ function setMtlxArchiveStatus(elements, message, state = '')
 {
     elements.archiveStatus.textContent = message;
     elements.archiveStatus.dataset.state = state;
+}
+
+function openAmbientCgDownload(elements)
+{
+    try {
+        const url = new URL(elements.archiveUrl.value.trim());
+        const isAmbientCg = ['ambientcg.com', 'www.ambientcg.com'].includes(url.hostname) &&
+            url.pathname === '/get' && /^[\w-]+\.zip$/i.test(url.searchParams.get('file') || '');
+        const isDownloadHost = url.hostname === 'acg-download.struffelproductions.com' &&
+            /^\/file\/ambientCG-Web\/download\/[\w-]+\/[\w-]+\.zip$/i.test(url.pathname);
+        if (url.protocol !== 'https:' || url.username || url.password || url.port ||
+            (!isAmbientCg && !isDownloadHost)) {
+            throw new Error('Enter an HTTPS AmbientCG ZIP download URL.');
+        }
+        window.open(url.toString(), '_blank', 'noopener,noreferrer');
+        setMtlxArchiveStatus(elements, '');
+    } catch (error) {
+        setMtlxArchiveStatus(elements, error instanceof TypeError
+            ? 'Enter a valid AmbientCG ZIP URL.' : error.message, 'error');
+    }
 }
 
 async function loadLocalMtlxArchive(elements)
