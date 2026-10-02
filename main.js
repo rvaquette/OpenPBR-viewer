@@ -286,6 +286,8 @@ var mtlxRouteDispatchGlsl = '';
 var mtlxRouteTextureBindings = [];
 var mtlxRouteLights = [];
 var mtlxRouteParamDescriptors = [];
+var activeMtlxMaterialText = null;
+var mtlxParameterUpdateQueue = Promise.resolve();
 var mtlxRouteLightsTexture = null;
 var activeMtlxArchiveSource = null;
 var activeMtlxArchiveSelection = null;
@@ -695,8 +697,9 @@ const MTLX_LIGHT_TEXELS_PER_LIGHT = 6;
 function createMtlxLightsTexture()
 {
     const lights = mtlxRouteLights;
+    const parameters = mtlxRouteParamDescriptors.filter(parameter => !parameter.xmlInput);
     const parameterRowOffset = Math.max(1, lights.length);
-    const height = parameterRowOffset + mtlxRouteParamDescriptors.length;
+    const height = parameterRowOffset + parameters.length;
     const data = new Float32Array(MTLX_LIGHT_TEXELS_PER_LIGHT * height * 4);
     lights.forEach((l, i) => {
         const base = i * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
@@ -708,7 +711,7 @@ function createMtlxLightsTexture()
         data[base + 16] = u[0]; data[base + 17] = u[1]; data[base + 18] = u[2]; data[base + 19] = 0;
         data[base + 20] = v[0]; data[base + 21] = v[1]; data[base + 22] = v[2]; data[base + 23] = 0;
     });
-    mtlxRouteParamDescriptors.forEach((parameter, i) => {
+    parameters.forEach((parameter, i) => {
         const base = (parameterRowOffset + i) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
         const values = Array.isArray(parameter.value) ? parameter.value : [parameter.value];
         values.forEach((value, component) => {
@@ -731,6 +734,14 @@ function createMtlxLightUniforms()
     };
 }
 
+function createMtlxParameterUniforms()
+{
+    return Object.fromEntries(mtlxRouteParamDescriptors
+        .filter(parameter => parameter.uniformName)
+        .map(parameter => [parameter.uniformName, {
+            value: Array.isArray(parameter.value) ? [...parameter.value] : parameter.value
+        }]));
+}
 
 function escapeRegExp(text)
 {
@@ -767,20 +778,29 @@ function extractMtlxParameterMetadata(mtlxText)
     const metadata = new Map();
     try {
         const document = new DOMParser().parseFromString(mtlxText, 'application/xml');
-        for (const input of Array.from(document.getElementsByTagName('input'))) {
-            const name = input.getAttribute('name');
-            if (!name) continue;
-            const candidate = {
-                type: input.getAttribute('type') || '',
-                name: input.getAttribute('uiname') || '',
-                folder: input.getAttribute('uifolder') || '',
-                min: Number.parseFloat(input.getAttribute('uisoftmin') ?? input.getAttribute('uimin')),
-                max: Number.parseFloat(input.getAttribute('uisoftmax') ?? input.getAttribute('uimax')),
-                step: Number.parseFloat(input.getAttribute('uisoftstep')),
-            };
-            const current = metadata.get(name);
-            if (!current || (!current.name && candidate.name) || (!current.folder && candidate.folder))
-                metadata.set(name, candidate);
+        const nodegraphs = Array.from(document.getElementsByTagName('nodegraph'));
+        const owners = nodegraphs.length > 0 ? nodegraphs
+            : Array.from(document.getElementsByTagName('*')).filter(element =>
+                element.getAttribute('type') === 'surfaceshader' && element.tagName !== 'input');
+        metadata.hasNodegraph = nodegraphs.length > 0;
+        for (const owner of owners) {
+            for (const input of Array.from(owner.children).filter(element => element.tagName === 'input')) {
+                const name = input.getAttribute('name');
+                if (!name) continue;
+                const candidate = {
+                    input,
+                    type: input.getAttribute('type') || '',
+                    value: input.getAttribute('value'),
+                    owner: owner.getAttribute('name') || '',
+                    name: input.getAttribute('uiname') || '',
+                    folder: input.getAttribute('uifolder') || '',
+                    min: Number.parseFloat(input.getAttribute('uisoftmin') ?? input.getAttribute('uimin')),
+                    max: Number.parseFloat(input.getAttribute('uisoftmax') ?? input.getAttribute('uimax')),
+                    step: Number.parseFloat(input.getAttribute('uisoftstep')),
+                };
+                const key = metadata.hasNodegraph ? `${candidate.owner}/${name}` : name;
+                metadata.set(key, candidate);
+            }
         }
     } catch (error) {
         console.warn('[mtlx-route] unable to read UI metadata:', error?.message || error);
@@ -790,6 +810,36 @@ function extractMtlxParameterMetadata(mtlxText)
 
 function bindMtlxParametersToTexture(glsl, mtlxText)
 {
+    const metadata = extractMtlxParameterMetadata(mtlxText);
+    if (metadata.hasNodegraph) {
+        const uniforms = new Map(Array.from(String(glsl).matchAll(
+            /\/\/\s*__MTLX_NODEGRAPH_INPUT__\s+(\S+)\s+(\w+)/g), match => [match[1], match[2]]));
+        const types = { float: 'float', integer: 'int', boolean: 'bool',
+            color3: 'vec3', color4: 'vec4', vector2: 'vec2', vector3: 'vec3', vector4: 'vec4' };
+        const parameters = [];
+        for (const [name, info] of metadata) {
+            const type = types[info.type] || 'string';
+            const expression = type.startsWith('vec') ? `${type}(${info.value || '0'})`
+                : info.value ?? (type === 'bool' ? 'false' : '0');
+            const value = type === 'string' ? info.value || '' : parseMtlxParameterDefault(type, expression);
+            if (value === null) continue;
+            parameters.push({
+                index: parameters.length,
+                name,
+                type,
+                value,
+                xmlInput: info.input,
+                uniformName: uniforms.get(name) || null,
+                uiType: info.type,
+                uiName: info.name || formatMtlxParameterLabel(info.input.getAttribute('name')),
+                uiFolder: info.folder || info.owner,
+                min: Number.isFinite(info.min) ? info.min : null,
+                max: Number.isFinite(info.max) ? info.max : null,
+                step: Number.isFinite(info.step) ? info.step : null,
+            });
+        }
+        return { glsl, parameters };
+    }
     if (/\bIMPL_gltf_pbr_surfaceshader\b/.test(String(glsl || ''))) {
         return { glsl, parameters: [] };
     }
@@ -798,7 +848,6 @@ function bindMtlxParametersToTexture(glsl, mtlxText)
     const block = String(glsl || '').match(blockPattern);
     if (!block) return { glsl, parameters: [] };
 
-    const metadata = extractMtlxParameterMetadata(mtlxText);
     const parameters = [];
     const replacements = [];
     const retainedLines = [];
@@ -811,6 +860,10 @@ function bindMtlxParametersToTexture(glsl, mtlxText)
             continue;
         }
         const [, , type, name, expression] = declaration;
+        if (!metadata.has(name)) {
+            retainedLines.push(line);
+            continue;
+        }
         const value = parseMtlxParameterDefault(type, expression);
         if (value === null) {
             retainedLines.push(line);
@@ -849,6 +902,40 @@ function bindMtlxParametersToTexture(glsl, mtlxText)
 
 function updateMtlxParameterTexture(parameter)
 {
+    if (parameter.uniformName) {
+        const uniform = pathtracedMaterial?.uniforms[parameter.uniformName];
+        if (uniform) uniform.value = Array.isArray(parameter.value) ? [...parameter.value] : parameter.value;
+        parameter.xmlInput.setAttribute('value', Array.isArray(parameter.value)
+            ? parameter.value.join(', ') : String(parameter.value));
+        activeMtlxMaterialText = new XMLSerializer().serializeToString(parameter.xmlInput.ownerDocument);
+        resetSamples();
+        return;
+    }
+    if (parameter.xmlInput) {
+        parameter.xmlInput.setAttribute('value', Array.isArray(parameter.value)
+            ? parameter.value.join(', ') : String(parameter.value));
+        const mtlxText = new XMLSerializer().serializeToString(parameter.xmlInput.ownerDocument);
+        const previousText = activeMtlxMaterialText;
+        mtlxParameterUpdateQueue = mtlxParameterUpdateQueue.then(async () => {
+            if (activeMtlxMaterialText !== previousText) return;
+            const previousSource = activeMtlxArchiveSource;
+            let archiveSource = null;
+            try {
+                if (activeMtlxArchiveSelection) {
+                    const { archive, material } = activeMtlxArchiveSelection;
+                    archiveSource = await archive.selectMaterial(material.path, mtlxText);
+                }
+                await configureSingleMtlxMaterial(params.mtlx_material || '', 'edited-material', mtlxText, archiveSource);
+                activeMtlxArchiveSource = archiveSource;
+                retireMtlxArchiveSource(previousSource);
+                load_scene(params.scene_name);
+            } catch (error) {
+                if (archiveSource) retireMtlxArchiveSource(archiveSource);
+                showMtlxLibraryError(error);
+            }
+        });
+        return;
+    }
     const texture = mtlxRouteLightsTexture;
     if (!texture) return;
     const row = Math.max(1, mtlxRouteLights.length) + parameter.index;
@@ -1291,8 +1378,11 @@ ${emitMtlxMaterialValueFunction('float', 'mtlx_openpbr_transmission_weight', 'tr
     const routeBody = is_mtlx_bvh_raster_route()
         ? glsl_rasterization_mtlx_rasterizer
         : glsl_mtlx_route_pathtracer;
+    const hasGeneratedHooks = !is_mtlx_bvh_raster_route() &&
+        /\bvoid\s+mtlx_openpbr_prepare\s*\(/.test(dispatch);
     if (typeof window !== 'undefined') window.__openpbrMtlxDispatch = mtlxRouteDispatchGlsl;
-    return dispatchBody + bridge + routeBody;
+    return (hasGeneratedHooks ? '#define MTLX_HOST_EXTERNAL_COMMON\n' : '') +
+        dispatchBody + (hasGeneratedHooks ? '' : bridge) + routeBody;
 }
 
 // Minimal default OpenPBR material used when no .mtlx file is supplied.
@@ -2165,12 +2255,14 @@ async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText =
 {
     let mtlxText = inlineMtlxText || DEFAULT_MTLX;
     let mtlxMaterialBaseUrl = getPublicAssetUrl('');
-    if (mtlxUrl && !inlineMtlxText) {
+    if (mtlxUrl) {
         const resolvedUrl = resolveViewerAssetUrl(mtlxUrl);
         mtlxMaterialBaseUrl = new URL(resolvedUrl, window.location.origin).toString().replace(/[^/]*$/, '');
-        const resp = await fetch(resolvedUrl);
-        if (!resp.ok) throw new Error(`material fetch failed: ${resp.status} ${resolvedUrl}`);
-        mtlxText = await resp.text();
+        if (!inlineMtlxText) {
+            const resp = await fetch(resolvedUrl);
+            if (!resp.ok) throw new Error(`material fetch failed: ${resp.status} ${resolvedUrl}`);
+            mtlxText = await resp.text();
+        }
     }
 
     const result = is_mtlx_bvh_raster_route()
@@ -2190,6 +2282,7 @@ async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText =
     const parameterBinding = bindMtlxParametersToTexture(result.glsl, mtlxText);
     mtlxRouteParamDescriptors = parameterBinding.parameters;
     mtlxRouteDispatchGlsl = parameterBinding.glsl;
+    activeMtlxMaterialText = mtlxText;
 
     materialDefines.MAX_MTLX_LIGHTS = Math.max(1, mtlxRouteLights.length);
     materialDefines.VOLUME_ENABLED = hasTransmission && result.mtlxParams.transmissionDepth > 0 && !result.mtlxParams.geometry_thin_walled;
@@ -2235,7 +2328,7 @@ async function ensureMtlxRouteDispatch()
 
     if (activeMtlxArchiveSelection) {
         const selection = activeMtlxArchiveSelection;
-        const source = await selection.archive.selectMaterial(selection.material.path);
+        const source = await selection.archive.selectMaterial(selection.material.path, activeMtlxMaterialText);
         const previousArchiveSource = activeMtlxArchiveSource;
         try {
             await configureSingleMtlxMaterial('', selection.material.name, source.mtlxText, source);
@@ -2250,7 +2343,7 @@ async function ensureMtlxRouteDispatch()
 
     const material = mtlxMaterialLibrary.find(item => item.url === params.mtlx_material || item.name === params.mtlx_material);
     const materialId = material?.name || 'default-material';
-    await configureSingleMtlxMaterial(params.mtlx_material || '', materialId);
+    await configureSingleMtlxMaterial(params.mtlx_material || '', materialId, activeMtlxMaterialText);
 }
 
 var mesh_loader;
@@ -2459,7 +2552,10 @@ var scene_names = {
             }
             mtlxMaterialBaseUrl = new URL(mtlxUrl, window.location.origin).toString().replace(/[^/]*$/, '');
             const resp = await fetch(mtlxUrl);
-            if (resp.ok) mtlxText = await resp.text();
+            if (resp.ok) {
+                mtlxText = await resp.text();
+                params.mtlx_material = mtlxUrl;
+            }
             else console.warn('[mtlx] fetch failed:', resp.status, mtlxUrl);
         } catch (e) {
             console.warn('[mtlx] fetch error:', e);
@@ -2477,6 +2573,7 @@ var scene_names = {
             const parameterBinding = bindMtlxParametersToTexture(result.glsl, mtlxText);
             mtlxRouteParamDescriptors = parameterBinding.parameters;
             mtlxRouteDispatchGlsl = parameterBinding.glsl;
+            activeMtlxMaterialText = mtlxText;
             mtlxRouteMaterialSummary = summarizeMtlxRouteMaterialParams(result.mtlxParams);
             mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
             mtlxRouteLights = extractMtlxLights(mtlxText);
@@ -2817,6 +2914,7 @@ function create_materials()
             // Assign texture uniforms directly (not via UniformsUtils.merge, which would
             // clone them and miss async TextureLoader updates -> black samplers).
             Object.assign(pathtracedMaterial.uniforms, createMtlxRouteTextureUniforms());
+            Object.assign(pathtracedMaterial.uniforms, createMtlxParameterUniforms());
             if (pathtracedMaterial.uniforms.mtlxLightsTex)
                 pathtracedMaterial.uniforms.mtlxLightsTex.value = mtlxRouteLightsTexture;
         }
@@ -3531,6 +3629,7 @@ function setupMtlxParameterControls(materialFolder)
             parameter.value = Array.isArray(value) ? value.map(Number)
                 : parameter.type === 'bool' ? Boolean(value)
                 : parameter.type === 'int' ? Math.trunc(Number(value))
+                : parameter.type === 'string' ? String(value)
                 : Number(value);
             updateMtlxParameterTexture(parameter);
         };
@@ -3541,7 +3640,9 @@ function setupMtlxParameterControls(materialFolder)
             const componentNames = ['X', 'Y', 'Z', 'W'];
             parameter.value.forEach((component, index) => {
                 const control = { value: component };
-                vectorFolder.add(control, 'value').name(componentNames[index]).onChange(value => {
+                const controller = vectorFolder.add(control, 'value').name(componentNames[index]);
+                const changeEvent = parameter.xmlInput && !parameter.uniformName ? 'onFinishChange' : 'onChange';
+                controller[changeEvent](value => {
                     parameter.value[index] = Number(value);
                     updateMtlxParameterTexture(parameter);
                 });
@@ -3566,7 +3667,8 @@ function setupMtlxParameterControls(materialFolder)
         {
             controller = folder.add(control, 'value');
         }
-        controller.name(label).onChange(assignValue);
+        const changeEvent = parameter.xmlInput && !parameter.uniformName ? 'onFinishChange' : 'onChange';
+        controller.name(label)[changeEvent](assignValue);
     }
 
     parametersFolder.open();

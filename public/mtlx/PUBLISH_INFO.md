@@ -12,6 +12,6 @@ This directory contains published runtime artifacts consumed by the OpenPBR view
 
 ## Publication notes
 - Source generator repository: ../MaterialX-rva
-- Generator implementation: source/MaterialXGenGlsl/PathTracerGlslShaderGenerator.cpp
-- Publication date: 2026-08-23
-- Publication mode: synchronized runtime bundle update for substitution workflow
+- Host generators: source/MaterialXGenGlsl/EsslHostShaderGenerator.cpp and source/MaterialXGenGlsl/MtlxPathTracerHostShaderGenerator.cpp
+- Publication date: 2026-10-02
+- Publication mode: synchronized JS/WASM/data bundle with typed nodegraph interface uniforms

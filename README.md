@@ -39,6 +39,12 @@ in the browser, without uploading it or using a proxy. Limits are 200 MiB compre
 These imports work on GitHub Pages without an Azure Function or backend. External
 texture URLs in manually entered XML still require browser-accessible resources.
 
+The material controls expose only the nodegraph's direct inputs when a nodegraph
+is present. Otherwise, they expose only the surfaceshader inputs explicitly
+authored in the XML, not its implicit defaults. Numeric nodegraph inputs use GLSL
+uniforms and update without shader recompilation; texture filename changes still
+require rebuilding the material bindings.
+
 ## WASM substitution workflow
 
 Run the strict substitution validation pipeline:

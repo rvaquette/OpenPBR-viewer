@@ -81,10 +81,10 @@ export async function loadMtlxArchive(file)
     const entriesByName = new Map(files.map(entry => [normalizeArchivePath(entry.name).toLowerCase(), entry]));
     return {
         materials,
-        async selectMaterial(materialPath) {
+        async selectMaterial(materialPath, mtlxText = null) {
             const material = materials.find(item => item.path === materialPath);
             if (!material) throw new Error('The selected MaterialX file is not in this ZIP.');
-            const xmlText = await entriesByName.get(material.path.toLowerCase()).async('string');
+            const xmlText = mtlxText ?? await entriesByName.get(material.path.toLowerCase()).async('string');
             const { document, fileInputs } = getMaterialXFiles(xmlText);
             const filePrefix = document.documentElement.getAttribute('fileprefix') || '';
             const urlsByInput = new Map();
