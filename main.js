@@ -303,14 +303,7 @@ var mtlxRouteMaterialSummary = {
 };
 var mtlxMaterialLibrary = [];
 var mtlxMaterialDirectories = [];
-const generatedMtlxStorageKey = 'openpbr-viewer.generated-mtlx.v1';
-const copilotMtlxEndpoint = import.meta.env?.VITE_COPILOT_MTLX_ENDPOINT ||
-    window.OPENPBR_COPILOT_MTLX_ENDPOINT || '/api/copilot/mtlx';
-const ambientCgArchiveEndpoint = import.meta.env?.VITE_AMBIENTCG_ARCHIVE_ENDPOINT ||
-    window.OPENPBR_AMBIENTCG_ARCHIVE_ENDPOINT ||
-    (copilotMtlxEndpoint.startsWith('http')
-        ? new URL('/api/mtlx/archive', copilotMtlxEndpoint).toString()
-        : '/api/mtlx/archive');
+const savedMtlxStorageKey = 'openpbr-viewer.generated-mtlx.v1';
 
 const LEGACY_COMPARISON_ENABLED_BY_DEFAULT = false;
 const legacyComparisonEnabled = (() => {
@@ -1688,6 +1681,7 @@ function ensureMtlxPicker()
         .mtlx-picker__archive {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
+            flex-shrink: 0;
             gap: 7px 10px;
             padding: 12px 14px;
             border-bottom: 1px solid #334044;
@@ -1696,7 +1690,7 @@ function ensureMtlxPicker()
         .mtlx-picker__archive-status,
         .mtlx-picker__archive-list { grid-column: 1 / -1; }
         .mtlx-picker__archive-label { color: #a9b9bc; }
-        .mtlx-picker__archive-url {
+        .mtlx-picker__archive-file {
             box-sizing: border-box;
             width: 100%;
             min-width: 0;
@@ -1717,9 +1711,10 @@ function ensureMtlxPicker()
             cursor: pointer;
         }
         .mtlx-picker__archive-load:disabled { opacity: 0.6; cursor: wait; }
-        .mtlx-picker__archive-status { min-height: 1.35em; color: #a9b9bc; }
+        .mtlx-picker__archive-status { min-height: 1.35em; color: #a9b9bc; overflow-wrap: anywhere; }
         .mtlx-picker__archive-status[data-state="error"] { color: #ff9d91; }
-        .mtlx-picker__archive-list { display: flex; flex-wrap: wrap; gap: 5px; }
+        .mtlx-picker__archive-list { display: flex; flex-wrap: wrap; gap: 5px; max-height: 25dvh; overflow: auto; }
+        .mtlx-picker__archive-list .mtlx-picker__item { overflow-wrap: anywhere; }
         .mtlx-picker__body {
             display: grid;
             grid-template-columns: minmax(240px, 0.85fr) minmax(280px, 1.15fr);
@@ -1788,8 +1783,8 @@ function ensureMtlxPicker()
             <button class="mtlx-picker__close" type="button" aria-label="Close">X</button>
         </header>
         <section class="mtlx-picker__archive">
-            <label class="mtlx-picker__archive-label" for="mtlx-picker-archive-url">AmbientCG ZIP URL</label>
-            <input class="mtlx-picker__archive-url" id="mtlx-picker-archive-url" type="url" placeholder="https://ambientcg.com/get?file=Ground112_1K-JPG.zip">
+            <label class="mtlx-picker__archive-label" for="mtlx-picker-archive-file">MaterialX ZIP</label>
+            <input class="mtlx-picker__archive-file" id="mtlx-picker-archive-file" type="file" accept=".zip,application/zip,application/x-zip-compressed">
             <button class="mtlx-picker__archive-load" type="button">Load ZIP</button>
             <div class="mtlx-picker__archive-status" role="status" aria-live="polite"></div>
             <div class="mtlx-picker__archive-list"></div>
@@ -1816,7 +1811,7 @@ function ensureMtlxPicker()
         materialSearch: picker.querySelector('.mtlx-picker__material-search'),
         materialList: picker.querySelector('.mtlx-picker__material-list'),
         materialLabel: picker.querySelector('.mtlx-picker__material-label'),
-        archiveUrl: picker.querySelector('.mtlx-picker__archive-url'),
+        archiveFile: picker.querySelector('.mtlx-picker__archive-file'),
         archiveLoad: picker.querySelector('.mtlx-picker__archive-load'),
         archiveStatus: picker.querySelector('.mtlx-picker__archive-status'),
         archiveList: picker.querySelector('.mtlx-picker__archive-list'),
@@ -1825,10 +1820,7 @@ function ensureMtlxPicker()
     picker.querySelector('.mtlx-picker__back').addEventListener('click', () => picker.classList.remove('is-materials'));
     elements.directorySearch.addEventListener('input', () => renderMtlxPickerDirectories(elements));
     elements.materialSearch.addEventListener('input', () => renderMtlxPickerMaterials(elements));
-    elements.archiveLoad.addEventListener('click', () => loadAmbientCgArchive(elements));
-    elements.archiveUrl.addEventListener('keydown', event => {
-        if (event.key === 'Enter') loadAmbientCgArchive(elements);
-    });
+    elements.archiveLoad.addEventListener('click', () => loadLocalMtlxArchive(elements));
     mtlxPickerElements = elements;
     return elements;
 }
@@ -1839,19 +1831,20 @@ function setMtlxArchiveStatus(elements, message, state = '')
     elements.archiveStatus.dataset.state = state;
 }
 
-async function loadAmbientCgArchive(elements)
+async function loadLocalMtlxArchive(elements)
 {
-    const url = elements.archiveUrl.value.trim();
-    if (!url) {
-        setMtlxArchiveStatus(elements, 'Enter an AmbientCG ZIP URL.', 'error');
+    const file = elements.archiveFile.files[0];
+    if (!file) {
+        setMtlxArchiveStatus(elements, 'Select a local ZIP file.', 'error');
         return;
     }
 
     elements.archiveLoad.disabled = true;
+    elements.archiveFile.disabled = true;
     elements.archiveList.replaceChildren();
-    setMtlxArchiveStatus(elements, 'Downloading and inspecting ZIP...');
+    setMtlxArchiveStatus(elements, `Reading ${file.name}...`);
     try {
-        const archive = await loadMtlxArchive(url, ambientCgArchiveEndpoint);
+        const archive = await loadMtlxArchive(file);
         const label = archive.materials.length === 1
             ? 'MaterialX file found:'
             : `${archive.materials.length} MaterialX files found:`;
@@ -1863,6 +1856,7 @@ async function loadAmbientCgArchive(elements)
             button.type = 'button';
             button.textContent = material.path;
             button.addEventListener('click', async () => {
+                if (elements.archiveLoad.disabled) return;
                 try {
                     await applyMtlxArchiveMaterial(archive, material, elements);
                 } catch (error) {
@@ -1877,16 +1871,19 @@ async function loadAmbientCgArchive(elements)
         setMtlxArchiveStatus(elements, error.message || String(error), 'error');
     } finally {
         elements.archiveLoad.disabled = false;
+        elements.archiveFile.disabled = false;
     }
 }
 
 async function applyMtlxArchiveMaterial(archive, material, elements)
 {
-    const archiveSource = await archive.selectMaterial(material.path);
-    const previousArchiveSource = activeMtlxArchiveSource;
     elements.archiveLoad.disabled = true;
+    elements.archiveFile.disabled = true;
     setMtlxArchiveStatus(elements, `Loading ${material.name}...`);
+    let archiveSource;
+    const previousArchiveSource = activeMtlxArchiveSource;
     try {
+        archiveSource = await archive.selectMaterial(material.path);
         params.mtlx_material = '';
         params.renderer_mode = 'Rasterizer MTLX';
         setPaused(true);
@@ -1898,10 +1895,11 @@ async function applyMtlxArchiveMaterial(archive, material, elements)
         elements.picker.classList.remove('is-open', 'is-materials');
         setMtlxArchiveStatus(elements, `Loaded ${material.name}.`);
     } catch (error) {
-        retireMtlxArchiveSource(archiveSource);
+        if (archiveSource) retireMtlxArchiveSource(archiveSource);
         throw error;
     } finally {
         elements.archiveLoad.disabled = false;
+        elements.archiveFile.disabled = false;
     }
 }
 
@@ -1957,158 +1955,149 @@ function renderMtlxPickerMaterials(elements)
     }
 }
 
-function getGeneratedMtlxMaterials()
+function getSavedMtlxMaterials()
 {
     try {
-        const materials = JSON.parse(localStorage.getItem(generatedMtlxStorageKey) || '[]');
+        const materials = JSON.parse(localStorage.getItem(savedMtlxStorageKey) || '[]');
         return Array.isArray(materials) ? materials : [];
     } catch {
         return [];
     }
 }
 
-function setGeneratedMtlxMaterials(materials)
+function setSavedMtlxMaterials(materials)
 {
-    localStorage.setItem(generatedMtlxStorageKey, JSON.stringify(materials));
+    localStorage.setItem(savedMtlxStorageKey, JSON.stringify(materials));
 }
 
-function validateGeneratedMtlx(mtlxText)
+function validateInlineMtlx(mtlxText)
 {
     const document = new DOMParser().parseFromString(mtlxText, 'application/xml');
     const parserError = document.querySelector('parsererror');
     const root = document.documentElement;
     if (parserError || !root || root.nodeName !== 'materialx') {
-        throw new Error('The Copilot response is not valid MaterialX XML.');
+        throw new Error('The document is not valid MaterialX XML.');
     }
     if (!document.querySelector('surfacematerial, material')) {
-        throw new Error('The generated MaterialX document has no material element.');
+        throw new Error('The MaterialX document has no material element.');
     }
 }
 
-function extractCopilotMtlxText(payload)
+async function applyInlineMtlx(mtlxText, materialName)
 {
-    if (typeof payload === 'string') return payload;
-    const text = payload?.mtlx || payload?.xml || payload?.content || payload?.message;
-    if (typeof text !== 'string') throw new Error('The Copilot endpoint did not return MTLX text.');
-    return text.replace(/^```xml\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
-}
-
-async function generateMtlxWithCopilot(prompt)
-{
-    const response = await fetch(copilotMtlxEndpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            prompt,
-            format: 'materialx-1.39',
-            instruction: 'Return only a complete MaterialX 1.39 XML document with a surfacematerial and no Markdown fences.'
-        })
-    });
-    if (!response.ok) throw new Error(`Copilot endpoint failed: ${response.status}`);
-    const responseText = await response.text();
-    let payload = responseText;
-    try { payload = JSON.parse(responseText); } catch {}
-    const mtlxText = extractCopilotMtlxText(payload);
-    //const mtlxText = prompt;
-    validateGeneratedMtlx(mtlxText);
-    return mtlxText;
-}
-
-async function applyGeneratedMtlx(mtlxText, materialName)
-{
+    validateInlineMtlx(mtlxText);
     const previousArchiveSource = activeMtlxArchiveSource;
     params.mtlx_material = '';
     params.renderer_mode = 'Rasterizer MTLX';
     setPaused(true);
-    await configureSingleMtlxMaterial('', materialName || 'copilot-generated', mtlxText);
+    await configureSingleMtlxMaterial('', materialName || 'inline-material', mtlxText);
     activeMtlxArchiveSource = null;
     activeMtlxArchiveSelection = null;
     retireMtlxArchiveSource(previousArchiveSource);
     load_scene(params.scene_name);
 }
 
-function openMtlxCopilotDialog()
+function openMtlxEditorDialog()
 {
-    ensureMtlxCopilotDialog();
-    const dialog = document.getElementById('mtlx-copilot-dialog');
+    ensureMtlxEditorDialog();
+    const dialog = document.getElementById('mtlx-editor-dialog');
     if (!dialog) return;
     dialog.showModal();
-    dialog.querySelector('[data-copilot-prompt]').focus();
-    renderGeneratedMtlxList(dialog);
+    dialog.querySelector('[data-mtlx-xml]').focus();
+    renderSavedMtlxList(dialog);
 }
 
-function renderGeneratedMtlxList(dialog)
+function renderSavedMtlxList(dialog)
 {
-    const list = dialog.querySelector('[data-generated-mtlx-list]');
+    const list = dialog.querySelector('[data-saved-mtlx-list]');
     list.replaceChildren();
-    for (const material of getGeneratedMtlxMaterials()) {
+    for (const material of getSavedMtlxMaterials()) {
         const button = document.createElement('button');
+        button.className = 'mtlx-editor__button';
         button.type = 'button';
         button.textContent = material.name;
         button.addEventListener('click', async () => {
+            const renderButton = dialog.querySelector('[data-mtlx-render]');
+            if (renderButton.disabled) return;
+            renderButton.disabled = true;
             try {
-                await applyGeneratedMtlx(material.mtlx, material.name);
+                dialog.querySelector('[data-mtlx-name]').value = material.name;
+                dialog.querySelector('[data-mtlx-xml]').value = material.mtlx;
+                await applyInlineMtlx(material.mtlx, material.name);
                 dialog.close();
             } catch (error) {
-                dialog.querySelector('[data-copilot-status]').textContent = error.message;
+                dialog.querySelector('[data-mtlx-status]').textContent = error.message;
+            } finally {
+                renderButton.disabled = false;
             }
         });
         list.appendChild(button);
     }
 }
 
-function ensureMtlxCopilotDialog()
+function ensureMtlxEditorDialog()
 {
-    if (document.getElementById('mtlx-copilot-dialog')) return;
+    if (document.getElementById('mtlx-editor-dialog')) return;
     const style = document.createElement('style');
     style.textContent = `
-        #mtlx-copilot-dialog { width: min(680px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); padding: 0; border: 1px solid #526267; border-radius: 6px; background: #101315; color: #e7ecec; font: 14px/1.4 monospace; }
-        #mtlx-copilot-dialog::backdrop { background: rgba(0, 0, 0, .7); }
-        .mtlx-copilot__header, .mtlx-copilot__footer { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: #182022; }
-        .mtlx-copilot__header { border-bottom: 1px solid #334044; }
-        .mtlx-copilot__footer { border-top: 1px solid #334044; justify-content: flex-end; }
-        .mtlx-copilot__title { flex: 1; font-weight: 700; }
-        .mtlx-copilot__body { display: grid; gap: 10px; padding: 14px; overflow: auto; }
-        .mtlx-copilot__body label { display: grid; gap: 6px; color: #a9b9bc; }
-        .mtlx-copilot__body input, .mtlx-copilot__body textarea { box-sizing: border-box; width: 100%; padding: 10px; border: 1px solid #526267; border-radius: 4px; background: #0b0e0f; color: #e7ecec; font: inherit; }
-        .mtlx-copilot__body textarea { min-height: 130px; resize: vertical; }
-        .mtlx-copilot__button { padding: 9px 12px; border: 1px solid #526267; border-radius: 4px; background: #273237; color: inherit; font: inherit; cursor: pointer; }
-        .mtlx-copilot__button--primary { background: #28606a; border-color: #6caab5; }
-        .mtlx-copilot__status { min-height: 1.4em; color: #e5bd69; white-space: pre-wrap; }
-        .mtlx-copilot__saved { display: flex; flex-wrap: wrap; gap: 6px; }
+        #mtlx-editor-dialog { box-sizing: border-box; width: min(680px, calc(100vw - 28px)); max-height: calc(100dvh - 28px); padding: 0; border: 1px solid #526267; border-radius: 6px; background: #101315; color: #e7ecec; font: 14px/1.4 monospace; }
+        #mtlx-editor-dialog[open] { display: flex; flex-direction: column; }
+        #mtlx-editor-dialog::backdrop { background: rgba(0, 0, 0, .7); }
+        .mtlx-editor__header, .mtlx-editor__footer { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 14px; background: #182022; }
+        .mtlx-editor__header { border-bottom: 1px solid #334044; }
+        .mtlx-editor__footer { border-top: 1px solid #334044; justify-content: flex-end; }
+        .mtlx-editor__title { flex: 1; font-weight: 700; }
+        .mtlx-editor__body { display: grid; gap: 10px; min-height: 0; padding: 14px; overflow: auto; }
+        .mtlx-editor__body label { display: grid; gap: 6px; min-width: 0; color: #a9b9bc; }
+        .mtlx-editor__body input, .mtlx-editor__body textarea { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px; border: 1px solid #526267; border-radius: 4px; background: #0b0e0f; color: #e7ecec; font: inherit; }
+        .mtlx-editor__body textarea { height: 220px; min-height: 100px; max-height: 40dvh; resize: vertical; }
+        .mtlx-editor__button { padding: 9px 12px; border: 1px solid #526267; border-radius: 4px; background: #273237; color: inherit; font: inherit; cursor: pointer; overflow-wrap: anywhere; }
+        .mtlx-editor__button--primary { background: #28606a; border-color: #6caab5; }
+        .mtlx-editor__button:disabled { opacity: .6; cursor: wait; }
+        .mtlx-editor__status { min-height: 1.4em; color: #e5bd69; white-space: pre-wrap; overflow-wrap: anywhere; }
+        .mtlx-editor__saved { display: flex; flex-wrap: wrap; gap: 6px; }
     `;
     document.head.appendChild(style);
     const dialog = document.createElement('dialog');
-    dialog.id = 'mtlx-copilot-dialog';
+    dialog.id = 'mtlx-editor-dialog';
+    dialog.setAttribute('aria-labelledby', 'mtlx-editor-title');
     dialog.innerHTML = `
-        <header class="mtlx-copilot__header"><div class="mtlx-copilot__title">Generate MaterialX with GitHub Copilot</div><button class="mtlx-copilot__button" type="button" data-copilot-close>Close</button></header>
-        <form class="mtlx-copilot__body" method="dialog">
-            <label>Name for this material <input data-copilot-name required maxlength="80" placeholder="e.g. translucent blue ceramic"></label>
-            <label>Material description <textarea data-copilot-prompt required placeholder="Describe color, roughness, metallic, coat, transmission, thin film, textures..."></textarea></label>
-            <div class="mtlx-copilot__status" data-copilot-status></div>
-            <div><div>Saved generated materials</div><div class="mtlx-copilot__saved" data-generated-mtlx-list></div></div>
+        <header class="mtlx-editor__header"><div class="mtlx-editor__title" id="mtlx-editor-title">MaterialX</div><button class="mtlx-editor__button" type="button" data-mtlx-close>Close</button></header>
+        <form class="mtlx-editor__body" id="mtlx-editor-form">
+            <label>Name for this material <input data-mtlx-name required maxlength="80" placeholder="e.g. translucent blue ceramic"></label>
+            <label>MaterialX XML <textarea data-mtlx-xml required spellcheck="false" placeholder="&lt;materialx version=&quot;1.39&quot;&gt;...&lt;/materialx&gt;"></textarea></label>
+            <div class="mtlx-editor__status" data-mtlx-status role="status" aria-live="polite"></div>
+            <div><div>Saved materials</div><div class="mtlx-editor__saved" data-saved-mtlx-list></div></div>
         </form>
-        <footer class="mtlx-copilot__footer"><button class="mtlx-copilot__button" type="button" data-copilot-cancel>Cancel</button><button class="mtlx-copilot__button mtlx-copilot__button--primary" type="button" data-copilot-generate>Generate and render</button></footer>
+        <footer class="mtlx-editor__footer"><button class="mtlx-editor__button" type="button" data-mtlx-cancel>Cancel</button><button class="mtlx-editor__button mtlx-editor__button--primary" type="submit" form="mtlx-editor-form" data-mtlx-render>Render and save</button></footer>
     `;
     document.body.appendChild(dialog);
-    dialog.querySelector('[data-copilot-close]').addEventListener('click', () => dialog.close());
-    dialog.querySelector('[data-copilot-cancel]').addEventListener('click', () => dialog.close());
-    dialog.querySelector('[data-copilot-generate]').addEventListener('click', async () => {
-        const name = dialog.querySelector('[data-copilot-name]').value.trim();
-        const prompt = dialog.querySelector('[data-copilot-prompt]').value.trim();
-        const status = dialog.querySelector('[data-copilot-status]');
-        if (!name || !prompt) return;
-        status.textContent = 'Generating and compiling...';
+    dialog.querySelector('[data-mtlx-close]').addEventListener('click', () => dialog.close());
+    dialog.querySelector('[data-mtlx-cancel]').addEventListener('click', () => dialog.close());
+    dialog.querySelector('form').addEventListener('submit', async event => {
+        event.preventDefault();
+        const renderButton = dialog.querySelector('[data-mtlx-render]');
+        if (renderButton.disabled) return;
+        const name = dialog.querySelector('[data-mtlx-name]').value.trim();
+        const mtlxText = dialog.querySelector('[data-mtlx-xml]').value.trim();
+        const status = dialog.querySelector('[data-mtlx-status]');
+        if (!name || !mtlxText) {
+            status.textContent = 'Enter a material name and MaterialX XML.';
+            return;
+        }
+        renderButton.disabled = true;
+        status.textContent = 'Validating and compiling...';
         try {
-            const mtlxText = await generateMtlxWithCopilot(prompt);
-            const materials = getGeneratedMtlxMaterials().filter(item => item.name !== name);
+            await applyInlineMtlx(mtlxText, name);
+            const materials = getSavedMtlxMaterials().filter(item => item.name !== name);
             materials.unshift({ name, mtlx: mtlxText, savedAt: new Date().toISOString() });
-            setGeneratedMtlxMaterials(materials);
-            await applyGeneratedMtlx(mtlxText, name);
+            setSavedMtlxMaterials(materials);
             status.textContent = 'Rendered successfully.';
-            renderGeneratedMtlxList(dialog);
+            renderSavedMtlxList(dialog);
         } catch (error) {
             status.textContent = error.message || String(error);
+        } finally {
+            renderButton.disabled = false;
         }
     });
 }
@@ -3612,7 +3601,7 @@ function setup_gui()
     const material_folder = gui.addFolder('Material');
     const mtlx_library_folder = material_folder.addFolder('MaterialX Library');
     mtlx_library_folder.add({ open: openMtlxPicker }, 'open').name('choose material');
-    mtlx_library_folder.add({ open: openMtlxCopilotDialog }, 'open').name('generate with Copilot');
+    mtlx_library_folder.add({ open: openMtlxEditorDialog }, 'open').name('edit MaterialX XML');
     mtlx_library_folder.close();
 
     if (uses_mtlx_fullscreen_shader()) setupMtlxParameterControls(material_folder);

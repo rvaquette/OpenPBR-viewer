@@ -1,6 +1,0 @@
-using './main.bicep'
-
-param copilotApiUrl = 'https://your-copilot-gateway.example/v1/chat/completions'
-param copilotApiKey = readEnvironmentVariable('COPILOT_API_KEY')
-param copilotModel = 'your-model'
-param allowedOrigins = 'https://YOUR_GITHUB_USER.github.io,http://localhost:5173,http://localhost:4173'

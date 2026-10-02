@@ -22,6 +22,22 @@ Then open http://localhost:5173/OpenPBR-viewer in your browser.
 
 Then open http://localhost:8080/OpenPBR-viewer in your browser.
 
+## Local MaterialX imports
+
+Under **Material > MaterialX Library**, choose **edit MaterialX XML** to enter a
+material name and a complete MaterialX XML document, then select **Render and save**.
+Saved materials remain in the browser's local storage. No AI API is called.
+
+Choose **choose material** to open the library and load a local ZIP containing
+`.mtlx` files and their textures. Download AmbientCG archives manually, select the
+ZIP file, and click **Load ZIP**. Archives containing a single material load
+automatically; otherwise, select a material from the list. The ZIP is read entirely
+in the browser, without uploading it or using a proxy. Limits are 200 MiB compressed,
+512 MiB uncompressed, and 5,000 files.
+
+These imports work on GitHub Pages without an Azure Function or backend. External
+texture URLs in manually entered XML still require browser-accessible resources.
+
 ## WASM substitution workflow
 
 Run the strict substitution validation pipeline:

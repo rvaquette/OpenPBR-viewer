@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 
+const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024;
 const MAX_UNCOMPRESSED_BYTES = 512 * 1024 * 1024;
 const MAX_ARCHIVE_FILES = 5000;
 
@@ -54,41 +55,13 @@ function findArchiveEntry(fileValue, materialPath, filePrefix, entriesByName)
     throw new Error(`Texture referenced by MaterialX was not found in ZIP: ${fileValue}`);
 }
 
-function validateAmbientCgZipUrl(value)
+export async function loadMtlxArchive(file)
 {
-    let url;
-    try {
-        url = new URL(value);
-    } catch {
-        throw new Error('Enter a valid AmbientCG ZIP URL.');
-    }
-    if (url.protocol !== 'https:' || url.username || url.password)
-        throw new Error('AmbientCG archive URLs must use HTTPS.');
-
-    const isAmbientCg = ['ambientcg.com', 'www.ambientcg.com'].includes(url.hostname) &&
-        url.pathname === '/get' && /^[\w-]+\.zip$/i.test(url.searchParams.get('file') || '');
-    const isDownloadHost = url.hostname === 'acg-download.struffelproductions.com' &&
-        /^\/file\/ambientCG-Web\/download\/[\w-]+\/[\w-]+\.zip$/i.test(url.pathname);
-    if (!isAmbientCg && !isDownloadHost)
-        throw new Error('Use an AmbientCG ZIP URL such as https://ambientcg.com/get?file=Ground112_1K-JPG.zip.');
-    return url.toString();
-}
-
-export async function loadMtlxArchive(zipUrl, proxyEndpoint)
-{
-    const validatedUrl = validateAmbientCgZipUrl(zipUrl);
-    const separator = proxyEndpoint.includes('?') ? '&' : '?';
-    const response = await fetch(`${proxyEndpoint}${separator}url=${encodeURIComponent(validatedUrl)}`);
-    if (!response.ok) {
-        let message = `ZIP download failed (${response.status}).`;
-        try {
-            const payload = await response.json();
-            if (payload?.error) message = payload.error;
-        } catch {}
-        throw new Error(message);
-    }
-
-    const zip = await JSZip.loadAsync(await response.arrayBuffer());
+    if (!file || typeof file.arrayBuffer !== 'function')
+        throw new Error('Select a local ZIP file.');
+    if (file.size > MAX_ARCHIVE_BYTES)
+        throw new Error('The ZIP exceeds the 200 MiB limit.');
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
     const files = Object.values(zip.files).filter(entry => !entry.dir);
     if (files.length > MAX_ARCHIVE_FILES)
         throw new Error(`The ZIP contains too many files (limit: ${MAX_ARCHIVE_FILES}).`);
