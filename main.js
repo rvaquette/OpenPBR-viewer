@@ -1939,7 +1939,7 @@ function ensureMtlxPicker()
         .mtlx-picker__archive-status,
         .mtlx-picker__archive-list { grid-column: 1 / -1; }
         .mtlx-picker__archive-label { color: #a9b9bc; }
-        .mtlx-picker__archive-url,
+        .mtlx-picker__archive-id,
         .mtlx-picker__archive-file {
             box-sizing: border-box;
             width: 100%;
@@ -1969,17 +1969,23 @@ function ensureMtlxPicker()
         .mtlx-picker__archive-list .mtlx-picker__item { overflow-wrap: anywhere; }
         .mtlx-picker__body {
             display: grid;
-            grid-template-columns: minmax(240px, 0.85fr) minmax(280px, 1.15fr);
+            grid-template-columns: minmax(0, 1fr);
             min-height: 0;
             flex: 1;
         }
+        .mtlx-picker.has-directories.has-materials .mtlx-picker__body {
+            grid-template-columns: minmax(240px, 0.85fr) minmax(280px, 1.15fr);
+        }
+        .mtlx-picker:not(.has-directories) .mtlx-picker__pane--directories { display: none; }
+        .mtlx-picker.has-directories:not(.has-materials) .mtlx-picker__pane--materials { display: none; }
         .mtlx-picker__pane {
             display: flex;
             flex-direction: column;
             min-width: 0;
+            min-height: 0;
             padding: 12px;
         }
-        .mtlx-picker__pane + .mtlx-picker__pane { border-left: 1px solid #334044; }
+        .mtlx-picker.has-directories.has-materials .mtlx-picker__pane + .mtlx-picker__pane { border-left: 1px solid #334044; }
         .mtlx-picker__label { margin-bottom: 7px; color: #a9b9bc; }
         .mtlx-picker__search {
             width: 100%;
@@ -2016,12 +2022,12 @@ function ensureMtlxPicker()
         .mtlx-picker__item.is-selected { background: #29434a; border-color: #6caab5; }
         .mtlx-picker__empty { padding: 10px 2px; color: #87979a; }
         @media (max-width: 600px) {
-            .mtlx-picker__body { display: block; }
-            .mtlx-picker__pane { height: 100%; box-sizing: border-box; }
-            .mtlx-picker__pane + .mtlx-picker__pane { display: none; border-left: 0; }
-            .mtlx-picker.is-materials .mtlx-picker__pane--directories { display: none; }
-            .mtlx-picker.is-materials .mtlx-picker__pane--materials { display: flex; }
-            .mtlx-picker.is-materials .mtlx-picker__back { display: block; }
+            .mtlx-picker__body { display: flex; flex-direction: column; }
+            .mtlx-picker__pane { flex: 1; box-sizing: border-box; }
+            .mtlx-picker.has-directories.has-materials .mtlx-picker__pane + .mtlx-picker__pane {
+                border-left: 0;
+                border-top: 1px solid #334044;
+            }
         }
     `;
     document.head.appendChild(style);
@@ -2036,8 +2042,8 @@ function ensureMtlxPicker()
             <button class="mtlx-picker__close" type="button" aria-label="Close">X</button>
         </header>
         <section class="mtlx-picker__archive">
-            <label class="mtlx-picker__archive-label" for="mtlx-picker-archive-url">AmbientCG ZIP URL</label>
-            <input class="mtlx-picker__archive-url" id="mtlx-picker-archive-url" type="url" placeholder="https://ambientcg.com/get?file=Ground112_1K-JPG.zip">
+            <label class="mtlx-picker__archive-label" for="mtlx-picker-archive-id">AmbientCG ID</label>
+            <input class="mtlx-picker__archive-id" id="mtlx-picker-archive-id" type="text" placeholder="Ground112" maxlength="80" pattern="[A-Za-z][A-Za-z0-9]*" autocapitalize="off" spellcheck="false">
             <button class="mtlx-picker__archive-download" type="button">Download ZIP</button>
             <label class="mtlx-picker__archive-label" for="mtlx-picker-archive-file">MaterialX ZIP</label>
             <input class="mtlx-picker__archive-file" id="mtlx-picker-archive-file" type="file" accept=".zip,application/zip,application/x-zip-compressed">
@@ -2070,7 +2076,7 @@ function ensureMtlxPicker()
         materialSearch: picker.querySelector('.mtlx-picker__material-search'),
         materialList: picker.querySelector('.mtlx-picker__material-list'),
         materialLabel: picker.querySelector('.mtlx-picker__material-label'),
-        archiveUrl: picker.querySelector('.mtlx-picker__archive-url'),
+        archiveId: picker.querySelector('.mtlx-picker__archive-id'),
         archiveDownload: picker.querySelector('.mtlx-picker__archive-download'),
         archiveFile: picker.querySelector('.mtlx-picker__archive-file'),
         archiveLoad: picker.querySelector('.mtlx-picker__archive-load'),
@@ -2081,12 +2087,11 @@ function ensureMtlxPicker()
     elements.back.addEventListener('click', () => {
         const parentPath = elements.directoryPath.split('/').slice(0, -1).join('/');
         navigateMtlxPickerDirectory(elements, parentPath);
-        elements.directorySearch.focus();
     });
     elements.directorySearch.addEventListener('input', () => renderMtlxPickerDirectories(elements));
     elements.materialSearch.addEventListener('input', () => renderMtlxPickerMaterials(elements));
     elements.archiveDownload.addEventListener('click', () => openAmbientCgDownload(elements));
-    elements.archiveUrl.addEventListener('keydown', event => {
+    elements.archiveId.addEventListener('keydown', event => {
         if (event.key === 'Enter') {
             event.preventDefault();
             openAmbientCgDownload(elements);
@@ -2105,22 +2110,16 @@ function setMtlxArchiveStatus(elements, message, state = '')
 
 function openAmbientCgDownload(elements)
 {
-    try {
-        const url = new URL(elements.archiveUrl.value.trim());
-        const isAmbientCg = ['ambientcg.com', 'www.ambientcg.com'].includes(url.hostname) &&
-            url.pathname === '/get' && /^[\w-]+\.zip$/i.test(url.searchParams.get('file') || '');
-        const isDownloadHost = url.hostname === 'acg-download.struffelproductions.com' &&
-            /^\/file\/ambientCG-Web\/download\/[\w-]+\/[\w-]+\.zip$/i.test(url.pathname);
-        if (url.protocol !== 'https:' || url.username || url.password || url.port ||
-            (!isAmbientCg && !isDownloadHost)) {
-            throw new Error('Enter an HTTPS AmbientCG ZIP download URL.');
-        }
-        window.open(url.toString(), '_blank', 'noopener,noreferrer');
-        setMtlxArchiveStatus(elements, '');
-    } catch (error) {
-        setMtlxArchiveStatus(elements, error instanceof TypeError
-            ? 'Enter a valid AmbientCG ZIP URL.' : error.message, 'error');
+    const assetId = elements.archiveId.value.trim();
+    if (!/^[A-Za-z][A-Za-z0-9]{0,79}$/.test(assetId)) {
+        setMtlxArchiveStatus(elements, 'Enter a valid AmbientCG ID, e.g. Ground112.', 'error');
+        elements.archiveId.focus();
+        return;
     }
+    const url = new URL('https://ambientcg.com/get');
+    url.searchParams.set('file', `${assetId}_1K-JPG.zip`);
+    window.open(url.toString(), '_blank', 'noopener,noreferrer');
+    setMtlxArchiveStatus(elements, '');
 }
 
 async function loadLocalMtlxArchive(elements)
@@ -2204,9 +2203,18 @@ function navigateMtlxPickerDirectory(elements, directoryPath)
     elements.materialLabel.textContent = directoryPath || 'Material';
     elements.directorySearch.value = '';
     elements.materialSearch.value = '';
-    elements.picker.classList.toggle('is-materials', Boolean(directoryPath));
+    const prefix = directoryPath ? `${directoryPath}/` : '';
+    const hasDirectories = mtlxMaterialDirectories.some(directory =>
+        directory.path !== directoryPath && directory.path.startsWith(prefix)
+    );
+    const hasMaterials = mtlxMaterialDirectories.some(directory =>
+        directory.path === directoryPath && directory.materials?.length > 0
+    );
+    elements.picker.classList.toggle('has-directories', hasDirectories);
+    elements.picker.classList.toggle('has-materials', hasMaterials);
     renderMtlxPickerDirectories(elements);
     renderMtlxPickerMaterials(elements);
+    (hasDirectories ? elements.directorySearch : elements.materialSearch).focus();
 }
 
 function renderMtlxPickerDirectories(elements)
@@ -2235,7 +2243,6 @@ function renderMtlxPickerDirectories(elements)
         button.textContent = `${directory.name}/ (${directory.count})`;
         button.addEventListener('click', () => {
             navigateMtlxPickerDirectory(elements, directory.path);
-            elements.materialSearch.focus();
         });
         elements.directoryList.appendChild(button);
     }
@@ -2245,18 +2252,9 @@ function renderMtlxPickerMaterials(elements)
 {
     const query = elements.materialSearch.value.trim().toLowerCase();
     elements.materialList.replaceChildren();
-    if (!elements.directoryPath) {
-        elements.materialList.innerHTML = '<div class="mtlx-picker__empty">Select a directory</div>';
-        return;
-    }
-    const prefix = `${elements.directoryPath}/`;
-    const materials = mtlxMaterialDirectories.filter(directory =>
-        directory.path === elements.directoryPath || directory.path.startsWith(prefix)
-    ).flatMap(directory => (directory.materials || []).map(material => ({
-        ...material,
-        relativePath: directory.path === elements.directoryPath ? '' : directory.path.slice(prefix.length)
-    }))).filter(material =>
-        `${material.relativePath} ${material.name} ${material.file}`.toLowerCase().includes(query)
+    const directory = mtlxMaterialDirectories.find(item => item.path === elements.directoryPath);
+    const materials = (directory?.materials || []).filter(material =>
+        `${material.name} ${material.file}`.toLowerCase().includes(query)
     );
     if (materials.length === 0) {
         elements.materialList.innerHTML = '<div class="mtlx-picker__empty">No material found</div>';
@@ -2266,8 +2264,7 @@ function renderMtlxPickerMaterials(elements)
         const button = document.createElement('button');
         button.className = 'mtlx-picker__item';
         button.type = 'button';
-        const name = material.name || material.file;
-        button.textContent = material.relativePath ? `${material.relativePath} / ${name}` : name;
+        button.textContent = material.name || material.file;
         button.classList.toggle('is-selected', material.url === params.mtlx_material);
         button.addEventListener('click', async () => {
             elements.picker.classList.remove('is-open', 'is-materials');
