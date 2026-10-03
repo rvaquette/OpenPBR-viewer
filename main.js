@@ -20,6 +20,7 @@ import { loadEnvironmentTexture } from './src/envmap/envLoader.js';
 import { loadNativeTexture } from './src/textures/textureLoader.js';
 import { applyMtlxDisplacement } from './src/mtlx/displacement.js';
 import { loadMtlxArchive } from './src/mtlx/archive.js';
+import { adaptMtlxTextureShader, buildMtlxTextureAtlases } from './src/mtlx/textureAtlas.js';
 //import Stats from 'stats.js';
 
 import {
@@ -284,6 +285,8 @@ var materialDefines = {
 var mtlxGeneratedGlsl = '';
 var mtlxRouteDispatchGlsl = '';
 var mtlxRouteTextureBindings = [];
+var mtlxRouteTextureAtlas = { textures: [], uniforms: {}, bindings: [], rects: [], width: 0, height: 0 };
+var retiredMtlxRouteTextureAtlases = [];
 var mtlxRouteLights = [];
 var mtlxRouteParamDescriptors = [];
 var activeMtlxMaterialText = null;
@@ -378,6 +381,8 @@ function resolveMtlxTextureUrl(fileValue, materialBaseUrl, textureResolver = nul
 
     const relativeUrl = new URL(fileValue, materialBaseUrl || libraryRoot).toString();
     if (relativeUrl.includes('/mtlx-library/')) return relativeUrl;
+    if (materialBaseUrl?.includes('/mtlx-input/') && !/^(?:\.\.\/)+/.test(fileValue))
+        return relativeUrl;
 
     // Keep legacy paths such as ../../Images/... inside the replacement library.
     const libraryRelativePath = fileValue
@@ -433,30 +438,36 @@ function isMtlxColorTexture(binding)
     return !/(normal|rough|metal|mask|height|bump|ao|occlusion|opacity|alpha|dirt|variation)/.test(text);
 }
 
+function getMtlxMaxTextureSize()
+{
+    if (renderer?.capabilities?.maxTextureSize) return renderer.capabilities.maxTextureSize;
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl2');
+    if (!gl) throw new Error('[mtlx-textures] WebGL2 is required to query MAX_TEXTURE_SIZE');
+    const maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    gl.getExtension('WEBGL_lose_context')?.loseContext();
+    return maxTextureSize;
+}
+
+async function prepareMtlxTextureAtlases(bindings)
+{
+    const nextAtlas = await buildMtlxTextureAtlases(bindings, getMtlxMaxTextureSize());
+    retiredMtlxRouteTextureAtlases.push(...mtlxRouteTextureAtlas.textures);
+    mtlxRouteTextureAtlas = nextAtlas;
+    if (typeof window !== 'undefined') {
+        window.__openpbrTextureAtlasInfo = {
+            pageCount: nextAtlas.textures.length,
+            width: nextAtlas.width,
+            height: nextAtlas.height,
+            sourceImages: nextAtlas.rects.length,
+            maxTextureSize: getMtlxMaxTextureSize(),
+        };
+    }
+}
+
 function createMtlxRouteTextureUniforms()
 {
-    const uniforms = {};
-    if (mtlxRouteTextureBindings.length === 0) return uniforms;
-    for (const binding of mtlxRouteTextureBindings) {
-        let settled = false;
-        const finishArchiveTextureLoad = () => {
-            if (settled || !binding.archiveSource) return;
-            settled = true;
-            const source = binding.archiveSource;
-            source.textureLoadsPending = Math.max(0, source.textureLoadsPending - 1);
-            if (source.retired && source.textureLoadsPending === 0) source.release();
-        };
-        const texture = loadNativeTexture(binding.url, finishArchiveTextureLoad, finishArchiveTextureLoad);
-        texture.wrapS = RepeatWrapping;
-        texture.wrapT = RepeatWrapping;
-        texture.flipY = false;
-        // Keep textures raw (no hardware sRGB decode): the MaterialX-generated GLSL
-        // applies its own colorspace conversion per the .mtlx (srgb_texture), so tagging
-        // SRGBColorSpace here would double-decode and darken color textures.
-        texture.colorSpace = LinearSRGBColorSpace;
-        uniforms[binding.sampler] = { value: texture };
-    }
-    return uniforms;
+    return { ...mtlxRouteTextureAtlas.uniforms };
 }
 
 function getMtlxInput(node, inputName)
@@ -2265,21 +2276,24 @@ async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText =
         }
     }
 
+    mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl, archiveSource);
+    await prepareMtlxTextureAtlases(mtlxRouteTextureBindings);
+    if (archiveSource) {
+        archiveSource.textureLoadsPending = 0;
+        archiveSource.retired = false;
+    }
+
     const result = is_mtlx_bvh_raster_route()
         ? await generateMtlxRasterDispatch(mtlxText)
         : await generateMtlxRouteDispatch(mtlxText);
     const summary = summarizeMtlxRouteMaterialParams(result.mtlxParams);
     const hasTransmission = result.mtlxParams.transmissionWeight > 0;
 
-    mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl, archiveSource);
-    if (archiveSource) {
-        archiveSource.textureLoadsPending = mtlxRouteTextureBindings.length;
-        archiveSource.retired = false;
-    }
     mtlxArchiveDisplacement = await loadMtlxDisplacement(mtlxText, archiveSource, mtlxMaterialBaseUrl);
     mtlxRouteLights = extractMtlxLights(mtlxText);
     mtlxRouteMaterialSummary = summary;
-    const parameterBinding = bindMtlxParametersToTexture(result.glsl, mtlxText);
+    const textureShader = adaptMtlxTextureShader(result.glsl, mtlxRouteTextureAtlas);
+    const parameterBinding = bindMtlxParametersToTexture(textureShader, mtlxText);
     mtlxRouteParamDescriptors = parameterBinding.parameters;
     mtlxRouteDispatchGlsl = parameterBinding.glsl;
     activeMtlxMaterialText = mtlxText;
@@ -2567,15 +2581,17 @@ var scene_names = {
             // raster uses EsslHostShaderGenerator and calls its generated main().
             mtlxRouteTextureBindings = [];
             mtlxRouteLights = [];
+            mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
+            await prepareMtlxTextureAtlases(mtlxRouteTextureBindings);
             const result = is_mtlx_bvh_raster_route()
                 ? await generateMtlxRasterDispatch(mtlxText)
                 : await generateMtlxRouteDispatch(mtlxText);
-            const parameterBinding = bindMtlxParametersToTexture(result.glsl, mtlxText);
+            const textureShader = adaptMtlxTextureShader(result.glsl, mtlxRouteTextureAtlas);
+            const parameterBinding = bindMtlxParametersToTexture(textureShader, mtlxText);
             mtlxRouteParamDescriptors = parameterBinding.parameters;
             mtlxRouteDispatchGlsl = parameterBinding.glsl;
             activeMtlxMaterialText = mtlxText;
             mtlxRouteMaterialSummary = summarizeMtlxRouteMaterialParams(result.mtlxParams);
-            mtlxRouteTextureBindings = extractMtlxTextureBindings(mtlxText, mtlxMaterialBaseUrl);
             mtlxRouteLights = extractMtlxLights(mtlxText);
 
             mtlxRouteLights.push(...extractMtlxLightOverrides(search));
@@ -2642,6 +2658,8 @@ function create_materials()
 
     if (pathtracedMaterial)
         pathtracedMaterial.dispose();
+    for (const texture of retiredMtlxRouteTextureAtlases.splice(0))
+        texture.dispose();
     // pathtracedMaterial_legacy is rebuilt separately inside create_materials()
 
     if (!FULLSCREEN_BVH_ROUTE)
@@ -3727,9 +3745,15 @@ function makeGuiDraggable()
 
 function setup_gui()
 {
-    if (gui)
+    if (gui) {
+        const samplesStatus = gui.domElement.querySelector('#samples');
+        if (samplesStatus) document.body.appendChild(samplesStatus);
         gui.destroy()
+    }
     gui = new GUI({ width: 300 });
+    const samplesStatus = document.getElementById('samples');
+    const guiChildren = gui.domElement.querySelector(':scope > .children');
+    if (samplesStatus && guiChildren) gui.domElement.insertBefore(samplesStatus, guiChildren);
 
     // Top-level pause toggle (freeze/resume the pathtracer accumulation).
     pauseController = gui.add(params, 'paused').name('pause (arrêt / relance)');
