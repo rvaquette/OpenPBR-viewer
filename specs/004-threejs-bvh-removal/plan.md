@@ -26,8 +26,7 @@ GLSL-PathTracer-JS (pas de FBO/tuiles/skeleton.glsl).
 
 ## Phase 1 — BVH : port JS (construction + upload GPU)
 
-> ✅ **Statut : VALIDÉE.** Rendu confirmé correct (`Rasterizer legacy`, `Rasterizer MTLX`,
-> `Pathtracer MTLX`, `Pathtracer legacy`). Un paramètre `bvh_engine` (`threejs` par défaut, `native`
+> ✅ **Statut : VALIDÉE.** Rendu confirmé correct (`Rasterizer MTLX`, `Pathtracer MTLX`). Un paramètre `bvh_engine` (`threejs` par défaut, `native`
 > en option) permet de choisir entre `three-mesh-bvh` et le port local `src/bvh/*` ; les deux passent
 > par le même point d'appel GLSL (`bvhIntersectFirstHitWithinDistance`). Bug corrigé côté GLSL natif :
 > la taille de feuille (`metadata.y`) était ignorée (boucle figée à 1 triangle) dans
@@ -119,20 +118,20 @@ Test de rendu de validation de phase :
 > dépendance est donc désormais délibérément conservée, pas un reliquat oublié.
 
 - ~~Retirer `three-mesh-bvh` de `package.json`~~ — conservé intentionnellement (voir ci-dessus).
-- Retirer `RGBELoader`/`TextureLoader` de `main.js` si totalement remplacés (vérifier usages legacy
+- Retirer `RGBELoader`/`TextureLoader` de `main.js` si totalement remplacés (vérifier les usages restants
   avant suppression). ✅ Fait (Phases 2/3) : plus aucun import de ces classes dans `main.js`, seuls des
   commentaires les mentionnent encore par nom.
-- Revalidation complète : `npm run build`, `node launch_render.mjs` sur les 4 modes de rendu et les
+- Revalidation complète : `npm run build`, `node launch_render.mjs` sur les deux modes de rendu et les
   scènes `standard-shader-ball`, `glavenus`, `terrain`, `bearded-man`.
 
 Test de rendu final de phase :
 - Scène cible : `bearded-man`
-- Modes : `Pathtracer MTLX`, `Rasterizer MTLX`, `Pathtracer legacy`, `Rasterizer legacy`
+- Modes : `Pathtracer MTLX`, `Rasterizer MTLX`
 - Vérification : le rendu final est stable sans dépendance three.js côté GLSL, sans crash de BVH, sans
   rupture sur l'envmap et sans cassure sur les textures de matériau. On garde le comportement visuel
   principal sur la scène la plus complexe du projet.
 
-> ✅ **Statut : VALIDÉE** (2026-09-08). `npm run build` propre et les 4 modes rendus sur `bearded-man`
+> ✅ **Statut : VALIDÉE** (2026-09-08). `npm run build` propre et les deux modes rendus sur `bearded-man`
 > avec `--gpu=false`, sans crash ni BVH figé (moteur par défaut `threejs`, ~2.4M triangles). Aucune
 > texture noire/cassée observée. `RGBELoader`/`TextureLoader` confirmés absents de `main.js`.
 
@@ -143,8 +142,8 @@ valider de rendu en mode GPU matériel (`--gpu=true`/défaut), qui peut masquer 
 contraire faire échouer un rendu qui fonctionne correctement en logiciel.
 
 ## Ordre d'exécution recommandé
-1. Phase 1 (BVH) — seul point bloquant réel, impacte tous les modes (pathtracer/rasterizer MTLX et
-   legacy partagent `bvh_props`/`bvh_surface`).
+1. Phase 1 (BVH) — seul point bloquant réel, impacte les deux modes MTLX qui partagent
+  `bvh_props`/`bvh_surface`.
 2. Retrait partiel de `three-mesh-bvh` de `package.json` dès Phase 1 validée.
 3. Phase 2 (envmap) — indépendante.
 4. Phase 3 (textures) — indépendante, la plus simple.
@@ -156,8 +155,7 @@ contraire faire échouer un rendu qui fonctionne correctement en logiciel.
   de refactoring) ?
 - **Phase 2 CDF importance sampling** : inclus dans ce chantier ou reporté (changerait le rendu/
   convergence) ?
-- **Legacy pathtracer** (`Pathtracer legacy`, `pathtracedMaterial_legacy`, `bvh_props`) : migré aussi,
-  ou laissé sur three-mesh-bvh (mode comparaison manuelle uniquement) ?
+- **Pathtracer MTLX** (`pathtracedMaterial`, `bvh_props`) : utiliser `three-mesh-bvh` ou un moteur BVH natif ?
 
 ## Phase 5 — Alignement avec `D:\WebGL2\GLSL-PathTracer-JS\shaders\skeleton.glsl` (menu à trancher)
 

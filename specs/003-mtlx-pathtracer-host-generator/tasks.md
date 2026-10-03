@@ -12,10 +12,10 @@
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-**Purpose**: Establish the new route and generator scaffold without changing the legacy comparison path.
+**Purpose**: Establish the new route and generator scaffold without changing shared viewer utilities.
 
 - [X] T001 Create `glsl/pathtracing/mtlx/` and `glsl/pathtracing/mtlx/generated/` directories
-- [X] T002 Copy `glsl/pathtracing/legacy/pathtracer.glsl` to `glsl/pathtracing/mtlx/pathtracer.glsl` as the initial base
+- [X] T002 Create the MaterialX pathtracer source in `glsl/pathtracing/mtlx/pathtracer.glsl`
 - [X] T003 [P] Create artifact directories `artifacts/mtlx-pathtracer/fixtures/`, `artifacts/mtlx-pathtracer/generated/`, `artifacts/mtlx-pathtracer/validation/`
 - [X] T004 [P] Create generator wrapper scaffold `tools/generate-mtlx-pathtracer-dispatch.mjs`
 - [X] T005 [P] Create validation runner scaffold `tools/validate-mtlx-pathtracer-corpus.mjs`

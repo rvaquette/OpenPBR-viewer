@@ -16,7 +16,7 @@ Define the explicit boundary between automated substitution validation and manua
 
 ## Non-Goals
 - Automation does not perform image-quality judgement.
-- Production runtime does not execute legacy comparison code paths automatically.
+- Production runtime exposes only generated MaterialX shading paths.
 
 ## Release Gate Contract
 - Any material labeled with critical category (energy, hue, detail, mixed) is release-blocking.

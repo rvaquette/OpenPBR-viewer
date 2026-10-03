@@ -41,18 +41,6 @@ import {
     glsl_mtlx_route_pathtracer,
     glsl_rasterization_mtlx_common,
     glsl_rasterization_mtlx_rasterizer,
-    glsl_rasterization_legacy_bvh_rasterizer,
-    glsl_legacy_main,
-    glsl_legacy_fuzz_brdf,
-    glsl_legacy_coat_brdf,
-    glsl_legacy_thin_film,
-    glsl_legacy_metal_brdf,
-    glsl_legacy_specular_brdf,
-    glsl_legacy_specular_btdf,
-    glsl_legacy_diffuse_brdf,
-    glsl_legacy_diffuse_btdf,
-    glsl_legacy_openpbr_surface,
-    glsl_legacy_pathtracer,
     glsl_rasterization_openpbr_frag,
     glsl_rasterization_openpbr_vert,
     glsl_rasterization_neutral_frag,
@@ -325,16 +313,6 @@ var mtlxRouteMaterialSummary = {
 var mtlxMaterialLibrary = [];
 var mtlxMaterialDirectories = [];
 const savedMtlxStorageKey = 'openpbr-viewer.generated-mtlx.v1';
-
-const LEGACY_COMPARISON_ENABLED_BY_DEFAULT = false;
-const legacyComparisonEnabled = (() => {
-    const search = new URLSearchParams(window.location.search);
-    if (search.has('legacy_comparison')) {
-        const v = search.get('legacy_comparison');
-        return v === 'true' || v === '1';
-    }
-    return LEGACY_COMPARISON_ENABLED_BY_DEFAULT;
-})();
 
 // GPU path tracer is opt-in: by default the viewer stays on the lightweight
 // Rasterizer route and never compiles the heavy path-tracing shaders. Enable it
@@ -1145,37 +1123,31 @@ async function validateGeneratedShadingContract(generatedGlsl, search)
 function getRendererModes()
 {
     return [
-        // 'Rasterizer legacy',
         'Rasterizer MTLX',
         'Pathtracer MTLX',
-        // 'Pathtracer legacy'
     ];
 }
 
 function getRendererModeOptions()
 {
     return {
-        // 'Rasterizer legacy': 'Rasterizer legacy',
         'Rasterizer MTLX':   'Rasterizer MTLX',
         'Pathtracer MTLX':   'Pathtracer MTLX'
-        // 'Pathtracer legacy': 'Pathtracer legacy'
     };
 }
 
 function is_mtlx_route() { return params.renderer_mode === 'Pathtracer MTLX'; }
 function is_mtlx_bvh_raster_route() { return params.renderer_mode === 'Rasterizer MTLX'; }
-function is_legacy_bvh_raster_route() { return params.renderer_mode === 'Rasterizer legacy'; }
 function uses_mtlx_fullscreen_shader() { return is_mtlx_route() || is_mtlx_bvh_raster_route(); }
 
 function is_pathtracing_route()
 {
-    return params.renderer_mode === 'Pathtracer MTLX' ||
-           params.renderer_mode === 'Pathtracer legacy';
+    return params.renderer_mode === 'Pathtracer MTLX';
 }
 
 function is_fullscreen_bvh_route()
 {
-    return is_pathtracing_route() || is_mtlx_bvh_raster_route() || is_legacy_bvh_raster_route();
+    return is_pathtracing_route() || is_mtlx_bvh_raster_route();
 }
 
 // Pack per-vertex attributes into 3 RGBA textures for the MTLX fullscreen route,
@@ -2547,7 +2519,6 @@ var mesh_loader;
 var renderer, camera, orbitControls, scene, gui;//, stats;
 var pathtracedQuad, pathtracedFinalQuad, pathtracingRenderTarget;
 var pathtracedMaterial = null;
-var pathtracedMaterial_legacy = null;
 var openpbrMaterial = null;
 var neutralMaterial = null;
 var directionalLight, ambientLight;
@@ -2677,10 +2648,8 @@ function installWebGLDiagnostics(gl)
     }, false);
 }
 
-function is_legacy_pt() { return params.renderer_mode === 'Pathtracer legacy'; }
-function uses_legacy_fullscreen_shader() { return is_legacy_pt() || is_legacy_bvh_raster_route(); }
-function active_pathtrace_material() { return uses_legacy_fullscreen_shader() ? pathtracedMaterial_legacy : pathtracedMaterial; }
-function get_pathtrace_materials() { return [pathtracedMaterial, pathtracedMaterial_legacy].filter(Boolean); }
+function active_pathtrace_material() { return pathtracedMaterial; }
+function get_pathtrace_materials() { return pathtracedMaterial ? [pathtracedMaterial] : []; }
 
 function updateSunDir()
 {
@@ -2733,7 +2702,7 @@ var scene_names = {
     if (search.has('renderer_mode')) {
         if (!getRendererModes().includes(params.renderer_mode)) {
             params.renderer_mode = 'Rasterizer MTLX';
-            console.warn('[URL params] legacy renderer disabled; using Rasterizer MTLX');
+            console.warn('[URL params] unsupported renderer; using Rasterizer MTLX');
         }
         console.log('[URL params] renderer_mode =', params.renderer_mode);
     }
@@ -2851,7 +2820,6 @@ function create_materials()
         pathtracedMaterial.dispose();
     for (const texture of retiredMtlxRouteTextureAtlases.splice(0))
         texture.dispose();
-    // pathtracedMaterial_legacy is rebuilt separately inside create_materials()
 
     if (!FULLSCREEN_BVH_ROUTE)
     {
@@ -3130,137 +3098,8 @@ function create_materials()
         else {
             pathtracedMaterial = null;
         }
-
-        //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-        // pathtracedMaterial_legacy (handwritten OpenPBR BSDF, pre-MaterialX)
-        //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-        if (pathtracedMaterial_legacy) pathtracedMaterial_legacy.dispose();
-
-        const legacyDefines = {
-            FUZZ_ENABLED:         true,
-            COAT_ENABLED:         true,
-            TRANSMISSION_ENABLED: true,
-            VOLUME_ENABLED:       true,
-            THIN_FILM_ENABLED:    true,
-            HAZE_ENABLED:         false,
-            RETRO_ENABLED:        false,
-            SUBSURFACE_ENABLED:   false,
-        };
-
-        pathtracedMaterial_legacy = new ShaderMaterial( {
-
-        defines: legacyDefines,
-
-        uniforms: UniformsUtils.merge( [
-            UniformsUtils.clone(ShaderLib.phong.uniforms),
-            {
-                ...createBvhUniforms('bvh_surface'),
-                normalAttribute_surface: { value: new FloatVertexAttributeTexture() },
-                tangentAttribute_surface:{ value: new FloatVertexAttributeTexture() },
-                has_normals_surface:     { value: 1 },
-                has_tangents_surface:    { value: 0 },
-                ...createBvhUniforms('bvh_props'),
-                normalAttribute_props: { value: new FloatVertexAttributeTexture() },
-                tangentAttribute_props:{ value: new FloatVertexAttributeTexture() },
-                has_normals_props:     { value: 1 },
-                has_tangents_props:    { value: 0 },
-                ground_texture:        { value: null },
-                ground_y:              { value: sceneGroundY },
-                cameraWorldMatrix:     { value: new Matrix4() },
-                invProjectionMatrix:   { value: new Matrix4() },
-                invModelMatrix:        { value: new Matrix4() },
-                resolution:            { value: new Vector2() },
-                samples:               { value: 0 },
-                accumulation_weight:   { value: 1 },
-                wireframe:             { value: params.wireframe },
-                neutral_color:         { value: new Vector3().fromArray(params.neutral_color) },
-                smooth_normals:        { value: params.smooth_normals },
-                bounces:               { value: params.bounces },
-                max_volume_steps:      { value: params.max_volume_steps },
-                firefly_clamp:         { value: params.firefly_clamp },
-                skyPower:              { value: params.skyPower },
-                skyColor:              { value: array_to_vector3(params.skyColor) },
-                sunPower:              { value: Math.pow(10.0, params.sunPower) },
-                sunAngularSize:        { value: params.sunAngularSize },
-                sunColor:              { value: array_to_vector3(params.sunColor) },
-                sunDir:                { value: array_to_vector3([0,0,0]) },
-                base_weight:                         { value: params.base_weight ?? 1.0 },
-                base_color:                          { value: array_to_vector3(params.base_color ?? [0.8,0.8,0.8]) },
-                base_diffuse_roughness:              { value: params.base_diffuse_roughness ?? 0.0 },
-                base_metalness:                      { value: params.base_metalness ?? 0.0 },
-                specular_weight:                     { value: params.specular_weight ?? 1.0 },
-                specular_color:                      { value: array_to_vector3(params.specular_color ?? [1,1,1]) },
-                specular_roughness:                  { value: params.specular_roughness ?? 0.3 },
-                specular_anisotropy:                 { value: params.specular_anisotropy ?? 0.0 },
-                specular_ior:                        { value: params.specular_ior ?? 1.5 },
-                specular_haze:                       { value: params.specular_haze ?? 0.0 },
-                specular_haze_spread:                { value: params.specular_haze_spread ?? 0.3 },
-                specular_retroreflectivity:          { value: params.specular_retroreflectivity ?? 0.0 },
-                transmission_weight:                 { value: params.transmission_weight ?? 0.0 },
-                transmission_color:                  { value: array_to_vector3(params.transmission_color ?? [1,1,1]) },
-                transmission_depth:                  { value: params.transmission_depth ?? 0.0 },
-                transmission_scatter:                { value: array_to_vector3(params.transmission_scatter ?? [0,0,0]) },
-                transmission_scatter_anisotropy:     { value: params.transmission_scatter_anisotropy ?? 0.0 },
-                transmission_dispersion_abbe_number: { value: params.transmission_dispersion_abbe_number ?? 20.0 },
-                transmission_dispersion_scale:       { value: params.transmission_dispersion_scale ?? 0.0 },
-                subsurface_weight:                   { value: params.subsurface_weight ?? 0.0 },
-                subsurface_color:                    { value: array_to_vector3(params.subsurface_color ?? [0.8,0.8,0.8]) },
-                subsurface_radius:                   { value: params.subsurface_radius ?? 0.2 },
-                subsurface_radius_scale:             { value: array_to_vector3(params.subsurface_radius_scale ?? [1,0.5,0.25]) },
-                subsurface_anisotropy:               { value: params.subsurface_anisotropy ?? 0.0 },
-                coat_weight:                         { value: params.coat_weight ?? 0.0 },
-                coat_color:                          { value: array_to_vector3(params.coat_color ?? [1,1,1]) },
-                coat_roughness:                      { value: params.coat_roughness ?? 0.0 },
-                coat_anisotropy:                     { value: params.coat_anisotropy ?? 0.0 },
-                coat_ior:                            { value: params.coat_ior ?? 1.6 },
-                coat_darkening:                      { value: params.coat_darkening ?? 1.0 },
-                fuzz_weight:                         { value: params.fuzz_weight ?? 0.0 },
-                fuzz_color:                          { value: array_to_vector3(params.fuzz_color ?? [1,1,1]) },
-                fuzz_roughness:                      { value: params.fuzz_roughness ?? 0.5 },
-                emission_weight:                     { value: params.emission_weight ?? 0.0 },
-                emission_luminance:                  { value: params.emission_luminance ?? 0.0 },
-                emission_color:                      { value: array_to_vector3(params.emission_color ?? [1,1,1]) },
-                thin_film_weight:                    { value: params.thin_film_weight ?? 0.0 },
-                thin_film_thickness:                 { value: params.thin_film_thickness ?? 1000.0 },
-                thin_film_ior:                       { value: params.thin_film_ior ?? 1.4 },
-                geometry_opacity:                    { value: params.geometry_opacity ?? 1.0 },
-                geometry_thin_walled:                { value: params.geometry_thin_walled ?? false },
-            },
-        ] ),
-
-        vertexShader: `
-            varying vec2 vUv;
-            void main()
-            {
-                vec4 mvPosition = vec4( position, 1.0 );
-                mvPosition = modelViewMatrix * mvPosition;
-                gl_Position = projectionMatrix * mvPosition;
-                vUv = uv;
-            }
-        `,
-
-        fragmentShader: `precision highp isampler2D;
-                            precision highp usampler2D;
-                            precision highp int;
-                            ${ bvhGlslPrelude() }
-                        `
-                        + adaptBvhGlslForEngine(
-                            glsl_legacy_main
-                            + glsl_legacy_fuzz_brdf
-                            + glsl_legacy_coat_brdf
-                            + glsl_legacy_thin_film
-                            + glsl_legacy_specular_brdf
-                            + glsl_legacy_specular_btdf
-                            + glsl_legacy_metal_brdf
-                            + glsl_legacy_diffuse_brdf
-                            + glsl_legacy_diffuse_btdf
-                            + glsl_legacy_openpbr_surface
-                            + (is_legacy_bvh_raster_route() ? glsl_rasterization_legacy_bvh_rasterizer : glsl_legacy_pathtracer)
-                        )
-
-        } );
     }
+
 }
 
 function init()
@@ -4594,7 +4433,7 @@ function render()
     {
         samples_txt.style.visibility = 'visible';
         samples_txt.innerText = `samples: ${ samples }`;
-        const modeLabel = is_mtlx_bvh_raster_route() ? 'rasterization (MaterialX BVH)' : is_legacy_pt() ? 'pathtracing (legacy)' : 'pathtracing (MaterialX)';
+        const modeLabel = is_mtlx_bvh_raster_route() ? 'rasterization (MaterialX BVH)' : 'pathtracing (MaterialX)';
         info_txt.innerText = `OpenPBR viewer, ${modeLabel} (press 'R' to cycle mode)`;
     }
     else

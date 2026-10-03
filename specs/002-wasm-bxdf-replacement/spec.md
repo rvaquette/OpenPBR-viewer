@@ -118,7 +118,7 @@ En tant que responsable qualité rendu, je veux comparer les résultats avant/ap
 ## Assumptions
 
 - La chaîne MaterialX WASM continue de produire les fonctions de shading nécessaires au périmètre cible.
-- Le pathtracer legacy reste la base d’exécution pendant la transition vers la substitution complète.
+- Le pathtracer MaterialX généré constitue désormais la base d’exécution du viewer.
 - Un corpus de matériaux de référence existe et peut être exécuté de manière répétable pour la validation.
 - Les matériaux hors périmètre prioritaire peuvent être temporairement exclus à condition d’être explicitement signalés.
 - Les critères d’écart critique de rendu sont définis et partagés avant décision de livraison.

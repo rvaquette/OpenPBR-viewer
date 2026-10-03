@@ -18,7 +18,7 @@ Define the runtime contract between MaterialX WASM generated shading output and 
 1. The pathtracer must bind and call only generated functions listed by the material contract.
 2. If any required generated function is missing or signature-incompatible, rendering for that material fails explicitly.
 3. No automatic fallback to legacy `XXX_bXdf.glsl` functions is allowed in production path.
-4. Legacy comparison is manual-only and outside automated production pipeline.
+4. Validation uses generated MaterialX shading and excludes renderer comparisons.
 5. Contract validation must run before shader compile and before first render.
 
 ## Signature Compatibility

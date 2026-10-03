@@ -46,8 +46,8 @@ For each material in corpus, collect:
 - wasmGenerationVersion
 - criticalDifference
 
-## 6. Manual legacy comparison (validation only)
-1. Run manual before/after comparison outside automation pipeline.
+## 6. MaterialX render validation
+1. Render the generated MaterialX route outside the automation pipeline when needed.
 2. Classify critical differences using agreed criteria:
    - major global energy divergence
    - dominant hue shift
@@ -57,6 +57,6 @@ For each material in corpus, collect:
 Release is blocked if any report entry is marked `criticalDifference=true` within the defined scope.
 
 ## Validation outcomes (2026-08-23)
-- Command: `node launch_render.mjs --headless --browser=edge --mode=Pathtracer --spp=2 --size=128x128 --output=artifacts/quickstart-smoke.png --strict_generated_contract=true --legacy_comparison=false --launch-timeout-ms=240000`
+- Command: `node launch_render.mjs --headless --browser=edge --mode=mtlx --spp=2 --size=128x128 --output=artifacts/quickstart-smoke.png --strict_generated_contract=true --launch-timeout-ms=240000`
 - Result: SUCCESS (shader compile completed, 2 spp reached, screenshot and OIDN denoise completed).
 - Evidence artifact: `artifacts/quickstart-smoke.png`.

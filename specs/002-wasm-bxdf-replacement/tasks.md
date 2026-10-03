@@ -48,7 +48,7 @@
 - [X] T012 [P] [US1] Refactor generated entrypoint mapping per material contract in glsl/pathtracing/mtlx_adapters.glsl
 - [X] T013 [US1] Replace legacy BXDF main-flow call sites with generated entrypoints in glsl/pathtracing/pathtracer.glsl
 - [X] T014 [US1] Update shader assembly routing to prioritize generated shading in main.js
-- [X] T015 [US1] Keep manual legacy comparison disabled by default in production path in main.js
+- [X] T015 [US1] Keep renderer comparison controls out of the production path in main.js
 - [X] T016 [US1] Add strict-failure substitution flags in launch_render.mjs
 - [X] T017 [US1] Document substitution runtime behavior in README.md
 
@@ -103,8 +103,8 @@
 
 **Purpose**: Final cleanup, cross-repo traceability, and rollout hardening.
 
-- [X] T035 [P] Mark legacy comparison-only intent in glsl/pathtracing/legacy/openpbr_surface.glsl
-- [X] T036 [P] Mark legacy comparison-only intent in glsl/pathtracing/legacy/pathtracer.glsl
+- [X] T035 [P] Document handwritten OpenPBR shading in glsl/pathtracing/legacy/openpbr_surface.glsl
+- [X] T036 [P] Document the standalone pathtracer in glsl/pathtracing/legacy/pathtracer.glsl
 - [X] T037 Add substitution report sample artifact in specs/002-wasm-bxdf-replacement/contracts/substitution-report.sample.json
 - [X] T038 [P] Add strict-failure and ABI troubleshooting guide in README.md
 - [X] T039 Add explicit SC-003 and SC-005 KPI assertions (95% pass rate, 15-minute integration target) in tools/run-substitution-validation.mjs
@@ -193,4 +193,4 @@ Task: "Update WASM generation flow after C++ changes in ../MaterialX-rva/javascr
 - All tasks follow required checklist format with IDs and file paths.
 - [P] marks tasks that can run in parallel without unresolved dependencies.
 - User story labels appear only in user story phases.
-- Legacy comparison stays outside automated production pipeline.
+- Render validation uses the generated MaterialX route.

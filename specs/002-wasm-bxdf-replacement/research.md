@@ -15,9 +15,9 @@
 - Rationale: Guarantees deterministic behavior and prevents silent production divergence.
 - Alternatives considered: Automatic fallback to legacy (rejected due to hidden regressions).
 
-## Decision 4: Legacy Comparison Policy
-- Decision: Keep legacy comparison manual and outside automated production pipeline.
-- Rationale: Supports forensic validation while preserving strict production behavior.
+## Decision 4: Render Validation Policy
+- Decision: Use generated MaterialX renders as the validation baseline.
+- Rationale: Keeps validation aligned with the only supported production shading path.
 - Alternatives considered: Always-on automated comparison (rejected due to complexity and accidental coupling).
 
 ## Decision 5: Validation Report Contract

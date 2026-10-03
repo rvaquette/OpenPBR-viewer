@@ -6,7 +6,7 @@
 
 **Status**: Draft
 
-**Input**: User description: "Unifier le pathtracer legacy du viewer OpenPBR avec une génération MaterialX pour rendre le rendu pathtracé utilisable avec différents matériaux (OpenPBR, Standard Surface, Disney, etc.), via adaptations GLSL et éventuellement une nouvelle classe C++/WASM."
+**Input**: User description: "Unifier le pathtracer OpenPBR existant du viewer avec une génération MaterialX pour rendre le rendu pathtré utilisable avec différents matériaux (OpenPBR, Standard Surface, Disney, etc.), via adaptations GLSL et éventuellement une nouvelle classe C++/WASM."
 
 ## Clarifications
 

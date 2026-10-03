@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
  * render-showcase.mjs — Rendu par lot de tous les .mtlx d'un dossier, dans les
- * 4 modes du viewer, via launch_render.mjs.
+ * deux modes du viewer, via launch_render.mjs.
  *
- * Pour chaque .mtlx trouvé (récursivement) sous --showcase, lance 4 rendus :
- *   Rasterizer legacy, Rasterizer MTLX, Pathtracer legacy, Pathtracer MTLX
+ * Pour chaque .mtlx trouvé (récursivement) sous --showcase, lance deux rendus :
+ *   Rasterizer MTLX et Pathtracer MTLX
  * et écrit le PNG sous  <out>/<mode>/<nom-du-mtlx>.png
  *
  * Usage :
@@ -24,7 +24,7 @@
  *                      émissions/lumières intenses non écrêtées (ex: --firefly_clamp=20000)
  *   --port=5173        Port Vite (défaut: 5173)
  *   --start-server=auto|true|false  Démarrage serveur (défaut: auto = démarre si absent)
- *   --modes=a,b,...    Sous-ensemble de modes (folders) à rendre (défaut: les 4)
+ *   --modes=a,b,...    Sous-ensemble de modes (folders) à rendre (défaut: les deux)
  */
 
 import { spawn, spawnSync, execSync } from 'child_process';

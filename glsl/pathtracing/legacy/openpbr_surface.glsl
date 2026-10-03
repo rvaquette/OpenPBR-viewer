@@ -1,7 +1,7 @@
 
 
-// Legacy comparison-only shader module.
-// Production substitution path must use generated MaterialX shading entrypoints.
+// Handwritten OpenPBR surface shading implementation.
+// Production rendering uses generated MaterialX shading entrypoints.
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // OpenPBR BSDF

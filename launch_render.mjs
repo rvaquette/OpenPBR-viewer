@@ -23,15 +23,13 @@
  *   --mtlx=file.mtlx       Charge les paramètres matériau depuis un fichier MaterialX OpenPBR
  *   --contract_url=/mtlx/material-contract.json  Contrat de fonctions générées par matériau
  *   --strict_generated_contract=true|false       Active l'echec strict sans fallback legacy (defaut: true)
- *   --legacy_comparison=true|false               Active le mode manuel Pathtracer legacy (defaut: false)
  *   --denoise=true|false    Débruitage OIDN après capture (défaut: false)
  *   --oidn=path             Chemin vers oidnDenoise.exe (défaut: oidnDenoise dans PATH)
  *
  * Options rendu :
- *   --mode=Rasterizer legacy|Rasterizer MTLX|Pathtracer MTLX|Pathtracer legacy
- *                                (alias: --mode=mtlx pour la route MTLX pathtracer,
- *                                        --mode=raster-mtlx pour la route MTLX rasterizer,
- *                                        --mode=legacy pour le pathtracer manuel)
+ *   --mode=Rasterizer MTLX|Pathtracer MTLX
+ *                                (alias: --mode=mtlx pour le pathtracer MTLX,
+ *                                        --mode=raster-mtlx pour le rasterizer MTLX)
  *   --gpu=true|false              false = rendu logiciel SwiftShader (défaut: true)
  *   --scene=shader-ball|standard-shader-ball|glavenus|terrain|bearded-man
  *   --smooth_normals=true|false   Lissage des normales (défaut: true)
@@ -54,13 +52,13 @@
  *
  * Exemples :
  *   # Screenshot métal rouge en path-tracing (headless, GPU)
- *   node launch_render.mjs --headless --mode=Pathtracer --base_color=0.8,0.1,0.1 --base_metalness=1 --screenshot=metal.png --spp=64
+ *   node launch_render.mjs --headless --mode=mtlx --base_color=0.8,0.1,0.1 --base_metalness=1 --screenshot=metal.png --spp=64
  *
  *   # Verre en rasterizer sans GPU, démarrage serveur automatique
- *   node launch_render.mjs --headless --start-server --mode=Rasterizer --transmission_weight=1 --gpu=false --output=glass.png
+ *   node launch_render.mjs --headless --start-server --mode=raster-mtlx --transmission_weight=1 --gpu=false --output=glass.png
  *
  *   # Aperçu fenêtré (mode normal)
- *   node launch_render.mjs --mode=Pathtracer --base_metalness=1 --base_color=0.2,0.5,1
+ *   node launch_render.mjs --mode=mtlx --base_metalness=1 --base_color=0.2,0.5,1
  */
 
 import { chromium }    from 'playwright-core';
@@ -69,54 +67,6 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSyn
 import { basename, dirname, isAbsolute, join, resolve } from 'path';
 import { setTimeout as sleep } from 'timers/promises';
 import sharp from 'sharp';
-
-// ---------------------------------------------------------------------------
-// Parseur MaterialX (open_pbr_surface, bloc unique)
-// ---------------------------------------------------------------------------
-
-// Noms MaterialX qui diffèrent des noms params du viewer
-const MTLX_NAME_MAP = {
-    specular_roughness_anisotropy : 'specular_anisotropy',
-    coat_roughness_anisotropy     : 'coat_anisotropy',
-};
-
-function parseMtlx(filePath) {
-    const xml = readFileSync(filePath, 'utf8');
-
-    // Extraire le bloc <open_pbr_surface ...>...</open_pbr_surface>
-    // ou <open_pbr_surface ... /> (auto-fermant)
-    const blockRe = /<open_pbr_surface\b[^>]*>([\s\S]*?)<\/open_pbr_surface>|<open_pbr_surface\b([^>]*\/\s*)>/;
-    const blockMatch = xml.match(blockRe);
-    if (!blockMatch) throw new Error(`Aucun nœud <open_pbr_surface> trouvé dans ${filePath}`);
-
-    const innerXml = blockMatch[1] ?? blockMatch[0]; // contenu ou tag entier
-
-    // Extraire chaque <input name="..." type="..." value="..." />
-    const inputRe = /<input\b([^>]*)\/>/g;
-    const result = {};
-    let m;
-    while ((m = inputRe.exec(innerXml)) !== null) {
-        const attrs = m[1];
-        const name  = (attrs.match(/\bname="([^"]+)"/)  ?? [])[1];
-        const type  = (attrs.match(/\btype="([^"]+)"/)  ?? [])[1];
-        const value = (attrs.match(/\bvalue="([^"]+)"/) ?? [])[1];
-        if (!name || !type || value === undefined) continue;
-
-        const paramName = MTLX_NAME_MAP[name] ?? name;
-
-        if (type === 'color3' || type === 'vector3') {
-            // "0.912, 0.914, 0.920" → "0.912,0.914,0.920"
-            result[paramName] = value.replace(/\s*,\s*/g, ',').trim();
-        } else {
-            result[paramName] = value.trim();
-        }
-    }
-    // emission_weight defaults to 0 in OpenPBR, but a material that explicitly sets
-    // emission_luminance/color clearly intends to emit — default to 1 when absent.
-    if (result.emission_luminance !== undefined && result.emission_weight === undefined)
-        result.emission_weight = '1';
-    return result;
-}
 
 function killProcessTree(proc) {
     if (!proc) return;
@@ -227,10 +177,8 @@ const waitSamples   = parseInt(options['spp'] ?? options['wait-samples'] ?? '16'
 const MODE_ALIASES = {
     'pathtracer-mtlx':   'Pathtracer MTLX',
     'raster-mtlx':       'Rasterizer MTLX',
-    'rasterizer-legacy': 'Rasterizer legacy',
-    'pathtracer-legacy': 'Pathtracer legacy',
 };
-const rawMode       = options.mode ?? 'Rasterizer legacy';
+const rawMode       = options.mode ?? 'Rasterizer MTLX';
 const mode          = MODE_ALIASES[rawMode.toLowerCase()] ?? rawMode;
 const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').map(Number);
 
@@ -250,7 +198,6 @@ delete options.envmap; delete options.env_map_path; delete options.env_irradianc
 
 if (!options.renderer_mode) options.renderer_mode = mode;
 if (options.strict_generated_contract === undefined) options.strict_generated_contract = 'true';
-if (options.legacy_comparison === undefined) options.legacy_comparison = 'false';
 options.env_map_path = prepareEnvAsset(envMapInput, '_env');
 options.env_irradiance_path = prepareEnvAsset(envIrradianceInput, '_env/irradiance');
 options.env_map_provided = 'true';
@@ -259,7 +206,6 @@ if (options.scene) { options.scene_name ??= options.scene; delete options.scene;
 
 // Injection des paramètres MaterialX via WASM (génération GLSL côté Node.js)
 // Le .mtlx est copié dans public/ pour que Vite le serve ; le browser le fetchera via ?mtlx_url=.
-// En mode legacy, les params sont en plus extraits via parseMtlx() et injectés dans l'URL.
 let mtlxPublicUrl = null;
 if (mtlxPath) {
     if (!existsSync(mtlxPath)) throw new Error(`Fichier .mtlx introuvable : ${mtlxPath}`);
@@ -272,20 +218,6 @@ if (mtlxPath) {
     mtlxPublicUrl = copyMtlxWithRelativeFiles(mtlxPath, options.material_id);
     console.log(`MTLX      : ${mtlxPath} → servi via ${mtlxPublicUrl}`);
 
-    // En mode legacy, injecter aussi les params comme query string pour alimenter les uniforms.
-    if (options.renderer_mode === 'Pathtracer legacy') {
-        options.legacy_comparison = 'true';
-        try {
-            const mtlxParams = parseMtlx(mtlxPath);
-            // CLI args take priority over mtlx values
-            for (const [k, v] of Object.entries(mtlxParams)) {
-                if (!(k in options)) options[k] = v;
-            }
-            console.log(`MTLX legacy params : ${Object.keys(mtlxParams).length} paramètres`);
-        } catch (e) {
-            console.warn('[mtlx] parseMtlx failed:', e.message);
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -326,7 +258,7 @@ const BASE_URL = `http://localhost:${port}/OpenPBR-viewer/`;
 if (mtlxPublicUrl) options.mtlx_url = mtlxPublicUrl;
 // Le viewer désactive le path tracer GPU par défaut ; un rendu non-Rasterizer
 // (pathtracer) doit l'activer explicitement via le paramètre d'URL ?gpu=true.
-if (options.renderer_mode && options.renderer_mode !== 'Rasterizer legacy' && !('gpu' in options)) {
+if (options.renderer_mode && options.renderer_mode !== 'Rasterizer MTLX' && !('gpu' in options)) {
     options.gpu = 'true';
 }
 // Le viewer démarre en pause par défaut ; un rendu automatisé doit accumuler,
@@ -384,7 +316,7 @@ console.log(`Mode      : ${headless ? 'headless' : 'fenêtré'}`);
 console.log(`Renderer  : ${options.renderer_mode}`);
 console.log(`URL       : ${url}`);
 console.log(`Size      : ${renderW}x${renderH}`);
-const isPathtracing = options.renderer_mode === 'Pathtracer' || options.renderer_mode === 'Pathtracer MTLX' || options.renderer_mode === 'Rasterizer MTLX' || options.renderer_mode === 'Pathtracer legacy';
+const isPathtracing = options.renderer_mode === 'Pathtracer MTLX' || options.renderer_mode === 'Rasterizer MTLX';
 console.log(`Output    : ${screenshotPath}${isPathtracing ? ` (${waitSamples} spp)` : ''}`);
 console.log('');
 

@@ -26,4 +26,4 @@ Define how the viewer consumes generated MaterialX pathtracer host dispatch GLSL
 ## Failure Rules
 - If generated dispatch is missing, fail route assembly explicitly.
 - If generated dispatch references forbidden legacy files/functions, fail validation explicitly.
-- If shader compile fails, record the GLSL driver log and do not fallback to legacy mode.
+- If shader compile fails, record the GLSL driver log and fail without switching renderer modes.

@@ -35,11 +35,11 @@
 
 ### User Story 1 - Create an isolated MTLX pathtracer route (Priority: P1)
 
-As a shader developer, I need a new `glsl/pathtracing/mtlx/` pathtracer route that starts from the current legacy integrator structure but is isolated from legacy BXDF implementation files, so I can evolve the MaterialX-generated path without disturbing the manual legacy comparison path.
+As a shader developer, I need a new `glsl/pathtracing/mtlx/` pathtracer route that reuses shared integrator utilities but is isolated from handwritten BXDF implementation files, so I can evolve the MaterialX-generated path independently.
 
-**Why this priority**: This creates the working surface for the new generator output and prevents the previous chantier from continuing to mutate the production or legacy comparison path ambiguously.
+**Why this priority**: This creates the working surface for the new generator output and keeps the production shading path unambiguous.
 
-**Independent Test**: Verify that `glsl/pathtracing/mtlx/pathtracer.glsl` exists, began as a copy of `glsl/pathtracing/legacy/pathtracer.glsl`, and is assembled separately from legacy `_brdf.glsl` and `_btdf.glsl` files.
+**Independent Test**: Verify that `glsl/pathtracing/mtlx/pathtracer.glsl` exists and is assembled independently from handwritten BXDF source files.
 
 **Acceptance Scenarios**:
 
@@ -102,11 +102,11 @@ As a viewer maintainer, I need to load and compile the generated MTLX pathtracer
 - **FR-008**: The new C++ generator MUST emit one separate generated dispatch artifact per selected `.mtlx` material, each containing a pathtracer-compatible `evaluateBsdf` function whose body is derived from that material's generated MaterialX closure graph.
 - **FR-009**: The new C++ generator MUST emit the pathtracer-compatible `sampleBsdf` function into each per-material generated dispatch artifact, with its body derived from that material's generated MaterialX closure graph.
 - **FR-010**: Generated dispatch MUST support `open_pbr_surface`, `standard_surface`, `disney_principled`, `gltf_pbr`, and `usd_preview_surface` in the first delivery without hard-coding OpenPBR legacy lobe functions.
-- **FR-011**: Generated dispatch MUST consume MaterialX-generated EDF/BSDF/BRDF/BTDF/helper functions rather than `glsl/pathtracing/legacy/*_brdf.glsl` or `glsl/pathtracing/legacy/*_btdf.glsl`.
+- **FR-011**: Generated dispatch MUST consume MaterialX-generated EDF/BSDF/BRDF/BTDF/helper functions rather than handwritten BXDF functions.
 - **FR-012**: System MUST produce generated GLSL artifacts for the mixed validation corpus: the five carpaint files (`open_pbr_carpaint.mtlx`, `standard_surface_carpaint.mtlx`, `disney_principled_carpaint.mtlx`, `gltf_pbr_carpaint.mtlx`, `usd_preview_surface_carpaint.mtlx`) plus simple synthetic materials for each required model.
-- **FR-013**: Viewer integration MUST provide a way to assemble and compile the MTLX pathtracer route separately from both the current generated-WASM route and the legacy comparison route.
-- **FR-014**: Missing generated closures, unsupported material models, incompatible signatures, or incomplete evaluate/sample/pdf strategies MUST fail explicitly with diagnostics and MUST NOT fallback to legacy BXDF implementation files or generic approximations.
-- **FR-015**: Documentation MUST describe how to run the new generator, where generated GLSL artifacts are written, and how to validate that no legacy `_brdf`/`_btdf` dependency remains.
+- **FR-013**: Viewer integration MUST provide a way to assemble and compile the MTLX pathtracer route separately from the current generated-WASM route.
+- **FR-014**: Missing generated closures, unsupported material models, incompatible signatures, or incomplete evaluate/sample/pdf strategies MUST fail explicitly with diagnostics and MUST NOT fallback to alternate BXDF implementations or generic approximations.
+- **FR-015**: Documentation MUST describe how to run the new generator, where generated GLSL artifacts are written, and how to validate that no handwritten BXDF dependency remains.
 - **FR-016**: Per-material generated dispatch artifacts MUST use deterministic names and paths so the viewer can select exactly one generated dispatch for the active `.mtlx` material.
 - **FR-017**: Validation tooling MUST distinguish carpaint fixture failures from synthetic fixture failures in its report output.
 

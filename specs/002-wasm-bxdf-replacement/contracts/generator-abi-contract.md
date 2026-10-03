@@ -26,4 +26,4 @@ Define the ABI compatibility requirements between C++ PathTracerGlslShaderGenera
 
 ## Relationship to Runtime Rules
 - No production fallback to legacy BXDF modules when ABI is non-conformant.
-- Manual legacy comparison remains a validation-only workflow.
+- Generated MaterialX renders are the supported viewer validation workflow.

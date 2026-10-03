@@ -1,7 +1,7 @@
 
 
-// Legacy comparison-only pathtracer.
-// Keep disabled from production substitution flow by default.
+// Pathtracer using handwritten OpenPBR shading.
+// Production rendering uses the generated MaterialX route.
 
 
 /////////////////////////////////////////////////////////////////////////

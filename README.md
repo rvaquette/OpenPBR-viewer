@@ -61,10 +61,9 @@ Run an ABI quick check on generated GLSL output:
 
 ## Strict-failure and ABI troubleshooting
 
-- If generated shading contract validation fails, the runtime enforces explicit failure and does not fallback to legacy BXDF.
+- If generated shading contract validation fails, the runtime stops explicitly instead of selecting another shading implementation.
 - If the rendered output becomes magenta in pathtracer mode, inspect browser logs for substitution failure details.
 - Verify required symbols using the ABI checker and `public/mtlx/generator-abi-expectations.json`.
-- For manual visual comparison, enable legacy mode explicitly with `?legacy_comparison=true`.
 
 ## MTLX pathtracer host generator (feature 003)
 
@@ -89,12 +88,8 @@ Render a material through the MTLX route (the `mtlx` alias selects `Pathtracer M
     node launch_render.mjs --headless --start-server --mode=mtlx --gpu=false --mtlx="<path-to>.mtlx" --spp=4 --size=128x128 --output=out.png
 
 The route fails explicitly if the generated dispatch is missing or references a
-forbidden dependency — there is no legacy fallback and no generic approximation path.
-
-> **Legacy reference only:** `glsl/pathtracing/legacy/` (the hand-written OpenPBR BXDF
-> lobe files `*_brdf.glsl` / `*_btdf.glsl`) is retained solely as manual reference and
-> for `?legacy_comparison=true`. It is **not** part of the MTLX route and must never be
-> referenced by generated dispatch artifacts or the `Pathtracer MTLX` assembly.
+forbidden dependency; it never switches to another shading implementation or a
+generic approximation path.
 
 <img src="https://github.com/portsmouth/OpenPBR-viewer/blob/main/images/metal2.png" width="49%"> <img src="https://github.com/portsmouth/OpenPBR-viewer/blob/main/images/absorption.png" width="49%">
 
