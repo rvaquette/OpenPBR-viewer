@@ -284,11 +284,15 @@ var materialDefines = {
 // Generated GLSL from MaterialX WASM (set before create_materials() is called).
 var mtlxGeneratedGlsl = '';
 var mtlxRouteDispatchGlsl = '';
+var mtlxRouteNeutralRasterGlsl = '';
+var mtlxRouteNeutralPathGlsl = '';
 var mtlxRouteTextureBindings = [];
 var mtlxRouteTextureAtlas = { textures: [], uniforms: {}, bindings: [], rects: [], width: 0, height: 0 };
 var retiredMtlxRouteTextureAtlases = [];
 var mtlxRouteLights = [];
 var mtlxRouteParamDescriptors = [];
+var mtlxDefaultParameterMaterialKey = '';
+var mtlxDefaultParameterValues = new Map();
 var activeMtlxMaterialText = null;
 var mtlxParameterUpdateQueue = Promise.resolve();
 var mtlxRouteLightsTexture = null;
@@ -605,6 +609,14 @@ function normalizeVec3(values, fallback)
     return values.map(v => v / length);
 }
 
+function alignMtlxLatLongOrientation(glsl)
+{
+    return String(glsl).replace(
+        /float latitude = -mx_asin\(dir\.y\) \* M_PI_INV \+ 0\.5;/g,
+        'float latitude = mx_asin(dir.y) * M_PI_INV + 0.5;'
+    );
+}
+
 function extractMtlxLights(mtlxText)
 {
     const lights = [];
@@ -708,9 +720,9 @@ const MTLX_LIGHT_TEXELS_PER_LIGHT = 6;
 function createMtlxLightsTexture()
 {
     const lights = mtlxRouteLights;
-    const parameters = mtlxRouteParamDescriptors.filter(parameter => !parameter.xmlInput);
+    const parameters = mtlxRouteParamDescriptors;
     const parameterRowOffset = Math.max(1, lights.length);
-    const height = parameterRowOffset + parameters.length;
+    const height = parameterRowOffset + parameters.length * 2;
     const data = new Float32Array(MTLX_LIGHT_TEXELS_PER_LIGHT * height * 4);
     lights.forEach((l, i) => {
         const base = i * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
@@ -723,11 +735,13 @@ function createMtlxLightsTexture()
         data[base + 20] = v[0]; data[base + 21] = v[1]; data[base + 22] = v[2]; data[base + 23] = 0;
     });
     parameters.forEach((parameter, i) => {
-        const base = (parameterRowOffset + i) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
-        const values = Array.isArray(parameter.value) ? parameter.value : [parameter.value];
-        values.forEach((value, component) => {
-            if (component < 4) data[base + component] = Number(value);
-        });
+        for (const [variant, value] of [[0, parameter.value], [1, parameter.defaultValue]]) {
+            const base = (parameterRowOffset + variant * parameters.length + i) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
+            const values = Array.isArray(value) ? value : [value];
+            values.forEach((componentValue, component) => {
+                if (component < 4) data[base + component] = Number(componentValue);
+            });
+        }
     });
     mtlxRouteLightsTexture = new DataTexture(data, MTLX_LIGHT_TEXELS_PER_LIGHT, height, RGBAFormat, FloatType);
     mtlxRouteLightsTexture.minFilter = NearestFilter;
@@ -741,17 +755,14 @@ function createMtlxLightUniforms()
 {
     return {
         mtlxLightCount: { value: mtlxRouteLights.length },
+        mtlxMaterialParamCount: { value: mtlxRouteParamDescriptors.length },
         mtlxLightsTex:  { value: createMtlxLightsTexture() },
     };
 }
 
 function createMtlxParameterUniforms()
 {
-    return Object.fromEntries(mtlxRouteParamDescriptors
-        .filter(parameter => parameter.uniformName)
-        .map(parameter => [parameter.uniformName, {
-            value: Array.isArray(parameter.value) ? [...parameter.value] : parameter.value
-        }]));
+    return {};
 }
 
 function escapeRegExp(text)
@@ -782,6 +793,20 @@ function parseMtlxParameterDefault(type, expression)
     const components = vectorMatch[2].split(',').map(component => Number(component.trim()));
     if (components.length === 1) return Array(size).fill(components[0]);
     return components.length === size && components.every(Number.isFinite) ? components : null;
+}
+
+function getMtlxDefaultParameterValue(materialKey, name, value)
+{
+    const key = materialKey || 'default-material';
+    if (mtlxDefaultParameterMaterialKey !== key) {
+        mtlxDefaultParameterMaterialKey = key;
+        mtlxDefaultParameterValues = new Map();
+    }
+    if (!mtlxDefaultParameterValues.has(name)) {
+        mtlxDefaultParameterValues.set(name, Array.isArray(value) ? [...value] : value);
+    }
+    const defaultValue = mtlxDefaultParameterValues.get(name);
+    return Array.isArray(defaultValue) ? [...defaultValue] : defaultValue;
 }
 
 function extractMtlxParameterMetadata(mtlxText)
@@ -819,7 +844,7 @@ function extractMtlxParameterMetadata(mtlxText)
     return metadata;
 }
 
-function bindMtlxParametersToTexture(glsl, mtlxText)
+function bindMtlxParametersToTexture(glsl, mtlxText, materialKey)
 {
     const metadata = extractMtlxParameterMetadata(mtlxText);
     if (metadata.hasNodegraph) {
@@ -833,14 +858,20 @@ function bindMtlxParametersToTexture(glsl, mtlxText)
             const expression = type.startsWith('vec') ? `${type}(${info.value || '0'})`
                 : info.value ?? (type === 'bool' ? 'false' : '0');
             const value = type === 'string' ? info.value || '' : parseMtlxParameterDefault(type, expression);
-            if (value === null) continue;
+            if (value === null || type === 'string') continue;
+            const index = parameters.length;
+            const uniformName = uniforms.get(name) || null;
+            const defaultUniformName = uniformName ? `${uniformName}_default` : null;
+            const defaultValue = getMtlxDefaultParameterValue(materialKey, name, value);
             parameters.push({
-                index: parameters.length,
+                index,
                 name,
                 type,
                 value,
+                defaultValue,
                 xmlInput: info.input,
-                uniformName: uniforms.get(name) || null,
+                uniformName,
+                tableBacked: true,
                 uiType: info.type,
                 uiName: info.name || formatMtlxParameterLabel(info.input.getAttribute('name')),
                 uiFolder: info.folder || info.owner,
@@ -849,7 +880,25 @@ function bindMtlxParametersToTexture(glsl, mtlxText)
                 step: Number.isFinite(info.step) ? info.step : null,
             });
         }
-        return { glsl, parameters };
+        const replacements = [];
+        let transformedGlsl = String(glsl);
+        for (const parameter of parameters) {
+            if (!parameter.uniformName) continue;
+            const escaped = parameter.uniformName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            transformedGlsl = transformedGlsl.replace(new RegExp(
+                `^[ \\t]*uniform[ \\t]+\\w+[ \\t]+${escaped}[ \\t]*;[ \\t]*\\r?\\n`, 'gm'), '');
+            const defaultType = parameter.type;
+            const texel = `mtlxGetMaterialParam(${parameter.index})`;
+            const accessor = defaultType === 'bool' ? `(${texel}.x > 0.5)`
+                : defaultType === 'int' ? `int(${texel}.x)`
+                : defaultType === 'vec2' ? `${texel}.xy`
+                : defaultType === 'vec3' ? `${texel}.xyz`
+                : defaultType === 'vec4' ? texel
+                : `${texel}.x`;
+            const macro = new RegExp(`(^[ \\t]*#define[ \\t]+[A-Za-z_]\\w*[ \\t]+)${escaped}[ \\t]*$`, 'gm');
+            transformedGlsl = transformedGlsl.replace(macro, (_match, prefix) => `${prefix}${accessor}`);
+        }
+        return { glsl: transformedGlsl, parameters };
     }
     if (/\bIMPL_gltf_pbr_surfaceshader\b/.test(String(glsl || ''))) {
         return { glsl, parameters: [] };
@@ -887,6 +936,8 @@ function bindMtlxParametersToTexture(glsl, mtlxText)
             name,
             type,
             value: Array.isArray(value) ? [...value] : value,
+            defaultValue: getMtlxDefaultParameterValue(materialKey, name, value),
+            xmlInput: info.input,
             uiType: info.type || '',
             uiName: info.name || formatMtlxParameterLabel(name),
             uiFolder: info.folder || 'Surface',
@@ -913,42 +964,14 @@ function bindMtlxParametersToTexture(glsl, mtlxText)
 
 function updateMtlxParameterTexture(parameter)
 {
-    if (parameter.uniformName) {
-        const uniform = pathtracedMaterial?.uniforms[parameter.uniformName];
-        if (uniform) uniform.value = Array.isArray(parameter.value) ? [...parameter.value] : parameter.value;
-        parameter.xmlInput.setAttribute('value', Array.isArray(parameter.value)
-            ? parameter.value.join(', ') : String(parameter.value));
-        activeMtlxMaterialText = new XMLSerializer().serializeToString(parameter.xmlInput.ownerDocument);
-        resetSamples();
-        return;
-    }
     if (parameter.xmlInput) {
         parameter.xmlInput.setAttribute('value', Array.isArray(parameter.value)
             ? parameter.value.join(', ') : String(parameter.value));
-        const mtlxText = new XMLSerializer().serializeToString(parameter.xmlInput.ownerDocument);
-        const previousText = activeMtlxMaterialText;
-        mtlxParameterUpdateQueue = mtlxParameterUpdateQueue.then(async () => {
-            if (activeMtlxMaterialText !== previousText) return;
-            const previousSource = activeMtlxArchiveSource;
-            let archiveSource = null;
-            try {
-                if (activeMtlxArchiveSelection) {
-                    const { archive, material } = activeMtlxArchiveSelection;
-                    archiveSource = await archive.selectMaterial(material.path, mtlxText);
-                }
-                await configureSingleMtlxMaterial(params.mtlx_material || '', 'edited-material', mtlxText, archiveSource);
-                activeMtlxArchiveSource = archiveSource;
-                retireMtlxArchiveSource(previousSource);
-                load_scene(params.scene_name);
-            } catch (error) {
-                if (archiveSource) retireMtlxArchiveSource(archiveSource);
-                showMtlxLibraryError(error);
-            }
-        });
-        return;
+        activeMtlxMaterialText = new XMLSerializer().serializeToString(parameter.xmlInput.ownerDocument);
     }
     const texture = mtlxRouteLightsTexture;
     if (!texture) return;
+    const parameters = mtlxRouteParamDescriptors;
     const row = Math.max(1, mtlxRouteLights.length) + parameter.index;
     const offset = row * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
     const data = texture.image.data;
@@ -1335,6 +1358,10 @@ vec3 mtlx_openpbr_raster_color(in vec3 pW, in Basis basis, in vec3 winputL, in v
 ${emitRasterGeneratedInputAssignments('')}
     return mtlxRasterMain().rgb;
 }
+vec3 mtlx_neutral_raster_color(in vec3 pW, in Basis basis) {
+${emitRasterGeneratedInputAssignments('')}
+    return mtlxNeutralRasterMain().rgb;
+}
 ${emitMtlxMaterialValueFunction('bool', 'mtlx_openpbr_is_opaque', 'opaque', true)}
 ${emitMtlxMaterialValueFunction('bool', 'mtlx_openpbr_is_thinwalled', 'thinWalled', false)}
 ` : `
@@ -1391,9 +1418,11 @@ ${emitMtlxMaterialValueFunction('float', 'mtlx_openpbr_transmission_weight', 'tr
         : glsl_mtlx_route_pathtracer;
     const hasGeneratedHooks = !is_mtlx_bvh_raster_route() &&
         /\bvoid\s+mtlx_openpbr_prepare\s*\(/.test(dispatch);
+    const neutralRasterDispatch = is_mtlx_bvh_raster_route() ? `\n${mtlxRouteNeutralRasterGlsl}\n` : '';
+    const neutralPathDispatch = is_mtlx_route() ? `\n${mtlxRouteNeutralPathGlsl}\n` : '';
     if (typeof window !== 'undefined') window.__openpbrMtlxDispatch = mtlxRouteDispatchGlsl;
     return (hasGeneratedHooks ? '#define MTLX_HOST_EXTERNAL_COMMON\n' : '') +
-        dispatchBody + (hasGeneratedHooks ? '' : bridge) + routeBody;
+        dispatchBody + neutralRasterDispatch + neutralPathDispatch + (hasGeneratedHooks ? '' : bridge) + routeBody;
 }
 
 // Minimal default OpenPBR material used when no .mtlx file is supplied.
@@ -1444,7 +1473,7 @@ async function generateMtlxGlsl(mtlxText) {
     const elem = mx.findRenderableElement(doc);
     if (!elem) throw new Error('No renderable element found in .mtlx');
     const shader = gen.generate(elem.getNamePath(), elem, ctx);
-    let glsl = shader.getSourceCode('pixel');
+    let glsl = alignMtlxLatLongOrientation(shader.getSourceCode('pixel'));
     // Strip #version / precision directives (host shader provides its own).
     glsl = glsl.replace(/^[ \t]*#version[^\n]*\n/gm, '').replace(/^[ \t]*precision[^\n]*\n/gm, '');
     // Remap MaterialX env-map uniforms to the viewer's symbols.
@@ -1511,7 +1540,7 @@ async function generateMtlxRasterDispatch(mtlxText) {
     const elem = mx.findRenderableElement(doc);
     if (!elem) throw new Error('[mtlx-raster] No renderable element found in .mtlx');
     const shader = gen.generate(elem.getNamePath(), elem, ctx);
-    let glsl = shader.getSourceCode('pixel');
+    let glsl = alignMtlxLatLongOrientation(shader.getSourceCode('pixel'));
 
     glsl = glsl
         .replace(/^[ \t]*#version[^\n]*\n/gm, '')
@@ -1586,6 +1615,141 @@ async function generateMtlxRasterDispatch(mtlxText) {
     try { doc.delete?.();    } catch {}
     return { glsl, mtlxParams };
 }
+
+const MTLX_DEFAULT_FILE_BY_MODEL = {
+    open_pbr_surface: 'open_pbr_default.mtlx',
+    standard_surface: 'standard_surface_default.mtlx',
+    disney_principled: 'disney_principled_default.mtlx',
+    gltf_pbr: 'gltf_pbr_default.mtlx',
+    UsdPreviewSurface: 'usd_preview_surface_default.mtlx',
+};
+
+function findMtlxSurfaceModel(mtlxText)
+{
+    const document = new DOMParser().parseFromString(mtlxText, 'application/xml');
+    if (document.querySelector('parsererror')) throw new Error('[mtlx-neutral] invalid MaterialX XML');
+    const material = Array.from(document.querySelectorAll('surfacematerial, material')).find(node =>
+        getMtlxInput(node, 'surfaceshader')
+    );
+    const surfaceInput = getMtlxInput(material, 'surfaceshader');
+    const surfaceNode = surfaceInput?.getAttribute('nodename')
+        ? findMtlxNodeByName(document, surfaceInput.getAttribute('nodename'))
+        : Array.from(document.getElementsByTagName('*')).find(node =>
+            Object.hasOwn(MTLX_DEFAULT_FILE_BY_MODEL, node.tagName)
+        );
+    return surfaceNode?.tagName || '';
+}
+
+async function generateMtlxNeutralRasterDispatch(activeMtlxText, activeDispatch)
+{
+    const model = findMtlxSurfaceModel(activeMtlxText);
+    const file = MTLX_DEFAULT_FILE_BY_MODEL[model];
+    if (!file) {
+        return 'vec4 mtlxNeutralRasterMain() { return vec4(neutral_color, 1.0); }';
+    }
+
+    const url = getPublicAssetUrl(`mtlx-defaults/${file}`);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`[mtlx-neutral] default material fetch failed (${response.status}): ${url}`);
+    const defaultMtlxText = await response.text();
+    if (findMtlxSurfaceModel(defaultMtlxText) !== model)
+        throw new Error(`[mtlx-neutral] ${file} does not define the expected ${model} surface`);
+    if (extractMtlxTextureBindings(defaultMtlxText, url).length > 0)
+        throw new Error(`[mtlx-neutral] ${file} unexpectedly references image textures`);
+
+    const generated = await generateMtlxRasterDispatch(defaultMtlxText);
+    const parameterBlock = generated.glsl.match(/\/\/\s*__MTLX_PARAMS_BEGIN__([\s\S]*?)\/\/\s*__MTLX_PARAMS_END__/);
+    const entryPoint = extractFunctionBlocks(generated.glsl).find(block => block.name === 'mtlxRasterMain');
+    if (!parameterBlock || !entryPoint)
+        throw new Error(`[mtlx-neutral] unable to extract the default ${model} raster entry point`);
+
+    const parameterDeclarations = [];
+    const replacements = [['mtlxRasterMain', 'mtlxNeutralRasterMain']];
+    const declarationPattern = /^\s*(float|int|bool|vec[234])\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+);\s*$/;
+    for (const line of parameterBlock[1].split('\n')) {
+        const declaration = line.match(declarationPattern);
+        if (!declaration) continue;
+        const [, type, name, value] = declaration;
+        const neutralName = `mtlxNeutralDefault_${name}`;
+        parameterDeclarations.push(`${type} ${neutralName} = ${value};`);
+        replacements.push([name, neutralName]);
+    }
+
+    const activeFunctions = new Set(extractFunctionBlocks(activeDispatch).map(block => block.name));
+    const defaultFunctions = extractFunctionBlocks(generated.glsl);
+    const supportFunctions = [];
+    const includedFunctions = new Set(activeFunctions);
+    const pendingFunctions = [...entryPoint.text.matchAll(/\b(NG_[A-Za-z0-9_]+)\s*\(/g)].map(match => match[1]);
+    while (pendingFunctions.length > 0) {
+        const name = pendingFunctions.pop();
+        if (includedFunctions.has(name)) continue;
+        const block = defaultFunctions.find(candidate => candidate.name === name);
+        if (!block) throw new Error(`[mtlx-neutral] generated default function is missing: ${name}`);
+        includedFunctions.add(name);
+        supportFunctions.push(block.text);
+        for (const match of block.text.matchAll(/\b(NG_[A-Za-z0-9_]+)\s*\(/g))
+            pendingFunctions.push(match[1]);
+    }
+
+    const neutralEntry = replaceIdentifiers(entryPoint.text, replacements);
+    return [...parameterDeclarations, ...supportFunctions, neutralEntry].join('\n');
+}
+
+async function generateMtlxNeutralPathDispatch(activeMtlxText, activeDispatch)
+{
+    const model = findMtlxSurfaceModel(activeMtlxText);
+    const file = MTLX_DEFAULT_FILE_BY_MODEL[model];
+    if (!file) return '';
+
+    const url = getPublicAssetUrl(`mtlx-defaults/${file}`);
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`[mtlx-neutral] default material fetch failed (${response.status}): ${url}`);
+    const defaultMtlxText = await response.text();
+    if (findMtlxSurfaceModel(defaultMtlxText) !== model)
+        throw new Error(`[mtlx-neutral] ${file} does not define the expected ${model} surface`);
+    if (extractMtlxTextureBindings(defaultMtlxText, url).length > 0)
+        throw new Error(`[mtlx-neutral] ${file} unexpectedly references image textures`);
+
+    const generated = await generateMtlxRouteDispatch(defaultMtlxText);
+    const parameterBlock = generated.glsl.match(/\/\/\s*__MTLX_PARAMS_BEGIN__([\s\S]*?)\/\/\s*__MTLX_PARAMS_END__/);
+    if (!parameterBlock) throw new Error(`[mtlx-neutral] ${file} has no parameter block`);
+
+    const replacements = new Map([
+        ['mtlxHostEvalSurface', 'mtlxNeutralHostEvalSurface'],
+        ['mtlx_openpbr_bsdf_evaluate', 'mtlxNeutralBsdfEvaluate'],
+        ['mtlx_openpbr_bsdf_sample', 'mtlxNeutralBsdfSample'],
+    ]);
+    const parameterDeclarations = [];
+    const declarationPattern = /^\s*(float|int|bool|vec[234])\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+);\s*$/;
+    for (const line of parameterBlock[1].split('\n')) {
+        const declaration = line.match(declarationPattern);
+        if (!declaration) continue;
+        const [, type, name, value] = declaration;
+        const neutralName = `mtlxNeutralDefault_${name}`;
+        parameterDeclarations.push(`${type} ${neutralName} = ${value};`);
+        replacements.set(name, neutralName);
+    }
+
+    const activeFunctions = extractFunctionBlocks(activeDispatch);
+    const defaultFunctions = extractFunctionBlocks(generated.glsl);
+    const selectedFunctions = [];
+    for (const block of defaultFunctions) {
+        if (block.name === 'evaluateBsdf' || block.name === 'sampleBsdf') continue;
+        const sameSignature = activeFunctions.find(candidate =>
+            candidate.name === block.name && candidate.signature === block.signature
+        );
+        if (!replacements.has(block.name) && sameSignature && sameSignature.text === block.text) continue;
+        if (sameSignature && !replacements.has(block.name))
+            replacements.set(block.name, `mtlxNeutralDefault_${block.name}`);
+        selectedFunctions.push(block);
+    }
+
+    const identifierReplacements = [...replacements];
+    const defaultCode = selectedFunctions.map(block => replaceIdentifiers(block.text, identifierReplacements));
+    if (!replacements.has('mtlx_openpbr_bsdf_evaluate') || !replacements.has('mtlx_openpbr_bsdf_sample'))
+        throw new Error(`[mtlx-neutral] ${model} default dispatch has no BSDF evaluate/sample hooks`);
+    return [...parameterDeclarations, ...defaultCode].join('\n');
+}
 // MtlxPathTracerHostShaderGenerator (feature 003). Unlike generateMtlxGlsl (which
 // uses the forbidden PathTracerGlslShaderGenerator for the substitution path),
 // this emits a model-agnostic evaluateBsdf/sampleBsdf with all params folded as
@@ -1605,7 +1769,7 @@ async function generateMtlxRouteDispatch(mtlxText) {
     const elem = mx.findRenderableElement(doc);
     if (!elem) throw new Error('[mtlx-route] No renderable element found in .mtlx');
     const shader = gen.generate(elem.getNamePath(), elem, ctx);
-    let glsl = shader.getSourceCode('pixel');
+    let glsl = alignMtlxLatLongOrientation(shader.getSourceCode('pixel'));
 
     // Strip #version / precision (route provides its own) and the MaterialX
     // `#define material surfaceshader` alias, which would clobber the integrator's
@@ -2293,9 +2457,16 @@ async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText =
     mtlxRouteLights = extractMtlxLights(mtlxText);
     mtlxRouteMaterialSummary = summary;
     const textureShader = adaptMtlxTextureShader(result.glsl, mtlxRouteTextureAtlas);
-    const parameterBinding = bindMtlxParametersToTexture(textureShader, mtlxText);
+    const parameterBinding = bindMtlxParametersToTexture(textureShader, mtlxText,
+        mtlxUrl || archiveSource?.materialId || materialId);
     mtlxRouteParamDescriptors = parameterBinding.parameters;
     mtlxRouteDispatchGlsl = parameterBinding.glsl;
+    mtlxRouteNeutralRasterGlsl = is_mtlx_bvh_raster_route()
+        ? await generateMtlxNeutralRasterDispatch(mtlxText, mtlxRouteDispatchGlsl)
+        : '';
+    mtlxRouteNeutralPathGlsl = is_mtlx_route()
+        ? await generateMtlxNeutralPathDispatch(mtlxText, mtlxRouteDispatchGlsl)
+        : '';
     activeMtlxMaterialText = mtlxText;
 
     materialDefines.MAX_MTLX_LIGHTS = Math.max(1, mtlxRouteLights.length);
@@ -2587,9 +2758,16 @@ var scene_names = {
                 ? await generateMtlxRasterDispatch(mtlxText)
                 : await generateMtlxRouteDispatch(mtlxText);
             const textureShader = adaptMtlxTextureShader(result.glsl, mtlxRouteTextureAtlas);
-            const parameterBinding = bindMtlxParametersToTexture(textureShader, mtlxText);
+            const parameterBinding = bindMtlxParametersToTexture(textureShader, mtlxText,
+                params.mtlx_material || 'default-material');
             mtlxRouteParamDescriptors = parameterBinding.parameters;
             mtlxRouteDispatchGlsl = parameterBinding.glsl;
+            mtlxRouteNeutralRasterGlsl = is_mtlx_bvh_raster_route()
+                ? await generateMtlxNeutralRasterDispatch(mtlxText, mtlxRouteDispatchGlsl)
+                : '';
+            mtlxRouteNeutralPathGlsl = is_mtlx_route()
+                ? await generateMtlxNeutralPathDispatch(mtlxText, mtlxRouteDispatchGlsl)
+                : '';
             activeMtlxMaterialText = mtlxText;
             mtlxRouteMaterialSummary = summarizeMtlxRouteMaterialParams(result.mtlxParams);
             mtlxRouteLights = extractMtlxLights(mtlxText);

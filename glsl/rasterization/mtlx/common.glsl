@@ -63,6 +63,7 @@ uniform vec3 sunDir;
 uniform bool mtlxDisableSun;
 
 uniform int mtlxLightCount;
+uniform int mtlxMaterialParamCount;
 uniform int mtlxLightType[MAX_MTLX_LIGHTS];
 uniform vec3 mtlxLightPosition[MAX_MTLX_LIGHTS];
 uniform vec3 mtlxLightDirection[MAX_MTLX_LIGHTS];
@@ -72,10 +73,12 @@ uniform float mtlxLightDecayRate[MAX_MTLX_LIGHTS];
 uniform float mtlxLightInnerCone[MAX_MTLX_LIGHTS];
 uniform float mtlxLightOuterCone[MAX_MTLX_LIGHTS];
 uniform sampler2D mtlxLightsTex;
+int mtlxMaterialVariant = 0;
 
 vec4 mtlxGetMaterialParam(int index)
 {
-    return texelFetch(mtlxLightsTex, ivec2(0, max(1, mtlxLightCount) + index), 0);
+    int row = max(1, mtlxLightCount) + mtlxMaterialVariant * mtlxMaterialParamCount + index;
+    return texelFetch(mtlxLightsTex, ivec2(0, row), 0);
 }
 
 //////////////////////////////////////////////////////

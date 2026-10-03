@@ -77,11 +77,14 @@ uniform bool has_env_cdf;
 // alignment): (6 x N) RGBA float texture, one row per light, read via
 // GetMtlxLight(i) in pathtracer.glsl. No shader recompile on light-count change.
 uniform int mtlxLightCount;
+uniform int mtlxMaterialParamCount;
 uniform sampler2D mtlxLightsTex;
+int mtlxMaterialVariant = 0;
 
 vec4 mtlxGetMaterialParam(int index)
 {
-    return texelFetch(mtlxLightsTex, ivec2(0, max(1, mtlxLightCount) + index), 0);
+    int row = max(1, mtlxLightCount) + mtlxMaterialVariant * mtlxMaterialParamCount + index;
+    return texelFetch(mtlxLightsTex, ivec2(0, row), 0);
 }
 
 //////////////////////////////////////////////////////

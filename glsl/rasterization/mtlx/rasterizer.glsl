@@ -50,20 +50,21 @@ void main()
     }
 
     uint rndSeed = 0u;
-    if (material == MATERIAL_OPENPBR)
-        mtlx_openpbr_prepare(pW_hit, basis, winputL, rndSeed);
-
     vec3 viewReflectW = reflect(dW, basis.nW);
     vec3 viewReflectL = worldToLocal(viewReflectW, basis);
     if (viewReflectL.z <= 0.0) viewReflectL = vec3(0.0, 0.0, 1.0);
 
     vec3 L;
     if (material == MATERIAL_OPENPBR)
+    {
+        mtlxMaterialVariant = 0;
+        mtlx_openpbr_prepare(pW_hit, basis, winputL, rndSeed);
         L = mtlx_openpbr_raster_color(pW_hit, basis, winputL, viewReflectL);
+    }
+    else if (material == MATERIAL_PROPS)
+        L = mtlx_neutral_raster_color(pW_hit, basis);
     else if (material == MATERIAL_GROUND)
         L = ground_albedo(pW_hit);
-    else
-        L = neutral_color;
 
     gl_FragColor.rgb = clamp(L, vec3(0.0), vec3(firefly_clamp));
     gl_FragColor.a = 1.0;

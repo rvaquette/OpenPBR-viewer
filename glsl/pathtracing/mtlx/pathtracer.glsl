@@ -109,18 +109,16 @@ vec3 neutral_brdf_evaluate(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 
                         inout float pdf_woutputL)
 {
     if (winputL.z < DENOM_TOLERANCE || woutputL.z < DENOM_TOLERANCE) return vec3(0.0);
-    pdf_woutputL = pdfHemisphereCosineWeighted(woutputL);
     if (wireframe && minComponent(basis.baryCoord) < 0.003) return vec3(0.0);
-    return neutral_color / PI;
+    return mtlxNeutralBsdfEvaluate(pW, basis, winputL, woutputL, pdf_woutputL);
 }
 
 vec3 neutral_brdf_sample(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
-                         out vec3 woutputL, out float pdf_woutputL)
+                         out vec3 woutputL, out float pdf_woutputL, out Volume internal_medium)
 {
     if (winputL.z < DENOM_TOLERANCE) return vec3(0.0);
-    woutputL = sampleHemisphereCosineWeighted(rndSeed, pdf_woutputL);
     if (wireframe && minComponent(basis.baryCoord) < 0.003) return vec3(0.0);
-    return neutral_color / PI;
+    return mtlxNeutralBsdfSample(pW, basis, winputL, rndSeed, woutputL, pdf_woutputL, internal_medium);
 }
 
 ////////////////////////////////////////////////
@@ -168,7 +166,7 @@ vec3 sampleBsdf(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed,
 {
     if      (material == MATERIAL_OPENPBR) return mtlx_openpbr_bsdf_sample(pW, basis, winputL, rndSeed, woutputL, pdf_woutputL, internal_medium);
     else if (material == MATERIAL_GROUND)  return ground_brdf_sample(pW, basis, winputL, rndSeed, woutputL, pdf_woutputL);
-    else                                   return neutral_brdf_sample(pW, basis, winputL, rndSeed, woutputL, pdf_woutputL);
+    else                                   return neutral_brdf_sample(pW, basis, winputL, rndSeed, woutputL, pdf_woutputL, internal_medium);
 }
 
 
