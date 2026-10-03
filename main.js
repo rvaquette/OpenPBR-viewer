@@ -1914,7 +1914,7 @@ function ensureMtlxPicker()
             background: #182022;
             border-bottom: 1px solid #334044;
         }
-        .mtlx-picker__title { flex: 1; font-weight: 700; }
+        .mtlx-picker__title { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 700; }
         .mtlx-picker__close,
         .mtlx-picker__back {
             min-width: 42px;
@@ -1926,7 +1926,7 @@ function ensureMtlxPicker()
             font: inherit;
             cursor: pointer;
         }
-        .mtlx-picker__back { display: none; }
+        .mtlx-picker__back[hidden] { display: none; }
         .mtlx-picker__archive {
             display: grid;
             grid-template-columns: minmax(0, 1fr) auto;
@@ -2011,6 +2011,7 @@ function ensureMtlxPicker()
             font: inherit;
             cursor: pointer;
         }
+        .mtlx-picker__item { overflow-wrap: anywhere; }
         .mtlx-picker__item:hover,
         .mtlx-picker__item.is-selected { background: #29434a; border-color: #6caab5; }
         .mtlx-picker__empty { padding: 10px 2px; color: #87979a; }
@@ -2030,7 +2031,7 @@ function ensureMtlxPicker()
     picker.setAttribute('aria-label', 'MaterialX library');
     picker.innerHTML = `
         <header class="mtlx-picker__header">
-            <button class="mtlx-picker__back" type="button" aria-label="Back">&lt;</button>
+            <button class="mtlx-picker__back" type="button" aria-label="Parent directory" title="Parent directory" hidden>&lt;</button>
             <div class="mtlx-picker__title">MaterialX library</div>
             <button class="mtlx-picker__close" type="button" aria-label="Close">X</button>
         </header>
@@ -2061,6 +2062,9 @@ function ensureMtlxPicker()
 
     const elements = {
         picker,
+        directoryPath: '',
+        title: picker.querySelector('.mtlx-picker__title'),
+        back: picker.querySelector('.mtlx-picker__back'),
         directorySearch: picker.querySelector('.mtlx-picker__directory-search'),
         directoryList: picker.querySelector('.mtlx-picker__directory-list'),
         materialSearch: picker.querySelector('.mtlx-picker__material-search'),
@@ -2074,7 +2078,11 @@ function ensureMtlxPicker()
         archiveList: picker.querySelector('.mtlx-picker__archive-list'),
     };
     picker.querySelector('.mtlx-picker__close').addEventListener('click', () => picker.classList.remove('is-open'));
-    picker.querySelector('.mtlx-picker__back').addEventListener('click', () => picker.classList.remove('is-materials'));
+    elements.back.addEventListener('click', () => {
+        const parentPath = elements.directoryPath.split('/').slice(0, -1).join('/');
+        navigateMtlxPickerDirectory(elements, parentPath);
+        elements.directorySearch.focus();
+    });
     elements.directorySearch.addEventListener('input', () => renderMtlxPickerDirectories(elements));
     elements.materialSearch.addEventListener('input', () => renderMtlxPickerMaterials(elements));
     elements.archiveDownload.addEventListener('click', () => openAmbientCgDownload(elements));
@@ -2187,13 +2195,35 @@ async function applyMtlxArchiveMaterial(archive, material, elements)
     }
 }
 
+function navigateMtlxPickerDirectory(elements, directoryPath)
+{
+    elements.directoryPath = directoryPath;
+    params.mtlx_directory = directoryPath;
+    elements.title.textContent = directoryPath ? `MaterialX library / ${directoryPath}` : 'MaterialX library';
+    elements.back.hidden = !directoryPath;
+    elements.materialLabel.textContent = directoryPath || 'Material';
+    elements.directorySearch.value = '';
+    elements.materialSearch.value = '';
+    elements.picker.classList.toggle('is-materials', Boolean(directoryPath));
+    renderMtlxPickerDirectories(elements);
+    renderMtlxPickerMaterials(elements);
+}
+
 function renderMtlxPickerDirectories(elements)
 {
     const query = elements.directorySearch.value.trim().toLowerCase();
+    const prefix = elements.directoryPath ? `${elements.directoryPath}/` : '';
     elements.directoryList.replaceChildren();
-    const directories = mtlxMaterialDirectories.filter(directory =>
-        (directory.path || directory.name || '').toLowerCase().includes(query)
-    );
+    const children = new Map();
+    for (const directory of mtlxMaterialDirectories) {
+        if (!directory.path.startsWith(prefix)) continue;
+        const name = directory.path.slice(prefix.length).split('/')[0];
+        if (!name || !name.toLowerCase().includes(query)) continue;
+        const child = children.get(name) || { name, path: prefix + name, count: 0 };
+        child.count += directory.materials?.length || 0;
+        children.set(name, child);
+    }
+    const directories = [...children.values()].sort((first, second) => first.name.localeCompare(second.name));
     if (directories.length === 0) {
         elements.directoryList.innerHTML = '<div class="mtlx-picker__empty">No directory found</div>';
         return;
@@ -2202,13 +2232,10 @@ function renderMtlxPickerDirectories(elements)
         const button = document.createElement('button');
         button.className = 'mtlx-picker__item';
         button.type = 'button';
-        button.textContent = `${directory.path} (${directory.materials?.length || 0})`;
+        button.textContent = `${directory.name}/ (${directory.count})`;
         button.addEventListener('click', () => {
-            params.mtlx_directory = directory.path;
-            elements.materialLabel.textContent = directory.path;
-            elements.materialSearch.value = '';
-            renderMtlxPickerMaterials(elements);
-            elements.picker.classList.add('is-materials');
+            navigateMtlxPickerDirectory(elements, directory.path);
+            elements.materialSearch.focus();
         });
         elements.directoryList.appendChild(button);
     }
@@ -2216,11 +2243,20 @@ function renderMtlxPickerDirectories(elements)
 
 function renderMtlxPickerMaterials(elements)
 {
-    const directory = mtlxMaterialDirectories.find(item => item.path === params.mtlx_directory);
     const query = elements.materialSearch.value.trim().toLowerCase();
     elements.materialList.replaceChildren();
-    const materials = (directory?.materials || []).filter(material =>
-        `${material.name} ${material.file}`.toLowerCase().includes(query)
+    if (!elements.directoryPath) {
+        elements.materialList.innerHTML = '<div class="mtlx-picker__empty">Select a directory</div>';
+        return;
+    }
+    const prefix = `${elements.directoryPath}/`;
+    const materials = mtlxMaterialDirectories.filter(directory =>
+        directory.path === elements.directoryPath || directory.path.startsWith(prefix)
+    ).flatMap(directory => (directory.materials || []).map(material => ({
+        ...material,
+        relativePath: directory.path === elements.directoryPath ? '' : directory.path.slice(prefix.length)
+    }))).filter(material =>
+        `${material.relativePath} ${material.name} ${material.file}`.toLowerCase().includes(query)
     );
     if (materials.length === 0) {
         elements.materialList.innerHTML = '<div class="mtlx-picker__empty">No material found</div>';
@@ -2230,7 +2266,9 @@ function renderMtlxPickerMaterials(elements)
         const button = document.createElement('button');
         button.className = 'mtlx-picker__item';
         button.type = 'button';
-        button.textContent = material.name || material.file;
+        const name = material.name || material.file;
+        button.textContent = material.relativePath ? `${material.relativePath} / ${name}` : name;
+        button.classList.toggle('is-selected', material.url === params.mtlx_material);
         button.addEventListener('click', async () => {
             elements.picker.classList.remove('is-open', 'is-materials');
             await applyMtlxMaterialFromLibrary(material.url);
@@ -2390,9 +2428,7 @@ function openMtlxPicker()
 {
     const elements = ensureMtlxPicker();
     elements.picker.classList.add('is-open');
-    elements.picker.classList.remove('is-materials');
-    elements.directorySearch.value = '';
-    renderMtlxPickerDirectories(elements);
+    navigateMtlxPickerDirectory(elements, '');
     elements.directorySearch.focus();
 }
 
