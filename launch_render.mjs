@@ -33,7 +33,7 @@
  *                                        --mode=raster-mtlx pour la route MTLX rasterizer,
  *                                        --mode=legacy pour le pathtracer manuel)
  *   --gpu=true|false              false = rendu logiciel SwiftShader (défaut: true)
- *   --scene=standard-shader-ball|glavenus|terrain|bearded-man
+ *   --scene=shader-ball|standard-shader-ball|glavenus|terrain|bearded-man
  *   --smooth_normals=true|false   Lissage des normales (défaut: true)
  *   --bounces=N                   Nombre de rebonds (défaut: 6)
  *   --max_samples=N               Samples max avant arrêt (défaut: 512)

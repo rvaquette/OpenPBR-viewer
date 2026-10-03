@@ -144,23 +144,35 @@ class MeshLoader
         if (this.result) Promise.resolve(this.result);
 
         let gltf = await this.loader.loadAsync(path);
-        let S = Array.isArray( gltf.scene ) ? gltf.scene : [ gltf.scene ];
+        let S = Array.isArray(gltf.scene) ? gltf.scene : [gltf.scene];
+        const meshNames = Array.isArray(options.meshNames) ? new Set(options.meshNames) : null;
         const meshes = [];
-        for ( let i = 0, l = S.length; i < l; i++ )
+        for (const root of S)
         {
-            S[i].traverseVisible( c =>
-                {
-                    if (c.isMesh)
-                    {
-                        meshes.push(c);
-                    }
+            root.updateMatrixWorld(true);
+            root.traverseVisible(mesh => {
+                if (!mesh.isMesh) return;
+                if (meshNames && !meshNames.has(mesh.name)) {
+                    mesh.visible = false;
+                    return;
                 }
-            )
+                meshes.push(mesh);
+            });
+        }
+        if (meshNames && meshes.length !== meshNames.size) {
+            const foundNames = new Set(meshes.map(mesh => mesh.name));
+            const missingNames = [...meshNames].filter(name => !foundNames.has(name));
+            throw new Error(`GLB is missing requested meshes: ${missingNames.join(', ')}`);
         }
 
         if (meshes.length > 0)
         {
-            const mergedGeometry = mergeGeometries(meshes.map(mesh => mesh.geometry.clone()), false);
+            const geometries = meshes.map(mesh => {
+                const geometry = mesh.geometry.clone();
+                if (options.applyNodeTransforms) geometry.applyMatrix4(mesh.matrixWorld);
+                return geometry;
+            });
+            const mergedGeometry = mergeGeometries(geometries, false);
             if (!mergedGeometry) throw new Error('Unable to merge mesh geometries for BVH construction.');
             mergedGeometry.clearGroups();
             let merged_mesh = new Mesh(mergedGeometry, new MeshStandardMaterial());
@@ -185,7 +197,7 @@ var params =
     // renderer params
     //////////////////////////////////////////////////////
 
-    scene_name:                         'standard-shader-ball',
+    scene_name:                         'shader-ball',
     renderer_mode:                      'Rasterizer MTLX',
     mtlx_directory:                     '',
     mtlx_material:                      '',
@@ -2685,6 +2697,7 @@ function updateSunDir()
 }
 
 var scene_names = {
+    'Shader Ball':           'shader-ball',
     'Standard Shader Ball': 'standard-shader-ball',
     'Glavenus':             'glavenus',
     'Terrain':              'terrain',
@@ -3433,8 +3446,14 @@ function load_geometry(scene_name)
         }
     }
 
-    // Load "neutral" objects (i.e. Lambert shaded background stuff)
-    mesh_loader.load(getPublicAssetUrl(scene_name + '/neutral_objects.glb')).then( () => {
+    const usesSplitShaderBall = scene_name === 'shader-ball';
+    const shaderBallUrl = getPublicAssetUrl('pathtracer/ShaderBall.glb');
+
+    // Load neutral/calibration geometry first.
+    mesh_loader.load(
+        usesSplitShaderBall ? shaderBallUrl : getPublicAssetUrl(scene_name + '/neutral_objects.glb'),
+        usesSplitShaderBall ? { meshNames: ['Calibration_Mesh'], applyNodeTransforms: true } : {}
+    ).then( () => {
 
         if (!FULLSCREEN_BVH_ROUTE)
         {
@@ -3489,8 +3508,10 @@ function load_geometry(scene_name)
         mesh_loader.reset();
 
         // Load OpenPBR-shaded objects
-        mesh_loader.load(getPublicAssetUrl(scene_name + '/openpbr_objects.glb'), {
-        }).then( () => {
+        mesh_loader.load(
+            usesSplitShaderBall ? shaderBallUrl : getPublicAssetUrl(scene_name + '/openpbr_objects.glb'),
+            usesSplitShaderBall ? { meshNames: ['Preview_Mesh'], applyNodeTransforms: true } : {}
+        ).then( () => {
 
             if (!FULLSCREEN_BVH_ROUTE)
             {
@@ -3749,6 +3770,11 @@ function reset_camera(scene_name)
     cam_target.addScaledVector(dir, 23.39613);
     if (!bounds.isEmpty()) bounds.getCenter(cam_target);
     orbitControls.target.copy(cam_target);
+
+    if (scene_name === 'shader-ball' && !bounds.isEmpty())
+    {
+        camera.position.copy(cam_target).addScaledVector(new Vector3(1, 0.65, 1).normalize(), 6.0);
+    }
 
     orbitControls.zoomSpeed = 1.5;
     orbitControls.flySpeed = 0.01;
