@@ -2,6 +2,92 @@
   "root": "/mtlx-library",
   "directories": [
     {
+      "name": "Examples/DisneyPrincipled",
+      "path": "Examples/DisneyPrincipled",
+      "materials": [
+        { "name": "disney_principled_carpaint", "file": "disney_principled_carpaint.mtlx", "url": "/mtlx-library/Examples/DisneyPrincipled/disney_principled_carpaint.mtlx" },
+        { "name": "disney_principled_default", "file": "disney_principled_default.mtlx", "url": "/mtlx-library/Examples/DisneyPrincipled/disney_principled_default.mtlx" },
+        { "name": "disney_principled_glass", "file": "disney_principled_glass.mtlx", "url": "/mtlx-library/Examples/DisneyPrincipled/disney_principled_glass.mtlx" },
+        { "name": "disney_principled_gold", "file": "disney_principled_gold.mtlx", "url": "/mtlx-library/Examples/DisneyPrincipled/disney_principled_gold.mtlx" },
+        { "name": "disney_principled_plastic", "file": "disney_principled_plastic.mtlx", "url": "/mtlx-library/Examples/DisneyPrincipled/disney_principled_plastic.mtlx" }
+      ]
+    },
+    {
+      "name": "Examples/GltfPbr",
+      "path": "Examples/GltfPbr",
+      "materials": [
+        { "name": "gltf_pbr_boombox", "file": "gltf_pbr_boombox.mtlx", "url": "/mtlx-library/Examples/GltfPbr/gltf_pbr_boombox.mtlx" },
+        { "name": "gltf_pbr_carpaint", "file": "gltf_pbr_carpaint.mtlx", "url": "/mtlx-library/Examples/GltfPbr/gltf_pbr_carpaint.mtlx" },
+        { "name": "gltf_pbr_default", "file": "gltf_pbr_default.mtlx", "url": "/mtlx-library/Examples/GltfPbr/gltf_pbr_default.mtlx" },
+        { "name": "gltf_pbr_glass", "file": "gltf_pbr_glass.mtlx", "url": "/mtlx-library/Examples/GltfPbr/gltf_pbr_glass.mtlx" },
+        { "name": "gltf_pbr_gold", "file": "gltf_pbr_gold.mtlx", "url": "/mtlx-library/Examples/GltfPbr/gltf_pbr_gold.mtlx" },
+        { "name": "gltf_pbr_plastic", "file": "gltf_pbr_plastic.mtlx", "url": "/mtlx-library/Examples/GltfPbr/gltf_pbr_plastic.mtlx" }
+      ]
+    },
+    {
+      "name": "Examples/OpenPbr",
+      "path": "Examples/OpenPbr",
+      "materials": [
+        { "name": "open_pbr_aluminum_brushed", "file": "open_pbr_aluminum_brushed.mtlx", "url": "/mtlx-library/Examples/OpenPbr/open_pbr_aluminum_brushed.mtlx" },
+        { "name": "open_pbr_carpaint", "file": "open_pbr_carpaint.mtlx", "url": "/mtlx-library/Examples/OpenPbr/open_pbr_carpaint.mtlx" },
+        { "name": "open_pbr_default", "file": "open_pbr_default.mtlx", "url": "/mtlx-library/Examples/OpenPbr/open_pbr_default.mtlx" },
+        { "name": "open_pbr_glass", "file": "open_pbr_glass.mtlx", "url": "/mtlx-library/Examples/OpenPbr/open_pbr_glass.mtlx" },
+        { "name": "open_pbr_honey", "file": "open_pbr_honey.mtlx", "url": "/mtlx-library/Examples/OpenPbr/open_pbr_honey.mtlx" },
+        { "name": "open_pbr_ketchup", "file": "open_pbr_ketchup.mtlx", "url": "/mtlx-library/Examples/OpenPbr/open_pbr_ketchup.mtlx" },
+        { "name": "open_pbr_lightbulb", "file": "open_pbr_lightbulb.mtlx", "url": "/mtlx-library/Examples/OpenPbr/open_pbr_lightbulb.mtlx" },
+        { "name": "open_pbr_pearl", "file": "open_pbr_pearl.mtlx", "url": "/mtlx-library/Examples/OpenPbr/open_pbr_pearl.mtlx" },
+        { "name": "open_pbr_soapbubble", "file": "open_pbr_soapbubble.mtlx", "url": "/mtlx-library/Examples/OpenPbr/open_pbr_soapbubble.mtlx" },
+        { "name": "open_pbr_velvet", "file": "open_pbr_velvet.mtlx", "url": "/mtlx-library/Examples/OpenPbr/open_pbr_velvet.mtlx" }
+      ]
+    },
+    {
+      "name": "Examples/SimpleHair",
+      "path": "Examples/SimpleHair",
+      "materials": [
+        { "name": "simple_hair_default", "file": "simple_hair_default.mtlx", "url": "/mtlx-library/Examples/SimpleHair/simple_hair_default.mtlx" }
+      ]
+    },
+    {
+      "name": "Examples/StandardSurface",
+      "path": "Examples/StandardSurface",
+      "materials": [
+        { "name": "standard_surface_brass_tiled", "file": "standard_surface_brass_tiled.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_brass_tiled.mtlx" },
+        { "name": "standard_surface_brick_procedural", "file": "standard_surface_brick_procedural.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_brick_procedural.mtlx" },
+        { "name": "standard_surface_carpaint", "file": "standard_surface_carpaint.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_carpaint.mtlx" },
+        { "name": "standard_surface_chess_set", "file": "standard_surface_chess_set.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_chess_set.mtlx" },
+        { "name": "standard_surface_chrome", "file": "standard_surface_chrome.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_chrome.mtlx" },
+        { "name": "standard_surface_copper", "file": "standard_surface_copper.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_copper.mtlx" },
+        { "name": "standard_surface_default", "file": "standard_surface_default.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_default.mtlx" },
+        { "name": "standard_surface_glass", "file": "standard_surface_glass.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_glass.mtlx" },
+        { "name": "standard_surface_glass_tinted", "file": "standard_surface_glass_tinted.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_glass_tinted.mtlx" },
+        { "name": "standard_surface_gold", "file": "standard_surface_gold.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_gold.mtlx" },
+        { "name": "standard_surface_greysphere", "file": "standard_surface_greysphere.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_greysphere.mtlx" },
+        { "name": "standard_surface_greysphere_calibration", "file": "standard_surface_greysphere_calibration.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_greysphere_calibration.mtlx" },
+        { "name": "standard_surface_jade", "file": "standard_surface_jade.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_jade.mtlx" },
+        { "name": "standard_surface_look_brass_tiled", "file": "standard_surface_look_brass_tiled.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_look_brass_tiled.mtlx" },
+        { "name": "standard_surface_look_wood_tiled", "file": "standard_surface_look_wood_tiled.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_look_wood_tiled.mtlx" },
+        { "name": "standard_surface_marble_solid", "file": "standard_surface_marble_solid.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_marble_solid.mtlx" },
+        { "name": "standard_surface_metal_brushed", "file": "standard_surface_metal_brushed.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_metal_brushed.mtlx" },
+        { "name": "standard_surface_onyx_hextiled", "file": "standard_surface_onyx_hextiled.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_onyx_hextiled.mtlx" },
+        { "name": "standard_surface_plastic", "file": "standard_surface_plastic.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_plastic.mtlx" },
+        { "name": "standard_surface_thin_film", "file": "standard_surface_thin_film.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_thin_film.mtlx" },
+        { "name": "standard_surface_velvet", "file": "standard_surface_velvet.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_velvet.mtlx" },
+        { "name": "standard_surface_wood_tiled", "file": "standard_surface_wood_tiled.mtlx", "url": "/mtlx-library/Examples/StandardSurface/standard_surface_wood_tiled.mtlx" }
+      ]
+    },
+    {
+      "name": "Examples/UsdPreviewSurface",
+      "path": "Examples/UsdPreviewSurface",
+      "materials": [
+        { "name": "usd_preview_surface_brass_tiled", "file": "usd_preview_surface_brass_tiled.mtlx", "url": "/mtlx-library/Examples/UsdPreviewSurface/usd_preview_surface_brass_tiled.mtlx" },
+        { "name": "usd_preview_surface_carpaint", "file": "usd_preview_surface_carpaint.mtlx", "url": "/mtlx-library/Examples/UsdPreviewSurface/usd_preview_surface_carpaint.mtlx" },
+        { "name": "usd_preview_surface_default", "file": "usd_preview_surface_default.mtlx", "url": "/mtlx-library/Examples/UsdPreviewSurface/usd_preview_surface_default.mtlx" },
+        { "name": "usd_preview_surface_glass", "file": "usd_preview_surface_glass.mtlx", "url": "/mtlx-library/Examples/UsdPreviewSurface/usd_preview_surface_glass.mtlx" },
+        { "name": "usd_preview_surface_gold", "file": "usd_preview_surface_gold.mtlx", "url": "/mtlx-library/Examples/UsdPreviewSurface/usd_preview_surface_gold.mtlx" },
+        { "name": "usd_preview_surface_plastic", "file": "usd_preview_surface_plastic.mtlx", "url": "/mtlx-library/Examples/UsdPreviewSurface/usd_preview_surface_plastic.mtlx" }
+      ]
+    },
+    {
       "name": "displacements/Fabric022_1K-JPG",
       "path": "displacements/Fabric022_1K-JPG",
       "materials": [
