@@ -699,11 +699,13 @@ function extractMtlxLightOverrides(search)
         if (!Array.isArray(raw)) return [];
         return raw.map(light => {
             const isQuad = light.type === 'quad' || light.type === 3;
-            const type = isQuad ? 3 : (light.type === 'directional' || light.type === 1 ? 1 : light.type === 'spot' || light.type === 2 ? 2 : 0);
+            const isSphere = light.type === 'sphere' || light.type === 4;
+            const type = isQuad ? 3 : (isSphere ? 4 : (light.type === 'directional' || light.type === 1 ? 1 : light.type === 'spot' || light.type === 2 ? 2 : 0));
             const corner = Array.isArray(light.corner) ? parseNumberList(light.corner.join(','), [0, 5, 0], 3) : [0, 5, 0];
             return {
                 name: String(light.name || 'cli_light'),
                 type,
+                radius: isSphere ? Math.max(0, Number.parseFloat(light.radius ?? '0') || 0) : 0,
                 position: isQuad ? corner : (Array.isArray(light.position) ? parseNumberList(light.position.join(','), [0, 5, 0], 3) : [0, 5, 0]),
                 direction: normalizeVec3(Array.isArray(light.direction) ? parseNumberList(light.direction.join(','), [0, -1, 0], 3) : [0, -1, 0], [0, -1, 0]),
                 color: Array.isArray(light.color) ? parseNumberList(light.color.join(','), [1, 1, 1], 3) : [1, 1, 1],
@@ -743,7 +745,7 @@ function createMtlxLightsTexture()
         data[base + 12] = l.innerCone; data[base + 13] = l.outerCone; data[base + 14] = 0; data[base + 15] = 0;
         const u = l.u || [0, 0, 0]; const v = l.v || [0, 0, 0];
         data[base + 16] = u[0]; data[base + 17] = u[1]; data[base + 18] = u[2]; data[base + 19] = 0;
-        data[base + 20] = v[0]; data[base + 21] = v[1]; data[base + 22] = v[2]; data[base + 23] = 0;
+        data[base + 20] = v[0]; data[base + 21] = v[1]; data[base + 22] = v[2]; data[base + 23] = Number(l.radius) || 0;
     });
     parameters.forEach((parameter, i) => {
         for (const [variant, value] of [[0, parameter.value], [1, parameter.defaultValue]]) {
@@ -1682,7 +1684,10 @@ async function generateMtlxNeutralRasterDispatch(activeMtlxText, activeDispatch)
         if (!declaration) continue;
         const [, type, name, value] = declaration;
         const neutralName = `mtlxNeutralDefault_${name}`;
-        parameterDeclarations.push(`${type} ${neutralName} = ${value};`);
+        if (model === 'disney_principled' && name === 'baseColor' && params.scene_name === 'test-material-disney-gold')
+            parameterDeclarations.push(`#define ${neutralName} neutral_color`);
+        else
+            parameterDeclarations.push(`${type} ${neutralName} = ${value};`);
         replacements.push([name, neutralName]);
     }
 
@@ -1737,7 +1742,10 @@ async function generateMtlxNeutralPathDispatch(activeMtlxText, activeDispatch)
         if (!declaration) continue;
         const [, type, name, value] = declaration;
         const neutralName = `mtlxNeutralDefault_${name}`;
-        parameterDeclarations.push(`${type} ${neutralName} = ${value};`);
+        if (model === 'disney_principled' && name === 'baseColor' && params.scene_name === 'test-material-disney-gold')
+            parameterDeclarations.push(`#define ${neutralName} neutral_color`);
+        else
+            parameterDeclarations.push(`${type} ${neutralName} = ${value};`);
         replacements.set(name, neutralName);
     }
 
@@ -2741,6 +2749,7 @@ function updateSunDir()
 var scene_names = {
     'Shader Ball':           'shader-ball',
     'Standard Shader Ball': 'standard-shader-ball',
+    'Disney Gold Test':     'test-material-disney-gold',
     'Glavenus':             'glavenus',
     'Terrain':              'terrain',
     'Bearded Man':          'bearded-man'
@@ -2876,6 +2885,26 @@ initializeLoadingProgress();
     init();
     render();
 })();
+
+function createMtlxRouteFragmentShader()
+{
+    const mtlxRouteCommon = is_mtlx_bvh_raster_route()
+        ? glsl_rasterization_mtlx_common
+        : glsl_mtlx_route_common;
+    const mtlxFragmentShader = `precision highp isampler2D;
+                            precision highp usampler2D;
+                            precision highp int;
+                            ${ bvhGlslPrelude() }
+                        `
+                        + adaptBvhGlslForEngine(mtlxRouteCommon + '\n' + assemble_mtlx_route_dispatch());
+
+    if (is_mtlx_bvh_raster_route()) {
+        console.log('[mtlx-raster] fragment shader lines', mtlxFragmentShader.split('\n').length);
+        window.__openpbrMtlxRasterFragmentShader = mtlxFragmentShader;
+    }
+
+    return mtlxFragmentShader;
+}
 
 function create_materials()
 {
@@ -3058,21 +3087,7 @@ function create_materials()
         //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
         if (uses_mtlx_fullscreen_shader()) {
-            const mtlxRouteCommon = is_mtlx_bvh_raster_route()
-                ? glsl_rasterization_mtlx_common
-                : glsl_mtlx_route_common;
-            const mtlxFragmentShader = `precision highp isampler2D;
-                            precision highp usampler2D;
-                            precision highp int;
-                            ${ bvhGlslPrelude() }
-                        `
-                        + adaptBvhGlslForEngine(mtlxRouteCommon + '\n' + assemble_mtlx_route_dispatch());
-
-            if (is_mtlx_bvh_raster_route()) {
-                console.log('[mtlx-raster] fragment shader lines', mtlxFragmentShader.split('\n').length);
-                window.__openpbrMtlxRasterFragmentShader = mtlxFragmentShader;
-            }
-
+            const mtlxFragmentShader = createMtlxRouteFragmentShader();
             pathtracedMaterial = new ShaderMaterial( {
 
         defines: materialDefines,
@@ -3091,6 +3106,7 @@ function create_materials()
 
                 ground_texture:        { value: null },
                 ground_y:              { value: sceneGroundY },
+                ground_enabled:        { value: true },
 
                 cameraWorldMatrix:     { value: new Matrix4() },
                 invProjectionMatrix:   { value: new Matrix4() },
@@ -3627,7 +3643,7 @@ function load_scene(scene_name)
 
 function reset_camera(scene_name)
 {
-    let camera_fov = 23.6701655;
+    let camera_fov = scene_name === 'test-material-disney-gold' ? 45.0 : 23.6701655;
     let camera_near = 0.01;
     let camera_far = 1000.0;
     camera = new PerspectiveCamera( camera_fov, window.innerWidth / window.innerHeight, camera_near, camera_far );
@@ -3673,6 +3689,13 @@ function reset_camera(scene_name)
     camera.matrixAutoUpdate = true;
     camera.updateMatrixWorld();
 
+    if (scene_name === 'test-material-disney-gold')
+    {
+        camera.position.set(7.5, 5.0, 7.0);
+        camera.lookAt(0.0, 0.0, 0.0);
+        camera.updateMatrixWorld();
+    }
+
     const bounds = new Box3();
     const framingMesh = MESH_SURFACE || MESH_PROPS;
     if (framingMesh?.geometry)
@@ -3686,6 +3709,7 @@ function reset_camera(scene_name)
     let cam_target = camera.position.clone();
     cam_target.addScaledVector(dir, 23.39613);
     if (!bounds.isEmpty()) bounds.getCenter(cam_target);
+    if (scene_name === 'test-material-disney-gold') cam_target.set(0.0, 0.0, 0.0);
     orbitControls.target.copy(cam_target);
 
     if (scene_name === 'shader-ball' && !bounds.isEmpty())
@@ -3697,7 +3721,7 @@ function reset_camera(scene_name)
     orbitControls.flySpeed = 0.01;
     orbitControls.update();
 
-    if (params.render_size !== 'max')
+    if (params.render_size !== 'max' && scene_name !== 'test-material-disney-gold')
     {
         if (!bounds.isEmpty())
         {
@@ -3981,7 +4005,13 @@ function setup_gui()
     renderer_folder.add(params, 'renderer_mode', getRendererModeOptions()).onChange(              async v => {
         try { await ensureMtlxRouteDispatch(); }
         catch (e) { showMtlxLibraryError(e); return; }
-        load_scene(params.scene_name);
+        if (!pathtracedMaterial || !pathtracedQuad) {
+            load_scene(params.scene_name);
+            return;
+        }
+        pathtracedMaterial.fragmentShader = createMtlxRouteFragmentShader();
+        pathtracedMaterial.needsUpdate = true;
+        trigger_recompile();
     });
     renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => { setPaused(true); load_scene(v); });
     renderer_folder.add( params, 'smooth_normals' ).onChange(                                         v => { resetSamples(); });
@@ -3994,7 +4024,7 @@ function setup_gui()
     renderer_folder.add( params, 'firefly_clamp', 1, 1000 ).onChange(                                v => { resetSamples(); } );
     renderer_folder.close();
 
-    gui.add( params, 'Reset camera' );
+    gui.add( params, 'reset_camera' );
     gui.open();
     makeGuiDraggable();
 }
@@ -4316,6 +4346,7 @@ function sync_shader_uniforms(uniforms)
     uniforms.accumulation_weight.value                    = 1.0 / (samples + 1.0); // implements Monte-Carlo accumulation
     uniforms.samples.value                                = samples;
     if (uniforms.ground_y) uniforms.ground_y.value         = sceneGroundY;
+    if (uniforms.ground_enabled) uniforms.ground_enabled.value = params.scene_name !== 'test-material-disney-gold';
 
     uniforms.wireframe.value                              = params.wireframe;
     uniforms.neutral_color.value.copy(get_vector3(          params.neutral_color));

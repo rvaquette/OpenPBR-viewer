@@ -47,7 +47,7 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
     // Analytical ground plane intersection at y = 0.01 (matching rasterizer)
     float dist_ground = HUGE_DIST;
     bool hit_ground = false;
-    if (abs(rayDir.y) > DENOM_TOLERANCE)
+    if (ground_enabled && abs(rayDir.y) > DENOM_TOLERANCE)
     {
         float t = (ground_y - rayOrigin.y) / rayDir.y;
         if (t > 0.0 && t < min(dist_closest, maxDistance))
@@ -233,6 +233,7 @@ struct MtlxLight
     int type;
     vec3 u;          // quad: edge vector from corner
     vec3 v;          // quad: edge vector from corner
+    float radius;    // sphere light radius
 };
 
 MtlxLight GetMtlxLight(int i)
@@ -250,6 +251,7 @@ MtlxLight GetMtlxLight(int i)
     l.innerCone = t3.x; l.outerCone = t3.y;
     l.u = t4.xyz;
     l.v = t5.xyz;
+    l.radius = t5.w;
     return l;
 }
 
@@ -258,6 +260,7 @@ float mtlxLightTotalPower(int index)
     MtlxLight l = GetMtlxLight(index);
     float power = length(l.color * l.intensity);
     if (l.type == 3) power *= length(cross(l.u, l.v)); // scale by quad area
+    else if (l.type == 4) power *= 12.5663706144 * l.radius * l.radius;
     return power;
 }
 
@@ -273,12 +276,13 @@ float mtlxLightsTotalPower()
 }
 
 vec3 mtlxLightSample(int index, in vec3 pW, in Basis basis,
-                     out vec3 woutputL, out vec3 woutputW, out float maxDistance,
+                     out vec3 woutputL, out vec3 woutputW, out float maxDistance, out float directionPdf,
                      inout uint rndSeed)
 {
     MtlxLight l = GetMtlxLight(index);
     vec3 intensity = l.color * l.intensity;
     maxDistance = HUGE_DIST;
+    directionPdf = 1.0;
 
     if (l.type == 1)
     {
@@ -286,9 +290,7 @@ vec3 mtlxLightSample(int index, in vec3 pW, in Basis basis,
     }
     else if (l.type == 3)
     {
-        // Quad area light: uniform-sample the quad, fold the area-sampling pdf
-        // (1/area) into the returned radiance so this still behaves like a single
-        // delta-light sample for the MIS scheme in LiDirect() below.
+        // Uniformly sample the quad and return its directional PDF separately.
         vec2 xi = vec2(rand(rndSeed), rand(rndSeed));
         vec3 pointOnLight = l.position + xi.x * l.u + xi.y * l.v;
         vec3 lightNormal = safe_normalize(cross(l.u, l.v));
@@ -304,7 +306,45 @@ vec3 mtlxLightSample(int index, in vec3 pW, in Basis basis,
             woutputL = worldToLocal(woutputW, basis);
             return vec3(0.0);
         }
-        intensity *= cosLight * area / distSq;
+        directionPdf = distSq / max(area * cosLight, DENOM_TOLERANCE);
+        woutputL = worldToLocal(woutputW, basis);
+        return intensity;
+    }
+    else if (l.type == 4)
+    {
+        float radius = max(l.radius, 0.0);
+        vec3 toCenter = l.position - pW;
+        float centerDistanceSq = dot(toCenter, toCenter);
+        float centerDistance = sqrt(centerDistanceSq);
+        if (radius <= 0.0 || centerDistance <= radius)
+        {
+            woutputW = safe_normalize(toCenter);
+            woutputL = worldToLocal(woutputW, basis);
+            return vec3(0.0);
+        }
+
+        vec3 axis = toCenter / centerDistance;
+        vec3 referenceAxis = abs(axis.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+        vec3 tangent = safe_normalize(cross(referenceAxis, axis));
+        vec3 bitangent = cross(axis, tangent);
+        float cosThetaMax = sqrt(max(0.0, 1.0 - radius * radius / centerDistanceSq));
+        float cosTheta = mix(cosThetaMax, 1.0, rand(rndSeed));
+        float sinTheta = sqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+        float phi = 6.28318530718 * rand(rndSeed);
+        woutputW = axis * cosTheta + sinTheta * (tangent * cos(phi) + bitangent * sin(phi));
+
+        float distanceAlongRay = dot(toCenter, woutputW);
+        float perpendicularDistanceSq = max(0.0, centerDistanceSq - distanceAlongRay * distanceAlongRay);
+        float distanceToLight = distanceAlongRay - sqrt(max(0.0, radius * radius - perpendicularDistanceSq));
+        float solidAngle = 6.28318530718 * (1.0 - cosThetaMax);
+        if (distanceToLight <= 0.0 || solidAngle <= DENOM_TOLERANCE)
+        {
+            woutputL = worldToLocal(woutputW, basis);
+            return vec3(0.0);
+        }
+
+        directionPdf = 1.0 / solidAngle;
+        maxDistance = max(0.0, distanceToLight - 2.0 * RAY_OFFSET);
         woutputL = worldToLocal(woutputW, basis);
         return intensity;
     }
@@ -485,10 +525,11 @@ vec3 LiDirect(in vec3 pW, in Basis basis,
                 }
             }
             float selectedPower = max(mtlxLightTotalPower(selected), DENOM_TOLERANCE);
-            Li = mtlxLightSample(selected, pW, basis, shadowL, shadowW, maxDistance, rndSeed);
+            float directionPdf;
+            Li = mtlxLightSample(selected, pW, basis, shadowL, shadowW, maxDistance, directionPdf, rndSeed);
             pdf_sun = sunPdf(shadowL, shadowW);
             pdf_sky = skyPdf(shadowL, shadowW);
-            lightPdf = P_mtlx * selectedPower / max(w_mtlx, DENOM_TOLERANCE);
+            lightPdf = P_mtlx * selectedPower / max(w_mtlx, DENOM_TOLERANCE) * directionPdf;
             if (shadowL.z < 0.0) return vec3(0.0);
             if (maxComponent(Li) < RADIANCE_EPSILON) return vec3(0.0);
             vec3 shadowOrigin = pW + basis.nW * sign(dot(shadowW, basis.nW)) * RAY_OFFSET;

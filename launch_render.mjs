@@ -25,6 +25,7 @@
  *   --strict_generated_contract=true|false       Active l'echec strict sans fallback legacy (defaut: true)
  *   --denoise=true|false    Débruitage OIDN après capture (défaut: false)
  *   --oidn=path             Chemin vers oidnDenoise.exe (défaut: oidnDenoise dans PATH)
+ *   --dump-glsl=dir         Exporte les sources GLSL envoyées à WebGL et le dispatch MTLX généré
  *
  * Options rendu :
  *   --mode=Rasterizer MTLX|Pathtracer MTLX
@@ -173,6 +174,9 @@ function defaultOutputPath() {
 }
 const screenshotPath = options.output ?? options.screenshot ?? defaultOutputPath();
 const waitSamples   = parseInt(options['spp'] ?? options['wait-samples'] ?? '16', 10);
+const dumpGlslDir   = options['dump-glsl']
+    ? resolve(options['dump-glsl'] === 'true' ? 'artifacts/glsl-dump' : options['dump-glsl'])
+    : null;
 // Normalize friendly mode aliases to canonical renderer_mode strings.
 const MODE_ALIASES = {
     'pathtracer-mtlx':   'Pathtracer MTLX',
@@ -193,6 +197,7 @@ delete options.port; delete options.gpu; delete options.headless;
 delete options.browser; delete options['launch-timeout-ms'];
 delete options['start-server']; delete options.screenshot; delete options.output;
 delete options['wait-samples']; delete options['spp']; delete options.mode; delete options.size;
+delete options['dump-glsl'];
 delete options.mtlx; delete options.denoise; delete options.oidn;
 delete options.envmap; delete options.env_map_path; delete options.env_irradiance_path;
 
@@ -355,6 +360,27 @@ await page.addInitScript(() => {
     });
 });
 
+if (dumpGlslDir) {
+    await page.addInitScript(() => {
+        window.__openpbrShaderSources = [];
+        for (const contextType of [window.WebGL2RenderingContext, window.WebGLRenderingContext]) {
+            const prototype = contextType?.prototype;
+            if (!prototype || prototype.__openpbrShaderSourceHook) continue;
+            prototype.__openpbrShaderSourceHook = true;
+            const originalShaderSource = prototype.shaderSource;
+            prototype.shaderSource = function(shader, source) {
+                try {
+                    const shaderType = this.getShaderParameter(shader, this.SHADER_TYPE);
+                    const type = shaderType === this.FRAGMENT_SHADER ? 'fragment'
+                        : shaderType === this.VERTEX_SHADER ? 'vertex' : 'unknown';
+                    window.__openpbrShaderSources.push({ type, source: String(source) });
+                } catch (_) {}
+                return originalShaderSource.call(this, shader, source);
+            };
+        }
+    });
+}
+
 // Relayer les logs console du navigateur vers le terminal
 page.on('console', msg => {
     if (msg.type() === 'warning') return;
@@ -399,6 +425,34 @@ if (shaderError) {
     await browser.close();
     if (viteProcess) viteProcess.kill();
     process.exit(1);
+}
+
+if (dumpGlslDir) {
+    const dump = await page.evaluate(() => ({
+        shaders: window.__openpbrShaderSources ?? [],
+        dispatch: window.__openpbrMtlxDispatch ?? ''
+    }));
+    if (dump.shaders.length === 0) {
+        throw new Error('Aucune source GLSL interceptée; export annulé.');
+    }
+    mkdirSync(dumpGlslDir, { recursive: true });
+    const files = [];
+    dump.shaders.forEach(({ type, source }, index) => {
+        const name = `webgl-${String(index + 1).padStart(3, '0')}-${type}.glsl`;
+        writeFileSync(join(dumpGlslDir, name), source, 'utf8');
+        files.push({ name, type, bytes: Buffer.byteLength(source), lines: source.split(/\r?\n/).length });
+    });
+    if (dump.dispatch) {
+        writeFileSync(join(dumpGlslDir, 'wasm-generated-dispatch.glsl'), dump.dispatch, 'utf8');
+        files.push({
+            name: 'wasm-generated-dispatch.glsl',
+            type: 'mtlx-dispatch',
+            bytes: Buffer.byteLength(dump.dispatch),
+            lines: dump.dispatch.split(/\r?\n/).length
+        });
+    }
+    writeFileSync(join(dumpGlslDir, 'manifest.json'), `${JSON.stringify({ renderer: mode, files }, null, 2)}\n`, 'utf8');
+    console.log(`GLSL exporté : ${files.length} fichier(s) dans ${dumpGlslDir}`);
 }
 console.log('Shaders compilés.');
 
