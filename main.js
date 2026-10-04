@@ -783,11 +783,14 @@ function escapeRegExp(text)
 
 function replaceIdentifiers(source, replacements)
 {
-    let result = source;
-    for (const [from, to] of replacements) {
-        result = result.replace(new RegExp(`\\b${escapeRegExp(from)}\\b`, 'g'), to);
-    }
-    return result;
+    const identifiers = new Map(replacements);
+    return source.replace(/\b[A-Za-z_]\w*\b/g, (name, offset) => {
+        if (!identifiers.has(name)) return name;
+        let previous = offset - 1;
+        while (previous >= 0 && /\s/.test(source[previous])) previous--;
+        if (source[previous] === '.') return name;
+        return identifiers.get(name);
+    });
 }
 
 function parseMtlxParameterDefault(type, expression)
@@ -1740,18 +1743,24 @@ async function generateMtlxNeutralPathDispatch(activeMtlxText, activeDispatch)
 
     const activeFunctions = extractFunctionBlocks(activeDispatch);
     const defaultFunctions = extractFunctionBlocks(generated.glsl);
-    const selectedFunctions = [];
+    const sharedFunctions = new Set();
     for (const block of defaultFunctions) {
         if (block.name === 'evaluateBsdf' || block.name === 'sampleBsdf') continue;
         const sameSignature = activeFunctions.find(candidate =>
             candidate.name === block.name && candidate.signature === block.signature
         );
-        if (!replacements.has(block.name) && sameSignature && sameSignature.text === block.text) continue;
+        if (!replacements.has(block.name) && sameSignature && sameSignature.text === block.text) {
+            sharedFunctions.add(block);
+            continue;
+        }
         if (sameSignature && !replacements.has(block.name))
             replacements.set(block.name, `mtlxNeutralDefault_${block.name}`);
-        selectedFunctions.push(block);
     }
 
+    const selectedFunctions = defaultFunctions.filter(block =>
+        block.name !== 'evaluateBsdf' && block.name !== 'sampleBsdf' &&
+        (!sharedFunctions.has(block) || replacements.has(block.name))
+    );
     const identifierReplacements = [...replacements];
     const defaultCode = selectedFunctions.map(block => replaceIdentifiers(block.text, identifierReplacements));
     if (!replacements.has('mtlx_openpbr_bsdf_evaluate') || !replacements.has('mtlx_openpbr_bsdf_sample'))
@@ -3873,8 +3882,8 @@ function setup_gui()
     ///// Material folder /////////////////////////////////////
     const material_folder = gui.addFolder('Material');
     const mtlx_library_folder = material_folder.addFolder('MaterialX Library');
-    mtlx_library_folder.add({ open: openMtlxPicker }, 'open').name('choose material');
-    mtlx_library_folder.add({ open: openMtlxEditorDialog }, 'open').name('edit MaterialX XML');
+    mtlx_library_folder.add({ open: openMtlxPicker }, 'open').name('Choose material');
+    mtlx_library_folder.add({ open: openMtlxEditorDialog }, 'open').name('Edit MaterialX XML');
     mtlx_library_folder.close();
 
     if (uses_mtlx_fullscreen_shader()) setupMtlxParameterControls(material_folder);
@@ -3985,7 +3994,7 @@ function setup_gui()
     renderer_folder.add( params, 'firefly_clamp', 1, 1000 ).onChange(                                v => { resetSamples(); } );
     renderer_folder.close();
 
-    gui.add( params, 'reset_camera' );
+    gui.add( params, 'Reset camera' );
     gui.open();
     makeGuiDraggable();
 }
