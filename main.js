@@ -56,6 +56,31 @@ function setGpuDebugStage(name)
     if (gpuDebugStage.name === name) return;
     gpuDebugStage = { name, since: performance.now() };
     window.__openpbrGpuStage = gpuDebugStage;
+    const labels = {
+        'creating-renderer': 'Initialisation du moteur WebGL...',
+        'loading-scene': 'Chargement de la scene...',
+        'loading-geometry': 'Chargement des geometries...',
+        'building-bvh': 'Construction de la structure BVH...',
+        'compiling-shaders': 'Compilation des shaders...',
+        'warmup-render': 'Preparation du premier rendu...',
+    };
+    if (labels[name]) setLoadingProgress(labels[name]);
+}
+
+function setLoadingProgress(message)
+{
+    if (!progress_bar) return;
+    const overlay = document.getElementById('progress_overlay');
+    overlay.style.display = 'block';
+    overlay.style.opacity = 1;
+    overlay.classList.add('is-loading');
+    progress_bar.setText(message);
+}
+
+async function showLoadingProgress(message)
+{
+    setLoadingProgress(message);
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 }
 
 function buildBvh(geometry)
@@ -386,41 +411,35 @@ function resolveMtlxTextureUrl(fileValue, materialBaseUrl, textureResolver = nul
     return new URL(libraryRelativePath, libraryRoot).toString();
 }
 
+function getMtlxFilename(input)
+{
+    const fileValue = input?.getAttribute('value') || '';
+    if (!fileValue || /^(?:[a-z]+:|\/)/i.test(fileValue)) return fileValue;
+    for (let element = input; element; element = element.parentElement) {
+        const prefix = element.getAttribute('fileprefix');
+        if (prefix) return prefix + fileValue;
+    }
+    return fileValue;
+}
+
 function extractMtlxTextureBindings(mtlxText, materialBaseUrl, archiveSource = null)
 {
-    // Type-agnostic: bind every <input type="filename"> to its enclosing node,
-    // whatever that node is (image, tiledimage, hextiledimage, triplanar, custom...).
-    // Walk the document keeping an element stack so nested nodegraphs resolve the
-    // correct parent name; the generated sampler uniform is `${parentName}_file`.
+    const xmlDocument = new DOMParser().parseFromString(mtlxText, 'application/xml');
+    if (xmlDocument.querySelector('parsererror'))
+        throw new Error('[mtlx-textures] invalid MaterialX XML');
     const bindings = [];
-    const stack = [];
-    const tagRe = /<(\/?)([A-Za-z_][\w.\-]*)\b([^>]*?)(\/?)>/g;
-    let m;
-    while ((m = tagRe.exec(mtlxText)) !== null) {
-        const closing = m[1] === '/';
-        const tag = m[2];
-        const attrs = m[3];
-        const selfClose = m[4] === '/';
-        if (closing) { stack.pop(); continue; }
-        if (tag === 'input') {
-            if (readXmlAttr(attrs, 'type') === 'filename') {
-                const fileValue = readXmlAttr(attrs, 'value');
-                const parent = stack[stack.length - 1];
-                if (fileValue && parent && parent.name) {
-                    bindings.push({
-                        sampler: `${parent.name}_file`,
-                        url: resolveMtlxTextureUrl(fileValue, materialBaseUrl, archiveSource?.resolveTexture),
-                        source: fileValue,
-                        type: parent.type,
-                        archiveSource
-                    });
-                }
-            }
-            continue; // <input> is always self-closing
-        }
-        if (!selfClose) {
-            stack.push({ tag, name: readXmlAttr(attrs, 'name'), type: readXmlAttr(attrs, 'type') });
-        }
+    for (const input of xmlDocument.querySelectorAll('input[type="filename"]')) {
+        const fileValue = input.getAttribute('value');
+        const parent = input.parentElement;
+        const parentName = parent?.getAttribute('name');
+        if (!fileValue || !parentName) continue;
+        bindings.push({
+            sampler: `${parentName}_file`,
+            url: archiveSource?.resolveTexture(fileValue) || resolveMtlxTextureUrl(getMtlxFilename(input), materialBaseUrl),
+            source: fileValue,
+            type: parent.getAttribute('type') || '',
+            archiveSource
+        });
     }
     return bindings;
 }
@@ -445,6 +464,7 @@ function getMtlxMaxTextureSize()
 
 async function prepareMtlxTextureAtlases(bindings)
 {
+    await showLoadingProgress(`Chargement des textures et creation des atlas (${bindings.length})...`);
     const nextAtlas = await buildMtlxTextureAtlases(bindings, getMtlxMaxTextureSize());
     retiredMtlxRouteTextureAtlases.push(...mtlxRouteTextureAtlas.textures);
     mtlxRouteTextureAtlas = nextAtlas;
@@ -515,9 +535,10 @@ async function loadMtlxDisplacement(mtlxText, archiveSource, materialBaseUrl)
     if (texcoordInput?.getAttribute('nodename') || texcoordInput?.getAttribute('nodegraph'))
         throw new Error('[mtlx-displacement] custom texture coordinates are not supported; use UV0');
 
-    const fileValue = getMtlxInput(imageNode, 'file')?.getAttribute('value');
+    const fileInput = getMtlxInput(imageNode, 'file');
+    const fileValue = fileInput?.getAttribute('value');
     const imageUrl = archiveSource?.resolveTexture(fileValue) ||
-        resolveMtlxTextureUrl(fileValue, materialBaseUrl || getPublicAssetUrl(''));
+        resolveMtlxTextureUrl(getMtlxFilename(fileInput), materialBaseUrl || getPublicAssetUrl(''));
     if (!imageUrl) throw new Error('[mtlx-displacement] displacement image file is missing');
     const response = await fetch(imageUrl);
     if (!response.ok) throw new Error(`[mtlx-displacement] image fetch failed (${response.status})`);
@@ -1428,6 +1449,7 @@ const MTLX_RUNTIME_VERSION = '2026-08-31';
 let _mtlxModulePromise = null;
 async function loadMtlxModule() {
     if (_mtlxModulePromise) return _mtlxModulePromise;
+    await showLoadingProgress('Chargement du moteur MaterialX (WASM et bibliotheques)...');
     // Construct full http:// URL at runtime so Vite's static analyzer
     // does not intercept the import as a /public/ module (which it rejects).
     // BASE_URL = '/OpenPBR-viewer/' — public files are served under the base in Vite 5.
@@ -1448,6 +1470,7 @@ async function loadMtlxModule() {
 // Generate GLSL for the path tracer from a .mtlx XML string.
 async function generateMtlxGlsl(mtlxText) {
     const mx = await loadMtlxModule();
+    await showLoadingProgress('Generation du shader MaterialX...');
     const gen = mx.PathTracerGlslShaderGenerator.create();
     const ctx = new mx.GenContext(gen);
     const stdlib = mx.loadStandardLibraries(ctx);
@@ -1512,6 +1535,7 @@ async function generateMtlxGlsl(mtlxText) {
 
 async function generateMtlxRasterDispatch(mtlxText) {
     const mx = await loadMtlxModule();
+    await showLoadingProgress('Generation du shader MaterialX rasterizer...');
     if (typeof mx.EsslHostShaderGenerator === 'undefined') {
         throw new Error('[mtlx-raster] EsslHostShaderGenerator not exposed by WASM build');
     }
@@ -1741,6 +1765,7 @@ async function generateMtlxNeutralPathDispatch(activeMtlxText, activeDispatch)
 // evaluateBsdf/sampleBsdf dispatchers can call them via the mtlx_openpbr_* hooks.
 async function generateMtlxRouteDispatch(mtlxText) {
     const mx = await loadMtlxModule();
+    await showLoadingProgress('Generation du shader MaterialX pathtracer...');
     if (typeof mx.MtlxPathTracerHostShaderGenerator === 'undefined') {
         throw new Error('[mtlx-route] MtlxPathTracerHostShaderGenerator not exposed by WASM build');
     }
@@ -1841,6 +1866,7 @@ async function generateMtlxRouteDispatch(mtlxText) {
 
 async function loadMtlxMaterialLibrary()
 {
+    await showLoadingProgress('Chargement du catalogue des materiaux...');
     try {
         const resp = await fetch(APP_BASE_URL + 'mtlx-library.json');
         if (!resp.ok) {
@@ -2433,6 +2459,11 @@ function showMtlxLibraryError(error)
 {
     const message = `[mtlx-library] ${error?.message || error}`;
     console.error(message, error);
+    const progressOverlay = document.getElementById('progress_overlay');
+    if (progressOverlay) {
+        progressOverlay.classList.remove('is-loading');
+        progressOverlay.style.display = 'none';
+    }
     window.__openpbrShaderError = message;
     window.__openpbrReady = true;
     const overlay = document.getElementById('shader-error');
@@ -2711,6 +2742,8 @@ var scene_names = {
 // Usage: ?renderer_mode=Pathtracing&base_color=1,0,0&base_metalness=1
 // For MaterialX: ?mtlx_url=/path/to/material.mtlx
 // ---------------------------------------------------------------------------
+initializeLoadingProgress();
+
 (async function applyUrlParams() {
     const search = new URLSearchParams(window.location.search);
 
@@ -2751,6 +2784,7 @@ var scene_names = {
                 mtlxUrl = APP_BASE_URL.replace(/\/$/, '') + mtlxUrl;
             }
             mtlxMaterialBaseUrl = new URL(mtlxUrl, window.location.origin).toString().replace(/[^/]*$/, '');
+            await showLoadingProgress('Chargement du document MaterialX...');
             const resp = await fetch(mtlxUrl);
             if (resp.ok) {
                 mtlxText = await resp.text();
@@ -3135,9 +3169,9 @@ function create_materials()
 
 }
 
-function init()
+function initializeLoadingProgress()
 {
-    // Setup progress bar spinner
+    document.getElementById('progress_overlay').replaceChildren();
     progress_bar = new Circle('#progress_overlay',
     {
         color: 'rgba(255, 128, 64, 0.75)',
@@ -3152,7 +3186,7 @@ function init()
             value: '',
             className: 'progressbar__label',
             style: {
-                color: 'rgba(169, 85, 42, 1.0)',
+                color: '#c8d5d7',
                 position: 'absolute',
                 fontWeight: 'bold',
                 left: '50%',
@@ -3174,9 +3208,12 @@ function init()
         to: {   color: 'rgba(32, 255, 32, 1.0)' },
         warnings: true
     });
-    progress_bar.set(0.0);
-    progress_bar.setText('');
+    progress_bar.set(0.7);
+    setLoadingProgress('Initialisation du viewer...');
+}
 
+function init()
+{
     LOADED = false;
     MESH_SURFACE = null;
     MESH_PROPS = null;
@@ -3499,7 +3536,6 @@ function load_geometry(scene_name)
 
             post_load_setup();
 
-            progress_bar.animate(1.0);
             let progress_overlay = document.getElementById('progress_overlay');
             progress_finished_timer = performance.now();
 
@@ -3523,8 +3559,7 @@ function load_scene(scene_name)
     scene = new Scene();
     ////////////////////////////////////////////////////////////////////////////////////
 
-    progress_bar.setText('loading meshes...');
-    progress_bar.animate(0.0);
+    setLoadingProgress('Chargement de la scene...');
 
     // Load env map
     if (!env_map_texture)
@@ -3541,6 +3576,7 @@ function load_scene(scene_name)
         };
         const loadEnvTexture = (path, onLoad) => {
             const assetPath = normalizeAssetPath(path);
+            setLoadingProgress(`Chargement de l'environnement : ${path.split('/').pop()}...`);
             loadEnvironmentTexture(assetPath).then(({ texture, importance }) => {
                 const latLongTexture = texture.clone();
                 latLongTexture.needsUpdate = true;
@@ -4110,7 +4146,7 @@ function startCompilationProgress()
     progress_overlay.style.opacity = 1;
     _progressFading = false;
     progress_bar.set(0.0);
-    progress_bar.setText('shaders compiling...');
+    setLoadingProgress('Compilation des shaders...');
     COMPILING = true;
 }
 
@@ -4121,6 +4157,7 @@ function finishCompilationProgress()
     progress_finished_timer = performance.now();
     COMPILING = false;
     const progress_overlay = document.getElementById('progress_overlay');
+    progress_overlay.classList.remove('is-loading');
     progress_overlay.style.display = 'none';
     progress_overlay.style.opacity = 0;
     // Signal headless readiness (used by launch_render.mjs)
