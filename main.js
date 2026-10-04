@@ -4007,7 +4007,7 @@ function post_load_setup()
         pt.transparent = true;
         pt.depthWrite = false;
 
-        pathtracingRenderTarget = new WebGLRenderTarget(1, 1, {format: RGBAFormat, type: FloatType, colorSpace: LinearSRGBColorSpace});
+        pathtracingRenderTarget = new WebGLRenderTarget(1, 1, {format: RGBAFormat, type: FloatType, colorSpace: LinearSRGBColorSpace, minFilter: NearestFilter, magFilter: NearestFilter});
         pathtracedFinalQuad = new FullScreenQuad( new MeshBasicMaterial({map: pathtracingRenderTarget.texture}) );
     }
 

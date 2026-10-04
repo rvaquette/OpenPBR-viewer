@@ -649,20 +649,19 @@ void main()
     xorshift(rndSeed);
     rndSeed ^= uint(samples);
 
-    // Apply FIS to obtain pixel jitter about center in pixel units
-    const float filterRadius = 1.0;
-    float jx = 0.5 * filterRadius * sample_triangle_filter(rand(rndSeed));
-    float jy = 0.5 * filterRadius * sample_triangle_filter(rand(rndSeed));
-    vec2 pixel = frag + vec2(jx, jy);
+    vec2 jitter = vec2(sample_triangle_filter(rand(rndSeed)), sample_triangle_filter(rand(rndSeed)));
+    jitter /= resolution * 0.5;
+    vec2 screenPosition = 2.0 * frag / resolution - 1.0 + jitter;
 
-    // Get [-1, 1] normalized device coordinates,
-    vec2 ndc = -1.0 + 2.0*(pixel/resolution.xy);
-
-    // Compute primary camera ray in world-space
-    vec3 pW, dW;
-    ndcToCameraRay(ndc, invModelMatrix * cameraWorldMatrix, invProjectionMatrix,
-                    pW, dW);
-    dW = normalize(dW);
+    float scale = invProjectionMatrix[0][0];
+    screenPosition.y *= resolution.y / resolution.x * scale;
+    screenPosition.x *= scale;
+    vec3 cameraRight = cameraWorldMatrix[0].xyz;
+    vec3 cameraUp = cameraWorldMatrix[1].xyz;
+    vec3 cameraForward = -cameraWorldMatrix[2].xyz;
+    vec3 rayDirection = normalize(screenPosition.x * cameraRight + screenPosition.y * cameraUp + cameraForward);
+    vec3 pW = (invModelMatrix * vec4(cameraWorldMatrix[3].xyz, 1.0)).xyz;
+    vec3 dW = normalize((invModelMatrix * vec4(rayDirection, 0.0)).xyz);
 
     // Setup sun basis
     sunBasis = makeBasis(sunDir);
