@@ -217,8 +217,8 @@ bloc ouvert, refs inconnues et MTLX ambigu. Parsing distant avec doubles de serv
 seulement, jamais generateur distant. Passage : chaque directive supportee/adaptee/rejetee.
 
 ### 10. Charger les ressources localement [REQ-001, REQ-002, REQ-004, REQ-007]
-- [ ] T021 [Plan:10] Ajouter src/scene/referenceSceneAdapter.js et scene_url dans main.js, conserver scenes nommees.
-- [ ] T022 [Plan:10] Relier loaders geometrie utiles, generation MTLX LOCALE et envmap locale ; URLs relatives par ressource.
+- [x] T021 [Plan:10] Ajouter src/scene/referenceSceneAdapter.js et scene_url dans main.js, conserver scenes nommees. [Evidence: t021-t022-scene-loading.md ; ../../src/scene/referenceSceneAdapter.js ; ../../main.js]
+- [x] T022 [Plan:10] Relier loaders geometrie utiles, generation MTLX LOCALE et envmap locale ; URLs relatives par ressource. [Evidence: t021-t022-scene-loading.md ; ../../tools/mtlx-reference-alignment/reference-scene-adapter.test.mjs ; ../../artifacts/mtlx-reference-alignment/t021-t022-scene-url-raster-smoke.json]
 Controle navigateur : sous-dossier .scene/.mtlx/textures, glTF/GLB, overrides objets,
 meshes repetes et formats mesh requis supportes/rejetes explicitement ; 404/erreur
 generation/reloads concurrents. Passage : chargement atomique, bons IDs/comptes,

@@ -1,11 +1,36 @@
-task: T020
+task: T022
 date: '2026-10-05'
 status: completed
-kind: scene-parser-directive-policy
-runtime_changes: false
+kind: scene-url-resource-loading
+runtime_changes: true
 reference_renderer_executed: false
-evidence: [t019-t020-scene-parser.md, ../../src/scene/sceneLoader.js, ../../src/scene/package.json, ../../tools/mtlx-reference-alignment/scene-loader.test.mjs, scene-directives.json]
-next_task: T021
+evidence: [t021-t022-scene-loading.md, ../../src/scene/referenceSceneAdapter.js, ../../main.js, ../../launch_render.mjs, ../../tools/mtlx-reference-alignment/reference-scene-adapter.test.mjs, ../../artifacts/mtlx-reference-alignment/t021-t022-scene-url-raster-smoke.json]
+next_task: T023
+T021_T022_validation:
+  command: npm test
+  exit_code: 0
+  passed: 87
+  failed: 0
+  adapter_command: node --test tools/mtlx-reference-alignment/reference-scene-adapter.test.mjs
+  adapter_tests: 5
+  adapter_exit_code: 0
+  build_command: npm run build
+  build_exit_code: 0
+  headless_command: node launch_render.mjs
+  headless_mode: Rasterizer MTLX
+  renderer: Chrome-ANGLE-Vulkan-SwiftShader
+  requested_samples: 2
+  observed_samples: 2
+  resolution: 128x128
+  scene_status: loaded
+  shader_error: null
+  context_loss: null
+  scene_triangle_count: 46704
+  local_materialx_dispatch_bytes: 99972
+  local_environment: loaded
+  reference_renderer_executed: false
+  pathtracer_swiftshader: not-validated-compilation-did-not-reach-ready
+  not_claimed: [multiple_distinct_material_closures, non_gltf_mesh_formats, T023_camera, T025_lights, T027_renderer_options]
 T018_validation:
   command: npm test
   exit_code: 0

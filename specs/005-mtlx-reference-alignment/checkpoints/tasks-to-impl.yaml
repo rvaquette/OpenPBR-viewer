@@ -1,8 +1,8 @@
 status: partial
-scope: T001-T020
+scope: T001-T022
 stage_0_status: completed
 stage_0_acceptance: explicit-user-decision-2026-10-04
-runtime_changes: backend-selection-validation-only
+runtime_changes: T021-T022-scene-url-only
 tasks:
   T001:
     status: completed
@@ -227,6 +227,28 @@ tasks:
     disney_specular_witness: rejected
     reference_renderer_executed: false
     resources_loaded: false
+  T021:
+    status: completed
+    plan_item: 10
+    requirements: [REQ-001, REQ-002, REQ-004, REQ-007]
+    evidence: [../t021-t022-scene-loading.md, ../../../src/scene/referenceSceneAdapter.js, ../../../main.js]
+    validation: passed-87-tests-build-and-headless-scene-smoke
+    scene_url: supported
+    named_scenes_preserved: true
+    stale_loads: rejected-before-publication
+  T022:
+    status: completed
+    plan_item: 10
+    requirements: [REQ-001, REQ-002, REQ-004, REQ-007]
+    evidence: [../t021-t022-scene-loading.md, ../../../tools/mtlx-reference-alignment/reference-scene-adapter.test.mjs, ../../../artifacts/mtlx-reference-alignment/t021-t022-scene-url-raster-smoke.json, ../../../artifacts/mtlx-reference-alignment/t021-t022-scene-url-raster-smoke.png]
+    validation: passed-87-tests-build-5-adapter-tests-and-headless-raster-smoke
+    browser_smoke: rasterizer-mtlx-swiftshader-128x128-2spp
+    pathtracer_swiftshader: not-validated-compilation-did-not-reach-ready
+    local_materialx_dispatch: passed
+    local_environment: passed
+    unsupported_material_dispatch: fail-closed
+    unsupported_mesh_formats: fail-closed
+    camera_light_renderer_options: deferred-to-T023-T028
 blockers: []
 non_blocking_followups:
   - TS-and-asset-provenance-authorization
@@ -235,7 +257,7 @@ non_blocking_followups:
 resolved_blockers:
   - rt_hdr_small.tza-origin-version-sha256-license
 denoiser_weight_provenance: verified-local-and-published-archive
-next_task: T021
+next_task: T023
 stage_1_status: completed-capture-scope
 stage_2_status: completed
 stage_3_status: completed-CPU-BLAS
@@ -245,3 +267,4 @@ stage_6_status: completed-closest-hit-dormant
 stage_7_status: completed-local-shadow-filters
 stage_8_status: completed-material-hooks-variant-aware
 stage_9_status: completed-pure-scene-parser
+stage_10_status: completed-scene-url-resource-loading
