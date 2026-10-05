@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "defaults": {
+    "size": [256, 256],
+    "samples": {"smoke": 32, "baseline": 128},
+    "timeoutMs": 1500000,
+    "environment": "textures/envmaps/etzwihl_4k.jpg",
+    "referenceRoot": "D:/WebGL2/GLSL-PathTracer-JS"
+  },
+  "cases": [
+    {"id":"standard-shader-ball","target":"local","scene":"standard-shader-ball","tags":["geometry"]},
+    {"id":"glavenus","target":"local","scene":"glavenus","tags":["geometry","environment"]},
+    {"id":"terrain","target":"local","scene":"terrain","tags":["geometry","textures"]},
+    {"id":"bearded-man","target":"local","scene":"bearded-man","tags":["geometry","large-scene"]},
+    {"id":"disney-gold","target":"local","scene":"test-material-disney-gold","material":"mtlx-input/disney_principled_gold_test.mtlx","expectedColor":"warm","tags":["geometry","metal","color"]},
+    {"id":"blue-plastic","target":"local","scene":"standard-shader-ball","material":"mtlx-input/plastic/plastic.mtlx","expectedColor":"blue","tags":["gltf_pbr","color"]},
+    {"id":"open-pbr","target":"local","scene":"standard-shader-ball","material":"mtlx-defaults/open_pbr_default.mtlx","tags":["open_pbr_surface"]},
+    {"id":"standard-surface","target":"local","scene":"standard-shader-ball","material":"mtlx-defaults/standard_surface_default.mtlx","tags":["standard_surface"]},
+    {"id":"disney-principled","target":"local","scene":"standard-shader-ball","material":"mtlx-defaults/disney_principled_default.mtlx","tags":["disney_principled"]},
+    {"id":"gltf-pbr","target":"local","scene":"standard-shader-ball","material":"mtlx-defaults/gltf_pbr_default.mtlx","tags":["gltf_pbr"]},
+    {"id":"usd-preview","target":"local","scene":"standard-shader-ball","material":"mtlx-defaults/usd_preview_surface_default.mtlx","tags":["usd_preview_surface"]},
+    {"id":"normal-map","target":"local","scene":"standard-shader-ball","material":"mtlx-input/brick_atlas_path/brick_procedural.mtlx","resources":["textures/brick_normal.jpg","textures/brick_roughness.jpg","textures/brick_mask.jpg","textures/brick_base_gray.jpg","textures/brick_variation_mask.jpg","textures/brick_dirt_mask.jpg"],"tags":["normal-map","textures"]},
+    {"id":"anisotropy","target":"local","scene":"standard-shader-ball","material":"mtlx-input/metal_brushed/metal_brushed.mtlx","tags":["anisotropy"]},
+    {"id":"transmission","target":"local","scene":"standard-shader-ball","material":"mtlx-input/glass/glass.mtlx","tags":["transmission"]},
+    {"id":"thinwalled-film","target":"local","scene":"standard-shader-ball","material":"mtlx-input/open_pbr_soapbubble/open_pbr_soapbubble.mtlx","tags":["thinwalled","thin-film"]},
+    {"id":"volume","target":"local","scene":"standard-shader-ball","material":"mtlx-input/pearl/pearl.mtlx","tags":["volume","thin-film"]},
+    {"id":"reference-cornell","target":"reference","scene":"cornell_box_orig.scene","tags":["geometry","quad","non-mtlx"]},
+    {"id":"reference-sphere","target":"reference","scene":"cornell_box_sphere.scene","tags":["sphere-light","non-mtlx"]},
+    {"id":"reference-gold","target":"reference","scene":"test_material_disney_gold.scene","tags":["metal","quad","sphere-light","non-mtlx"]}
+  ]
+}

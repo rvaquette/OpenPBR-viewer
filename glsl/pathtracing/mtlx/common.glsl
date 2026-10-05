@@ -81,6 +81,32 @@ uniform int mtlxLightCount;
 uniform int mtlxMaterialParamCount;
 uniform sampler2D mtlxLightsTex;
 int mtlxMaterialVariant = 0;
+#ifdef REFERENCE_BVH_ENABLED
+uniform int mtlxReferenceMaterialRegistryCount;
+uniform int mtlxReferenceMaterialRegistryRowOffset;
+int referenceLocalMaterialID = -1;
+
+bool mtlxResolveReferenceMaterial(int sceneMaterialID, out int materialKind, out int localMaterialID, out int parameterVariant)
+{
+    materialKind = -1;
+    localMaterialID = -1;
+    parameterVariant = 0;
+    for (int entry = 0; entry < 64; entry++)
+    {
+        if (entry >= mtlxReferenceMaterialRegistryCount)
+            break;
+        vec4 binding = texelFetch(mtlxLightsTex, ivec2(0, mtlxReferenceMaterialRegistryRowOffset + entry), 0);
+        if (int(binding.x) == sceneMaterialID)
+        {
+            materialKind = int(binding.y);
+            localMaterialID = int(binding.z);
+            parameterVariant = int(binding.w);
+            return true;
+        }
+    }
+    return false;
+}
+#endif
 
 vec4 mtlxGetMaterialParam(int index)
 {

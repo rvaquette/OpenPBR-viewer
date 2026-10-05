@@ -3,6 +3,11 @@
 // fall back to the SPA's index.html, injecting HTML into the GLSL source).
 import glsl_mtlx_route_common from './glsl/pathtracing/mtlx/common.glsl?raw';
 import glsl_mtlx_route_pathtracer from './glsl/pathtracing/mtlx/pathtracer.glsl?raw';
+import glsl_mtlx_reference_closest_hit from './glsl/pathtracing/mtlx/reference/closest_hit.glsl?raw';
+import glsl_mtlx_reference_closest_hit_abi from './glsl/pathtracing/mtlx/reference/closest_hit_abi.glsl?raw';
+import glsl_mtlx_reference_closest_hit_mtlx from './glsl/pathtracing/mtlx/reference/closest_hit_mtlx.glsl?raw';
+import glsl_mtlx_reference_any_hit from './glsl/pathtracing/mtlx/reference/anyhit.glsl?raw';
+import glsl_mtlx_reference_any_hit_mtlx from './glsl/pathtracing/mtlx/reference/anyhit_mtlx.glsl?raw';
 import glsl_rasterization_mtlx_common from './glsl/rasterization/mtlx/common.glsl?raw';
 import glsl_rasterization_mtlx_rasterizer from './glsl/rasterization/mtlx/rasterizer.glsl?raw';
 
@@ -14,6 +19,11 @@ import glsl_rasterization_neutral_vert from './glsl/rasterization/legacy/neutral
 export {
     glsl_mtlx_route_common,
     glsl_mtlx_route_pathtracer,
+    glsl_mtlx_reference_closest_hit,
+    glsl_mtlx_reference_closest_hit_abi,
+    glsl_mtlx_reference_closest_hit_mtlx,
+    glsl_mtlx_reference_any_hit,
+    glsl_mtlx_reference_any_hit_mtlx,
     glsl_rasterization_mtlx_common,
     glsl_rasterization_mtlx_rasterizer,
     glsl_rasterization_openpbr_frag,

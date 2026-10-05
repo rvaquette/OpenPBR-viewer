@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "task": "T005",
+  "referenceRoot": "D:\\WebGL2\\GLSL-PathTracer-JS",
+  "referenceRevision": "f9cf1dd22e5538c7885807a3f8fc6d88d69dbe44",
+  "files": [
+    {
+      "source": "src/bvh/bbox.ts",
+      "target": "bvh/bbox.ts",
+      "sourceSha256": "7800495505574207fa6f379aaf05436cc2bbfa6e36b1187c92bd628983d30214",
+      "localSha256": "7800495505574207fa6f379aaf05436cc2bbfa6e36b1187c92bd628983d30214",
+      "adaptation": "none"
+    },
+    {
+      "source": "src/bvh/bvh.ts",
+      "target": "bvh/bvh.ts",
+      "sourceSha256": "69c1098ec447e321a4acda04f7f2a80254d1b12098868557eb9a84e02a8a0cc3",
+      "localSha256": "69c1098ec447e321a4acda04f7f2a80254d1b12098868557eb9a84e02a8a0cc3",
+      "adaptation": "none"
+    },
+    {
+      "source": "src/bvh/splitBvh.ts",
+      "target": "bvh/splitBvh.ts",
+      "sourceSha256": "b2ce6a9a313b75a446881089790c12b345be69cd0aad50762f85091bf025b08d",
+      "localSha256": "b2ce6a9a313b75a446881089790c12b345be69cd0aad50762f85091bf025b08d",
+      "adaptation": "none"
+    },
+    {
+      "source": "src/bvh/bvhTranslator.ts",
+      "target": "bvh/bvhTranslator.ts",
+      "sourceSha256": "1e74bbc9ccca4ab324b826553d768815913e84008c2ec5775caf423277e9e49f",
+      "localSha256": "6b5c366a58c45504b8b13f4fc67a32c20ad9164565b0295a4d97178955444ee2",
+      "adaptation": "mesh-import-type-only"
+    },
+    {
+      "source": "src/math/vec3.ts",
+      "target": "math/vec3.ts",
+      "sourceSha256": "0e8e2b761f9ff63f020eeae89698d1d6c3a20cdbba361c70e56f6f77a82f685f",
+      "localSha256": "0e8e2b761f9ff63f020eeae89698d1d6c3a20cdbba361c70e56f6f77a82f685f",
+      "adaptation": "none"
+    },
+    {
+      "source": "src/math/vec4.ts",
+      "target": "math/vec4.ts",
+      "sourceSha256": "77b020512143e2286c7a21de4bacd8144e8c5bdcef349645540add3fa64be420",
+      "localSha256": "77b020512143e2286c7a21de4bacd8144e8c5bdcef349645540add3fa64be420",
+      "adaptation": "none"
+    }
+  ],
+  "algorithmChanges": false,
+  "backendActivated": false,
+  "typeBoundary": "core/mesh.ts defines only the fields consumed by BvhTranslator",
+  "notices": {
+    "file": "UPSTREAM-NOTICES.txt",
+    "sha256": "ff7f9e1ca3ae401f4575ecf9160c2b25fca26e6b3dfea30e87dada25c0f0486b",
+    "sourceCppRevision": "291c1fdc3f97b2a2602c946b41cecca9c3092af7"
+  }
+}

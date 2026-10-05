@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "status": "upstream-origin-and-license-verified",
+  "userAttribution": "The TS BVH is inspired by the RadeonRays C++ sources in the local GLSL-PathTracer repository.",
+  "cppRepositoryRoot": "D:/WebGL2/GLSL-PathTracer",
+  "cppRepositoryUrl": "https://github.com/knightcrawler25/GLSL-PathTracer.git",
+  "cppRepositoryRevision": "291c1fdc3f97b2a2602c946b41cecca9c3092af7",
+  "cppRepositoryBranch": "master",
+  "radeonRaysOriginalUrl": "https://github.com/GPUOpen-LibrariesAndSDKs/RadeonRays_SDK",
+  "upstreamLicense": "MIT",
+  "upstreamCopyright": "Copyright (c) 2016 Advanced Micro Devices, Inc. All rights reserved.",
+  "hostRepositoryLicense": "MIT - Asif Ali 2019",
+  "retentionPolicy": "Preserve the AMD copyright and complete MIT permission notice for derived BVH code; preserve applicable Asif Ali and TS adaptation notices separately.",
+  "runtimeChanges": false,
+  "algorithmEquivalenceProven": false,
+  "scope": ["bbox.ts", "bvh.ts", "splitBvh.ts", "bvhTranslator.ts"],
+  "excluded": ["asset-licenses", "general-math-module-attribution", "denoiser-bundle-notices"],
+  "mappings": [
+    {"ts": "src/bvh/bbox.ts", "cpp": ["thirdparty/RadeonRays/bbox.h", "thirdparty/RadeonRays/bbox.cpp"], "correspondence": "pmin/pmax, grow, center, extents, maxdim, surface area"},
+    {"ts": "src/bvh/bvh.ts", "cpp": ["thirdparty/RadeonRays/bvh.h", "thirdparty/RadeonRays/bvh.cpp"], "correspondence": "traversal cost, bins, usesah, SplitRequest, SahSplit, primitive permutation"},
+    {"ts": "src/bvh/splitBvh.ts", "cpp": ["thirdparty/RadeonRays/split_bvh.h", "thirdparty/RadeonRays/split_bvh.cpp"], "correspondence": "SplitBvh, PrimRef, object/spatial splits, maximum depth and extra reference budget"},
+    {"ts": "src/bvh/bvhTranslator.ts", "cpp": ["thirdparty/RadeonRays/bvh_translator.h", "thirdparty/RadeonRays/bvh_translator.cpp"], "correspondence": "BLAS/TLAS node flattening, global triangle offsets, LRLeaf encoding and topLevelIndex"}
+  ],
+  "cppSourceHashes": {
+    "thirdparty/RadeonRays/bbox.cpp": "355327b6904e95f8efb660b7e657c925a398b664edd8bfd108ab42e0dec218a6",
+    "thirdparty/RadeonRays/bbox.h": "2f2a72a4a8be23f2c3a648bb61b1ebc0db5607c801eb72b71271c7c27c900dd1",
+    "thirdparty/RadeonRays/bvh.cpp": "19f22fd165c28273cbd8acbef3445023e4a59c21c292770c0923c57138d4b089",
+    "thirdparty/RadeonRays/bvh.h": "da5a880b599f4e86ab6f310b9d74edcb7dd026fdd459b37708cd6bf5a5bff7b7",
+    "thirdparty/RadeonRays/bvh_translator.cpp": "96f1aec43b9192a4a0c274335b63bec8e8765677d62756b2c7e9502d9bfb9f52",
+    "thirdparty/RadeonRays/bvh_translator.h": "1bf4e0675de58f793ab333989f7ddebaef43f160f4516eb8d0f2e9868b628e71",
+    "thirdparty/RadeonRays/split_bvh.cpp": "c7b5617580c38071fb33f31f47d0896894baa658cc71f5ccfe3271eb739b6113",
+    "thirdparty/RadeonRays/split_bvh.h": "b72957395ca8e96330446d5ed2727f138221215c5c0d085bad726d5e5a30d854"
+  }
+}

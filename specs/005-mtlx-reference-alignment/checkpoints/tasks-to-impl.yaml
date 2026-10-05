@@ -1,0 +1,214 @@
+status: partial
+scope: T001-T017
+stage_0_status: completed
+stage_0_acceptance: explicit-user-decision-2026-10-04
+runtime_changes: backend-selection-validation-only
+tasks:
+  T001:
+    status: completed
+    plan_item: 0
+    requirements: [REQ-001, REQ-002, REQ-003, REQ-004, REQ-005, REQ-006, REQ-007, REQ-008]
+    evidence: [../research-t001.md, ../validate-t001.mjs]
+    validation: passed
+  T002:
+    status: completed-documentation
+    plan_item: 0
+    requirements: [REQ-001, REQ-002, REQ-003, REQ-004, REQ-005, REQ-006, REQ-007, REQ-008]
+    evidence: [../contracts-t002.md, ../scene-directives.json, ../validate-t002.mjs]
+    validation: passed-static-only
+  T003:
+    status: completed
+    plan_item: 1
+    requirements: [REQ-001, REQ-007, REQ-008]
+    evidence: [../../../tools/mtlx-reference-alignment/README.md, ../../../tools/mtlx-reference-alignment/run.test.mjs]
+    validation: passed-5-tests-build-and-2-local-smokes
+  T004:
+    status: completed-capture-scope
+    local_captures: 16
+    resolution: 256x256
+    samples: 128
+    reference_captures: 3
+    blocker: resolved
+    diagnostic: ../../../artifacts/mtlx-reference-alignment/t004-reference-diagnostic-fastfail/report.json
+    runner_tests: passed-9
+    validation: passed-baseline-validator
+    evidence: [../t004-baseline.md, ../../../artifacts/mtlx-reference-alignment/01-baseline/baseline-manifest.json]
+    deferred_by_user:
+      date: '2026-10-05'
+      checks: [linear-HDR-low-SPP-denoiser-input-and-denoised-output]
+      target_stages: [14, 15]
+  T005:
+    status: completed
+    plan_item: 2
+    requirements: [REQ-001, REQ-002, REQ-007]
+    evidence: [../../../src/bvh/reference/SOURCES.json, ../../../src/bvh/reference/README.md, ../../../tools/mtlx-reference-alignment/reference-import.test.mjs]
+    validation: passed-4-tests-and-build
+    imported_upstream_files: 6
+    algorithm_changes: false
+    backend_activated: false
+  T006:
+    status: completed
+    plan_item: 2
+    requirements: [REQ-001, REQ-002, REQ-007]
+    evidence: [../t006-runner-backend.md, ../../../tools/mtlx-reference-alignment/backend.test.mjs, ../../../tools/mtlx-reference-alignment/reference-runtime.test.ts]
+    validation: passed-19-npm-tests-build-smoke-and-expected-reference-rejection
+    backend_activated: threejs
+    reference_ready: false
+  T007:
+    status: completed
+    plan_item: 3
+    requirements: [REQ-002, REQ-007]
+    evidence: [../t007-geometry-adapter.md, ../../../src/bvh/referenceSceneAdapter.js, ../../../tools/mtlx-reference-alignment/reference-scene-adapter.test.ts]
+    validation: passed-26-tests-and-build
+    adapter_tests: 7
+    transforms_applied: false
+    BLAS_built: false
+    reference_ready: false
+  T008:
+    status: completed
+    plan_item: 3
+    requirements: [REQ-002, REQ-007]
+    evidence: [../t008-blas.md, ../../../src/bvh/referenceBlas.js, ../../../tools/mtlx-reference-alignment/reference-blas.test.ts]
+    validation: passed-35-tests-and-build
+    BLAS_built: CPU-only
+    structural_tests: 9
+    upstream_snapshots: identical
+    reference_ready: false
+  T009:
+    status: completed
+    plan_item: 4
+    requirements: [REQ-002, REQ-004, REQ-007]
+    evidence: [../t009-tlas.md, ../../../src/bvh/referenceScene.js, ../../../tools/mtlx-reference-alignment/reference-scene.test.ts]
+    validation: passed-43-tests-and-build
+    scene_tests: 8
+    TLAS_built: CPU-only
+    translator: upstream-process-and-updateTLAS
+    reference_ready: false
+  T010:
+    status: completed
+    plan_item: 4
+    requirements: [REQ-002, REQ-004, REQ-007]
+    evidence: [../t010-instance-cycles.md, ../../../tools/mtlx-reference-alignment/reference-scene.test.ts]
+    validation: passed-49-tests-and-build
+    added_tests: 6
+    same_cardinality_updates: 64
+    cardinality_transitions: 40
+    complete_A_B_A_cycles: 32
+    upstream_root_reuse_defect: reproduced-and-avoided-by-fresh-translator
+    reference_ready: false
+  T011:
+    status: completed
+    plan_item: 5
+    requirements: [REQ-002, REQ-003, REQ-007]
+    evidence: [../t011-gpu-textures.md, ../../../src/bvh/referenceGpuAdapter.js, ../../../tools/mtlx-reference-alignment/reference-gpu-adapter.test.ts, ../../../artifacts/mtlx-reference-alignment/t011-upload-smoke.json]
+    validation: passed-55-tests-build-and-SwiftShader-upload-smoke
+    adapter_tests: 6
+    physical_format: RGBA32F-RGBA32I
+    logical_RGB_ABI: preserved
+    format_acceptance: explicit-user-decision-2026-10-05
+    GPU_readback: false
+    reference_ready: false
+  T012:
+    status: completed
+    plan_item: 5
+    requirements: [REQ-002, REQ-003, REQ-007]
+    evidence: [../t012-gpu-readback.md, ../../../tools/mtlx-reference-alignment/gpu-readback-probe.mjs, ../../../artifacts/mtlx-reference-alignment/t012-gpu-readback.json]
+    validation: passed-152-texel-WebGL2-readback-55-tests-and-build
+    physical_texels_read: 152
+    buffers: [BVH, vertexIndicesTex, verticesTex, normalsTex, transformsTex]
+    every_buffer_crossed_row: true
+    integer_sampler: isampler2D
+    precision_boundary: max-exact-ID-accepted-above-rejected
+    max_texture_and_sampler_limits: passed
+    GL_errors: 0
+    renderer: Chrome-ANGLE-Vulkan-SwiftShader
+    reference_ready: false
+  T013:
+    status: completed
+    plan_item: 6
+    requirements: [REQ-001, REQ-003, REQ-007]
+    evidence: [../t013-closest-hit-glsl.md, ../../../glsl/pathtracing/mtlx/reference/closest_hit.glsl, ../../../tools/mtlx-reference-alignment/reference-closest-hit.test.mjs, ../../../tools/mtlx-reference-alignment/closest-hit-compile-smoke.mjs, ../../../artifacts/mtlx-reference-alignment/t013-closest-hit-compile.json]
+    upstream_sha256: 864af40b7f85ae4f08c4207231c286c816f41805552f3d183543b17ef329b70b
+    byte_identical: true
+    MIT_notice_preserved: true
+    raw_source_export: passed
+    isolated_ESSL300_compile_link: passed
+    runtime_trace_integration: false
+    reference_ready: false
+  T014:
+    status: completed
+    plan_item: 6
+    requirements: [REQ-001, REQ-003, REQ-007]
+    evidence: [../t014-closest-hit-trace.md, ../../../glsl/pathtracing/mtlx/pathtracer.glsl, ../../../glsl/pathtracing/mtlx/reference/closest_hit_abi.glsl, ../../../glsl/pathtracing/mtlx/reference/closest_hit_mtlx.glsl, ../../../tools/mtlx-reference-alignment/reference-trace-integration.test.mjs, ../../../tools/mtlx-reference-alignment/reference-ray-oracle.mjs, ../../../artifacts/mtlx-reference-alignment/t014-reference-ray-oracle.json, ../../../artifacts/mtlx-reference-alignment/t014-default-branch-smoke.json]
+    validation: passed-10000-ray-WebGL2-CPU-oracle-61-tests-build
+    ray_count: 10000
+    hit_mismatches: 0
+    value_mismatches: 0
+    max_absolute_error: 0.00006289907346978402
+    outputs: [t, maxDistance, P, Ng, Ns, Ts, barycentric, UV, materialID]
+    edge_barycentric_tolerance: 1.0e-6
+    max_stack_requirement: 4
+    stack_capacity: 64
+    combined_depth_preflight: reject-above-capacity-before-upload
+    reference_macro_runtime_enabled: false
+    default_threejs_branch_smoke: passed-64x64-2spp
+    reference_ready: false
+  T015:
+    status: completed
+    plan_item: 7
+    requirements: [REQ-001, REQ-003, REQ-007]
+    evidence: [../t015-any-hit-shadow.md, ../../../glsl/pathtracing/mtlx/reference/anyhit.glsl, ../../../glsl/pathtracing/mtlx/reference/anyhit_mtlx.glsl, ../../../tools/mtlx-reference-alignment/reference-trace-integration.test.mjs, ../../../tools/mtlx-reference-alignment/reference-ray-oracle.mjs, ../../../artifacts/mtlx-reference-alignment/t015-shadow-oracle.json, ../../../artifacts/mtlx-reference-alignment/t015-default-branch-smoke.json]
+    upstream_sha256: e4ff7cdd408cb550ebddd4e8d4baacc33bd2efdda8b906e2ff3bf7ca9cde915d
+    byte_identical: true
+    MIT_notice_preserved: true
+    any_hit_mismatches: 0
+    trace_shadow_mismatches: 0
+    rays: 10000
+    truncated_segment_cases: 748
+    runtime_macro_enabled: false
+    default_threejs_smoke: passed-64x64-2spp
+    local_thinwalled_policy: verified-in-T016
+    reference_materialID_mapping: completed-in-T017
+    reference_ready: false
+  T016:
+    status: completed
+    plan_item: 7
+    requirements: [REQ-001, REQ-003, REQ-007]
+    evidence: [../t016-local-shadow-filters.md, ../../../tools/mtlx-reference-alignment/shadow-filter.test.mjs, ../../../tools/mtlx-reference-alignment/reference-trace-integration.test.mjs, ../../../artifacts/mtlx-reference-alignment/t015-shadow-oracle.json, ../../../artifacts/mtlx-reference-alignment/t016-default-branch-smoke.json]
+    validation: passed-six-policy-cases-10000-rays-63-tests-build
+    shadow_filter_cases: [miss, opaque-openpbr, thinwalled-openpbr, nonthin-openpbr, props, ground]
+    forbidden_alpha_sources: [OPT_ALPHA_TEST, materialsTex, textureMapsArrayTex]
+    reference_materialID_mapping: deferred-to-T017
+    reference_macro_runtime_enabled: false
+    reference_ready: false
+  T017:
+    status: completed
+    plan_item: 8
+    requirements: [REQ-001, REQ-004, REQ-007]
+    evidence: [../t017-materialid-registry.md, ../../../src/mtlx/referenceMaterialRegistry.js, ../../../tools/mtlx-reference-alignment/reference-material-registry.test.mjs, ../../../tools/mtlx-reference-alignment/reference-material-registration-smoke.mjs, ../../../artifacts/mtlx-reference-alignment/t017-material-registration-smoke.json]
+    registry_capacity: 64
+    mapping: sceneMaterialID-to-kind-localMaterialID-parameterVariant
+    distinct_scene_ids_preserved: true
+    unknown_ids: fail-closed
+    dispatch_mismatch: fail-closed
+    parameter_variants: active-default-and-explicit-values
+    GPU_lookup: ESSL-texelFetch-tested
+    host_DataTexture_rows: runtime-smoke-verified
+    reference_macro_runtime_enabled: false
+    reference_ready: false
+blockers: []
+non_blocking_followups:
+  - TS-and-asset-provenance-authorization
+  - complete-denoiser-bundle-license-notices
+resolved_blockers:
+  - rt_hdr_small.tza-origin-version-sha256-license
+denoiser_weight_provenance: verified-local-and-published-archive
+next_task: T018
+stage_1_status: completed-capture-scope
+stage_2_status: completed
+stage_3_status: completed-CPU-BLAS
+stage_4_status: completed-CPU-instances
+stage_5_status: completed-GPU-texture-readback
+stage_6_status: completed-closest-hit-dormant
+stage_7_status: completed-local-shadow-filters
+stage_8_status: partial-registry-complete-awaiting-T018-shading-hooks

@@ -18,6 +18,10 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { loadEnvironmentTexture } from './src/envmap/envLoader.js';
 import { loadNativeTexture } from './src/textures/textureLoader.js';
+import { DEFAULT_BVH_BACKEND, AVAILABLE_BVH_BACKENDS, resolveBvhBackend } from './src/bvh/backend.mjs';
+import { assertReferenceMaterialCoverage, createReferenceMaterialRegistry } from './src/mtlx/referenceMaterialRegistry.js';
+import { emitMtlxMaterialValueFunction as emitVariantMtlxMaterialValueFunction,
+    emitMtlxOpenPbrOpaqueFunction as emitVariantMtlxOpenPbrOpaqueFunction } from './src/mtlx/referenceMaterialHooks.js';
 import { applyMtlxDisplacement } from './src/mtlx/displacement.js';
 import { loadMtlxArchive } from './src/mtlx/archive.js';
 import { adaptMtlxTextureShader, buildMtlxTextureAtlases } from './src/mtlx/textureAtlas.js';
@@ -39,6 +43,9 @@ import { GUI } from './node_modules/lil-gui/dist/lil-gui.esm.js';
 import {
     glsl_mtlx_route_common,
     glsl_mtlx_route_pathtracer,
+    glsl_mtlx_reference_closest_hit_abi,
+    glsl_mtlx_reference_closest_hit_mtlx,
+    glsl_mtlx_reference_any_hit_mtlx,
     glsl_rasterization_mtlx_common,
     glsl_rasterization_mtlx_rasterizer,
     glsl_rasterization_openpbr_frag,
@@ -85,6 +92,7 @@ async function showLoadingProgress(message)
 
 function buildBvh(geometry)
 {
+    resolveBvhBackend(params.bvh_backend, params.renderer_mode);
     setGpuDebugStage('building-bvh');
     const bvh = new MeshBVH(geometry, { strategy: SAH });
     setGpuDebugStage('bvh-built');
@@ -212,6 +220,7 @@ var params =
 
     scene_name:                         'shader-ball',
     renderer_mode:                      'Rasterizer MTLX',
+    bvh_backend:                        DEFAULT_BVH_BACKEND,
     mtlx_directory:                     '',
     mtlx_material:                      '',
     paused:                             true,   // pathtracer accumulation starts paused; toggle in GUI or ?paused=false
@@ -321,6 +330,8 @@ var mtlxDefaultParameterValues = new Map();
 var activeMtlxMaterialText = null;
 var mtlxParameterUpdateQueue = Promise.resolve();
 var mtlxRouteLightsTexture = null;
+var mtlxRouteReferenceMaterialRegistry = null;
+var mtlxRouteActiveMaterialKey = 'default-material';
 var activeMtlxArchiveSource = null;
 var activeMtlxArchiveSelection = null;
 var mtlxArchiveDisplacement = null;
@@ -730,12 +741,52 @@ function extractMtlxLightOverrides(search)
 // when the light count changes; only mtlxLightCount (scalar) still uses defines.
 const MTLX_LIGHT_TEXELS_PER_LIGHT = 6;
 
+function mtlxReferenceParameterVariantCount()
+{
+    const maxVariant = Math.max(1, ...(mtlxRouteReferenceMaterialRegistry?.entries || []).map((entry) => entry.parameterVariant));
+    return maxVariant + 1;
+}
+
+function validateReferenceMaterialParameters(registry, parameterDescriptors = mtlxRouteParamDescriptors)
+{
+    const valuesByVariant = new Map();
+    for (const entry of registry.entries) {
+        if (entry.kind !== 'openpbr') continue;
+        if (entry.parameterVariant < 2) {
+            if (entry.parameterValues.length !== 0)
+                throw new Error(`REFERENCE_MATERIAL_PARAMETERS_UNEXPECTED: variant ${entry.parameterVariant} uses host-owned values`);
+            continue;
+        }
+        if (entry.parameterValues.length !== parameterDescriptors.length || parameterDescriptors.length === 0)
+            throw new Error(`REFERENCE_MATERIAL_PARAMETERS_INVALID: scene material ${entry.sceneMaterialID} must provide ${parameterDescriptors.length} values`);
+        entry.parameterValues.forEach((value, index) => {
+            const descriptor = parameterDescriptors[index];
+            const expectedComponents = Number(descriptor.type.match(/^vec([234])$/)?.[1] || 1);
+            const components = Array.isArray(value) ? value : [value];
+            const validComponent = (component) => descriptor.type === 'bool'
+                ? typeof component === 'boolean' || component === 0 || component === 1
+                : descriptor.type === 'int' ? Number.isInteger(component)
+                    : typeof component === 'number' && Number.isFinite(component);
+            if (components.length !== expectedComponents || components.some((component) => !validComponent(component)))
+                throw new Error(`REFERENCE_MATERIAL_PARAMETERS_INVALID: ${descriptor.name} on scene material ${entry.sceneMaterialID}`);
+        });
+        const serialized = JSON.stringify(entry.parameterValues);
+        const previous = valuesByVariant.get(entry.parameterVariant);
+        if (previous !== undefined && previous !== serialized)
+            throw new Error(`REFERENCE_MATERIAL_VARIANT_CONFLICT: parameter variant ${entry.parameterVariant} has multiple value sets`);
+        valuesByVariant.set(entry.parameterVariant, serialized);
+    }
+}
+
 function createMtlxLightsTexture()
 {
     const lights = mtlxRouteLights;
     const parameters = mtlxRouteParamDescriptors;
+    const registryEntries = mtlxRouteReferenceMaterialRegistry?.entries || [];
     const parameterRowOffset = Math.max(1, lights.length);
-    const height = parameterRowOffset + parameters.length * 2;
+    const variantCount = mtlxReferenceParameterVariantCount();
+    const registryRowOffset = parameterRowOffset + parameters.length * variantCount;
+    const height = registryRowOffset + registryEntries.length;
     const data = new Float32Array(MTLX_LIGHT_TEXELS_PER_LIGHT * height * 4);
     lights.forEach((l, i) => {
         const base = i * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
@@ -756,6 +807,25 @@ function createMtlxLightsTexture()
             });
         }
     });
+    const parameterValuesByVariant = new Map(registryEntries
+        .filter((entry) => entry.kind === 'openpbr' && entry.parameterVariant >= 2)
+        .map((entry) => [entry.parameterVariant, entry.parameterValues]));
+    for (const [variant, values] of parameterValuesByVariant) {
+        values.forEach((value, index) => {
+            const base = (parameterRowOffset + variant * parameters.length + index) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
+            const components = Array.isArray(value) ? value : [value];
+            components.forEach((component, componentIndex) => {
+                if (componentIndex < 4) data[base + componentIndex] = typeof component === 'boolean' ? Number(component) : Number(component);
+            });
+        });
+    }
+    registryEntries.forEach((entry, index) => {
+        const base = (registryRowOffset + index) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
+        data[base] = entry.sceneMaterialID;
+        data[base + 1] = entry.kindID;
+        data[base + 2] = entry.localMaterialID;
+        data[base + 3] = entry.parameterVariant;
+    });
     mtlxRouteLightsTexture = new DataTexture(data, MTLX_LIGHT_TEXELS_PER_LIGHT, height, RGBAFormat, FloatType);
     mtlxRouteLightsTexture.minFilter = NearestFilter;
     mtlxRouteLightsTexture.magFilter = NearestFilter;
@@ -766,12 +836,63 @@ function createMtlxLightsTexture()
 
 function createMtlxLightUniforms()
 {
+    const parameterRowOffset = Math.max(1, mtlxRouteLights.length) +
+        mtlxRouteParamDescriptors.length * mtlxReferenceParameterVariantCount();
     return {
         mtlxLightCount: { value: mtlxRouteLights.length },
         mtlxMaterialParamCount: { value: mtlxRouteParamDescriptors.length },
+        mtlxReferenceMaterialRegistryCount: { value: mtlxRouteReferenceMaterialRegistry?.entries.length || 0 },
+        mtlxReferenceMaterialRegistryRowOffset: { value: parameterRowOffset + mtlxRouteParamDescriptors.length * 2 },
         mtlxLightsTex:  { value: createMtlxLightsTexture() },
     };
 }
+
+function registerReferenceMaterialRegistry(scene, records)
+{
+    if (params.renderer_mode !== 'Pathtracer MTLX')
+        throw new Error('REFERENCE_MATERIAL_ROUTE_UNSUPPORTED: registry is only consumed by Pathtracer MTLX');
+    const registry = createReferenceMaterialRegistry(records, { activeMaterialKey:mtlxRouteActiveMaterialKey });
+    assertReferenceMaterialCoverage(scene, registry);
+    validateReferenceMaterialParameters(registry);
+    const previousTexture = mtlxRouteLightsTexture;
+    mtlxRouteReferenceMaterialRegistry = registry;
+    const texture = createMtlxLightsTexture();
+    if (pathtracedMaterial?.uniforms?.mtlxLightsTex) {
+        pathtracedMaterial.uniforms.mtlxLightsTex.value = texture;
+        pathtracedMaterial.uniforms.mtlxReferenceMaterialRegistryCount.value = registry.entries.length;
+        pathtracedMaterial.uniforms.mtlxReferenceMaterialRegistryRowOffset.value =
+            Math.max(1, mtlxRouteLights.length) + mtlxRouteParamDescriptors.length * mtlxReferenceParameterVariantCount();
+    }
+    if (previousTexture && previousTexture !== texture) previousTexture.dispose();
+    resetSamples();
+    const rowOffset = Math.max(1, mtlxRouteLights.length) +
+        mtlxRouteParamDescriptors.length * mtlxReferenceParameterVariantCount();
+    const parameterRowOffset = Math.max(1, mtlxRouteLights.length);
+    const parameterVariants = [...new Set(registry.entries.filter((entry) => entry.kind === 'openpbr')
+        .map((entry) => entry.parameterVariant))];
+    const parameterRows = Object.fromEntries(parameterVariants.map((variant) => [variant,
+        Object.fromEntries(mtlxRouteParamDescriptors.map((parameter, index) => {
+            const offset = (parameterRowOffset + variant * mtlxRouteParamDescriptors.length + index) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
+            return [parameter.name, Array.from(texture.image.data.slice(offset, offset + 4))];
+        }))]));
+    return Object.freeze({
+        entries:registry.entries,
+        count:registry.entries.length,
+        rowOffset,
+        parameterCount:mtlxRouteParamDescriptors.length,
+        parameterNames:mtlxRouteParamDescriptors.map((parameter) => parameter.name),
+        parameterTypes:mtlxRouteParamDescriptors.map((parameter) => parameter.type),
+        hiddenParameterCount:mtlxRouteParamDescriptors.filter((parameter) => parameter.hidden).length,
+        activeMaterialKey:mtlxRouteActiveMaterialKey,
+        parameterRows,
+        packedRecords:registry.entries.map((_entry, index) => Array.from(texture.image.data.slice(
+            (rowOffset + index) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4,
+            (rowOffset + index) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4 + 4))),
+    });
+}
+
+if (typeof window !== 'undefined')
+    window.__openpbrRegisterReferenceMaterialRegistry = registerReferenceMaterialRegistry;
 
 function createMtlxParameterUniforms()
 {
@@ -936,10 +1057,6 @@ function bindMtlxParametersToTexture(glsl, mtlxText, materialKey)
             continue;
         }
         const [, , type, name, expression] = declaration;
-        if (!metadata.has(name)) {
-            retainedLines.push(line);
-            continue;
-        }
         const value = parseMtlxParameterDefault(type, expression);
         if (value === null) {
             retainedLines.push(line);
@@ -957,6 +1074,8 @@ function bindMtlxParametersToTexture(glsl, mtlxText, materialKey)
             uiType: info.type || '',
             uiName: info.name || formatMtlxParameterLabel(name),
             uiFolder: info.folder || 'Surface',
+            hidden: !metadata.has(name),
+            tableBacked: true,
             min: Number.isFinite(info.min) ? info.min : null,
             max: Number.isFinite(info.max) ? info.max : null,
             step: Number.isFinite(info.step) ? info.step : null,
@@ -1337,12 +1456,13 @@ function summarizeMtlxRouteMaterialParams(p)
 
 function emitMtlxMaterialValueFunction(type, name, key, defaultValue)
 {
-    const value = mtlxRouteMaterialSummary[key] ?? defaultValue;
-    if (type === 'vec3') {
-        const v = Array.isArray(value) ? value : defaultValue;
-        return `vec3 ${name}() { return vec3(${Number(v[0]).toFixed(8)}, ${Number(v[1]).toFixed(8)}, ${Number(v[2]).toFixed(8)}); }`;
-    }
-    return `${type} ${name}() { return ${type === 'bool' ? Boolean(value) : Number(value).toFixed(8)}; }`;
+    return emitVariantMtlxMaterialValueFunction(type, name, key,
+        mtlxRouteMaterialSummary[key] ?? defaultValue, mtlxRouteParamDescriptors);
+}
+
+function emitMtlxOpenPbrOpaqueFunction()
+{
+    return emitVariantMtlxOpenPbrOpaqueFunction(mtlxRouteMaterialSummary, mtlxRouteParamDescriptors);
 }
 
 // Assemble the MTLX route fragment: the generated per-material dispatch
@@ -1372,7 +1492,7 @@ vec3 mtlx_neutral_raster_color(in vec3 pW, in Basis basis) {
 ${emitRasterGeneratedInputAssignments('')}
     return mtlxNeutralRasterMain().rgb;
 }
-${emitMtlxMaterialValueFunction('bool', 'mtlx_openpbr_is_opaque', 'opaque', true)}
+${emitMtlxOpenPbrOpaqueFunction()}
 ${emitMtlxMaterialValueFunction('bool', 'mtlx_openpbr_is_thinwalled', 'thinWalled', false)}
 ` : `
 vec3 mtlx_openpbr_bsdf_evaluate(in vec3 pW, in Basis basis, in vec3 winputL, in vec3 woutputL, inout float pdf_woutputL) {
@@ -1410,7 +1530,7 @@ vec3 mtlx_openpbr_emission_at(in vec3 pW, in Basis basis) {
     g_ptClosureType = CLOSURE_TYPE_EMISSION;
     return mtlxHostEvalSurface().color;
 }
-${emitMtlxMaterialValueFunction('bool', 'mtlx_openpbr_is_opaque', 'opaque', true)}
+${emitMtlxOpenPbrOpaqueFunction()}
 ${emitMtlxMaterialValueFunction('bool', 'mtlx_openpbr_is_thinwalled', 'thinWalled', false)}
 ${emitMtlxMaterialValueFunction('vec3', 'mtlx_openpbr_emission', 'emission', [0, 0, 0])}
 ${emitMtlxMaterialValueFunction('float', 'mtlx_openpbr_thin_film_weight', 'thinFilmWeight', 0)}
@@ -1430,9 +1550,16 @@ ${emitMtlxMaterialValueFunction('float', 'mtlx_openpbr_transmission_weight', 'tr
         /\bvoid\s+mtlx_openpbr_prepare\s*\(/.test(dispatch);
     const neutralRasterDispatch = is_mtlx_bvh_raster_route() ? `\n${mtlxRouteNeutralRasterGlsl}\n` : '';
     const neutralPathDispatch = is_mtlx_route() ? `\n${mtlxRouteNeutralPathGlsl}\n` : '';
+        const referenceHitGlsl = is_mtlx_bvh_raster_route() ? '' : `
+    #ifdef REFERENCE_BVH_ENABLED
+    ${glsl_mtlx_reference_closest_hit_abi}
+    ${glsl_mtlx_reference_closest_hit_mtlx}
+    ${glsl_mtlx_reference_any_hit_mtlx}
+    #endif
+    `;
     if (typeof window !== 'undefined') window.__openpbrMtlxDispatch = mtlxRouteDispatchGlsl;
     return (hasGeneratedHooks ? '#define MTLX_HOST_EXTERNAL_COMMON\n' : '') +
-        dispatchBody + neutralRasterDispatch + neutralPathDispatch + (hasGeneratedHooks ? '' : bridge) + routeBody;
+        dispatchBody + neutralRasterDispatch + neutralPathDispatch + referenceHitGlsl + (hasGeneratedHooks ? '' : bridge) + routeBody;
 }
 
 // Minimal default OpenPBR material used when no .mtlx file is supplied.
@@ -2493,6 +2620,12 @@ function showMtlxLibraryError(error)
 
 async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText = null, archiveSource = null)
 {
+    const requestedMaterialKey = materialId || 'default-material';
+    const incompatibleBinding = mtlxRouteReferenceMaterialRegistry?.entries.find((entry) =>
+        entry.kind === 'openpbr' && entry.materialKey !== requestedMaterialKey);
+    if (incompatibleBinding) {
+        throw new Error(`REFERENCE_MATERIAL_DISPATCH_MISMATCH: scene material ${incompatibleBinding.sceneMaterialID} requires ${incompatibleBinding.materialKey}, but the active dispatch is ${requestedMaterialKey}`);
+    }
     let mtlxText = inlineMtlxText || DEFAULT_MTLX;
     let mtlxMaterialBaseUrl = getPublicAssetUrl('');
     if (mtlxUrl) {
@@ -2524,6 +2657,8 @@ async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText =
     const textureShader = adaptMtlxTextureShader(result.glsl, mtlxRouteTextureAtlas);
     const parameterBinding = bindMtlxParametersToTexture(textureShader, mtlxText,
         mtlxUrl || archiveSource?.materialId || materialId);
+    if (mtlxRouteReferenceMaterialRegistry)
+        validateReferenceMaterialParameters(mtlxRouteReferenceMaterialRegistry, parameterBinding.parameters);
     mtlxRouteParamDescriptors = parameterBinding.parameters;
     mtlxRouteDispatchGlsl = parameterBinding.glsl;
     mtlxRouteNeutralRasterGlsl = is_mtlx_bvh_raster_route()
@@ -2533,6 +2668,7 @@ async function configureSingleMtlxMaterial(mtlxUrl, materialId, inlineMtlxText =
         ? await generateMtlxNeutralPathDispatch(mtlxText, mtlxRouteDispatchGlsl)
         : '';
     activeMtlxMaterialText = mtlxText;
+    mtlxRouteActiveMaterialKey = requestedMaterialKey;
 
     materialDefines.MAX_MTLX_LIGHTS = Math.max(1, mtlxRouteLights.length);
     materialDefines.VOLUME_ENABLED = hasTransmission && result.mtlxParams.transmissionDepth > 0 && !result.mtlxParams.geometry_thin_walled;
@@ -2688,7 +2824,7 @@ function installWebGLDiagnostics(gl)
         app: {
             scene: params.scene_name,
             rendererMode: params.renderer_mode,
-            bvhEngine: 'threejs',
+            bvhEngine: window.__openpbrBvhBackend?.active ?? DEFAULT_BVH_BACKEND,
             renderSize: params.render_size,
             loaded: LOADED,
             compiling: COMPILING
@@ -2789,6 +2925,29 @@ initializeLoadingProgress();
             console.warn('[URL params] unsupported renderer; using Rasterizer MTLX');
         }
         console.log('[URL params] renderer_mode =', params.renderer_mode);
+    }
+
+    window.__openpbrBvhBackend = {
+        requested: params.bvh_backend, active: null,
+        available: [...AVAILABLE_BVH_BACKENDS], referenceReady: false,
+    };
+    try {
+        window.__openpbrBvhBackend.active = resolveBvhBackend(params.bvh_backend, params.renderer_mode);
+    } catch (error) {
+        const message = error.message;
+        window.__openpbrBvhBackend.error = message;
+        window.__openpbrShaderError = message;
+        window.__openpbrReady = true;
+        console.error(message);
+        const overlay = document.getElementById('shader-error');
+        const content = document.getElementById('shader-error-content');
+        if (overlay && content) {
+            content.textContent = message;
+            overlay.style.display = 'block';
+        }
+        const progressOverlay = document.getElementById('progress_overlay');
+        if (progressOverlay) progressOverlay.style.display = 'none';
+        return;
     }
 
     // Generate GLSL from .mtlx before building the first shader.
@@ -3778,6 +3937,7 @@ function setupMtlxParameterControls(materialFolder)
 
     for (const parameter of mtlxRouteParamDescriptors)
     {
+        if (parameter.hidden) continue;
         const folderName = parameter.uiFolder || 'Surface';
         let folder = folders.get(folderName);
         if (!folder)

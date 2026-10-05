@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "status": "normative-for-future-port-not-runtime-support",
+  "policies": {
+    "unknown": "error-with-url-line-block-name-directive",
+    "duplicates": "error-except-repeated-object-overrides",
+    "references": "resolve-after-parse-before-upload",
+    "materialx": "local-generator-only",
+    "nonMtlxMaterial": "explicit-local-binding-or-error-no-distant-bsdf",
+    "renderer": "non-mtlx-only-for-reference-execution"
+  },
+  "blocks": {
+    "root": {
+      "supported": ["material", "light", "camera", "renderer", "mesh", "gltf"],
+      "adapted": [],
+      "rejected": ["materialx_pure_module_url", "materialx_generator", "materialx_essl_template"]
+    },
+    "material": {
+      "supported": ["materialx_document", "materialx_inline_begin", "materialx_inline_end", "material_type"],
+      "adapted": ["color", "opacity", "alphamode", "alphacutoff", "emission", "metallic", "roughness", "subsurface", "speculartint", "anisotropic", "sheen", "sheentint", "clearcoat", "clearcoatgloss", "spectrans", "ior", "albedotexture", "metallicroughnesstexture", "normaltexture", "emissiontexture", "mediumtype", "mediumdensity", "mediumcolor", "mediumanisotropy"],
+      "rejected": ["specular"]
+    },
+    "light": {
+      "supported": ["position", "emission", "radius", "v1", "v2", "type"],
+      "adapted": [],
+      "rejected": []
+    },
+    "camera": {
+      "supported": ["position", "lookat", "aperture", "focaldist", "fov", "matrix"],
+      "adapted": [],
+      "rejected": []
+    },
+    "renderer": {
+      "supported": ["resolution", "maxdepth", "maxvolumesteps", "fireflyclamp", "maxspp", "enabletonemap", "enableaces", "hideemitters", "enablebackground", "transparentbackground", "backgroundcolor"],
+      "adapted": ["envmapfile", "envmapirradiancefile", "envmapintensity", "envmaprotation", "openglnormalmap", "independentrendersize", "tilewidth", "tileheight"],
+      "rejected": ["texarraywidth", "texarrayheight", "enablerr", "rrdepth", "enableroughnessmollification", "roughnessmollificationamt", "enablevolumemis", "enableuniformlight", "uniformlightcolor", "sssmode"]
+    },
+    "mesh": {
+      "supported": ["name", "file", "material", "matrix", "position", "scale", "rotation"],
+      "adapted": [],
+      "rejected": []
+    },
+    "gltf": {
+      "supported": ["file", "object", "matrix", "position", "scale", "rotation"],
+      "adapted": [],
+      "rejected": []
+    }
+  },
+  "referenceFixtures": [
+    {
+      "file": "scenes/pathtracer/cornell_box_orig.scene",
+      "sha256": "1169e947b63f28aa39f2cb516e34410d8c0ec31987be9eddb4efc340430f0a6d",
+      "mode": "non-mtlx",
+      "purpose": "geometry-camera-quad"
+    },
+    {
+      "file": "scenes/pathtracer/cornell_box_sphere.scene",
+      "sha256": "dcad300558ab851d56ed186fda234c656cee51b852896765f1e75a98fbc37e68",
+      "mode": "non-mtlx",
+      "purpose": "geometry-sphere-light"
+    },
+    {
+      "file": "scenes/pathtracer/test_material_disney_gold.scene",
+      "sha256": "9a5b6cf5959c133fbcc5b233645a90b87d1c7fe3eca2caf3ac78378eaade8b04",
+      "mode": "non-mtlx",
+      "purpose": "shared-comparison-dirty-worktree-pinned"
+    }
+  ],
+  "denoiser": {
+    "referenceDefaultWeightsUrl": "https://cdn.jsdelivr.net/npm/denoiser/tzas",
+    "localWeightsUrl": "public/denoiser/tzas",
+    "hdr": true,
+    "srgb": false,
+    "filterType": "rt",
+    "quality": "fast",
+    "collection": "rt_hdr_small",
+    "weightFile": "rt_hdr_small.tza",
+    "sourceRepositoryRoot": "D:/WebGL2/Denoiser",
+    "sourceRepositoryRevision": "48ee97a4f13ce50ed661faac5e87e0e2755dd12c",
+    "sourceRepositoryUrl": "https://github.com/DennisSmolek/Denoiser.git",
+    "sourcePackageVersion": "0.0.11",
+    "sourcePackageJsonSha256": "e5844d7625b8d0299448cde228133e7f71c101d4ee4fdd9e0aae616b3bb4239f",
+    "sourceWeightsDirectory": "packages/denoiser/tzas",
+    "sourceWeightsCount": 21,
+    "sourceWeightBytes": 634568,
+    "sourceWeightSha256": "c9171947f2bceb4367725b7a0d5b4e0d663ac44108386af42f1b49e4361952e7",
+    "sourceWeightLicense": "Apache-2.0",
+    "sourceWeightLicensePath": "packages/denoiser/tzas/LICENSE.txt",
+    "sourceWeightLicenseSha256": "3ddf9be5c28fe27dad143a5dc76eea25222ad1dd68934a047064e56ed2fa40c5",
+    "sourcePackageLicensePath": "LICENSE",
+    "sourcePackageLicenseSha256": "901255f8ad04afc58dad5094cb08cf82b65b4781e88009265eb63bb4f95bc7f2",
+    "sourceLdrWeightSha256": "d50ad6ca693ec8f2bdfac5d4657c4cb7c0763b20a9768e66f0402a00046b704c",
+    "publishedArchiveUrl": "https://registry.npmjs.org/denoiser/-/denoiser-0.0.11.tgz",
+    "publishedArchiveIntegrity": "sha512-QZndC8KMgt9AxENe+sbNlLlhDETxvRHNd/n48iHr6c1fO+CoQ4ST+lDiEOTgYP6jZOwI27ZcoRSrJM7EMONeFg==",
+    "publishedBundleSha256": "e29a88880da7f5f1f5d5578c82aaa6df754e511d62e5da9f5c263ededacc67c5",
+    "weightsAvailableInReferenceModuleDirectory": false,
+    "weightProvenanceStatus": "verified-local-and-published-archive",
+    "redistributionStatus": "preserve-apache-license-and-notices-before-publication"
+  }
+}

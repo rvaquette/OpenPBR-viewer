@@ -32,6 +32,35 @@ bool bvhIntersectFirstHitWithinDistance(
 bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
             out vec3 P, out vec3 Ns, out vec3 Ng, out vec3 Ts, out vec3 baryCoord, out vec2 texCoord, out int material)
 {
+#ifdef REFERENCE_BVH_ENABLED
+    mtlxMaterialVariant = 0;
+    referenceLocalMaterialID = -1;
+    Ray referenceRay;
+    referenceRay.origin = rayOrigin;
+    referenceRay.direction = rayDir;
+    State referenceHitState;
+    referenceHitState.depth = 0;
+    referenceHitState.hitDist = HUGE_DIST;
+    referenceHitState.fhp = vec3(0.0);
+    referenceHitState.normal = vec3(0.0, 0.0, 1.0);
+    referenceHitState.ffnormal = referenceHitState.normal;
+    referenceHitState.tangent = vec3(1.0, 0.0, 0.0);
+    referenceHitState.bitangent = vec3(0.0, 1.0, 0.0);
+    referenceHitState.geometricNormal = referenceHitState.normal;
+    referenceHitState.barycentric = vec3(0.0);
+    referenceHitState.triangleIndices = ivec3(-1);
+    referenceHitState.texCoord = vec2(0.0);
+    referenceHitState.matID = -1;
+    referenceHitState.isEmitter = false;
+    referenceHitState.traversalOverflow = false;
+    LightSampleRec referenceLightSample;
+    referenceLightSample.pdf = 0.0;
+    referenceLightSample.emission = vec3(0.0);
+    bool hit_surface = ClosestHit(referenceRay, referenceHitState, referenceLightSample);
+    float dist_surface = referenceHitState.hitDist;
+    if (hit_surface && !(dist_surface > 0.0 && dist_surface < maxDistance))
+        hit_surface = false;
+#else
     // hit results
     uvec4 faceIndices_surface = uvec4(0u);
     vec3   faceNormal_surface = vec3(0.0, 0.0, 1.0);
@@ -40,6 +69,7 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
     float        dist_surface = HUGE_DIST;
     bool hit_surface = bvhIntersectFirstHitWithinDistance( bvh_surface_nodes, bvh_surface_indices, bvh_surface_positions, rayOrigin, rayDir, maxDistance,
                                                            faceIndices_surface, faceNormal_surface, barycoord_surface, side_surface, dist_surface );
+#endif
     // Find closest BVH hit distance
     float dist_closest = HUGE_DIST;
     if (hit_surface) dist_closest = min(dist_closest, dist_surface);
@@ -63,6 +93,23 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
 
     if (hit_surface && (!hit_ground || (dist_surface <= dist_ground)))
     {
+#ifdef REFERENCE_BVH_ENABLED
+        P = referenceHitState.fhp;
+        baryCoord = referenceHitState.barycentric;
+        Ng = safe_normalize(referenceHitState.geometricNormal);
+        Ns = safe_normalize(referenceHitState.normal);
+        Ts = safe_normalize(referenceHitState.tangent);
+        texCoord = referenceHitState.texCoord;
+    int referenceMaterialKind;
+    int referenceMaterialParameterVariant;
+    if (!mtlxResolveReferenceMaterial(referenceHitState.matID, referenceMaterialKind,
+        referenceLocalMaterialID, referenceMaterialParameterVariant))
+        discard;
+        if (referenceMaterialKind != referenceLocalMaterialID)
+            discard;
+    mtlxMaterialVariant = referenceMaterialParameterVariant;
+        material = referenceLocalMaterialID;
+#else
         P = rayOrigin + dist_surface*rayDir;
         baryCoord = barycoord_surface;
         Ng = safe_normalize(faceNormal_surface);
@@ -72,6 +119,7 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
         texCoord = has_uvs_surface ? vec2(gN.w, gT.w) : barycoord_surface.xy;
         Ts = has_tangents_surface ? gT.xyz : normalToTangent(Ns);
         material = (textureSampleBarycoord(geomS_surface, barycoord_surface, faceIndices_surface.xyz).x > 0.5) ? MATERIAL_PROPS : MATERIAL_OPENPBR;
+    #endif
     }
 
     else if (hit_ground)
@@ -90,14 +138,33 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
 
 float TraceShadow(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance)
 {
+#ifdef REFERENCE_BVH_ENABLED
+    int previousMaterialVariant = mtlxMaterialVariant;
+    Ray shadowRay;
+    shadowRay.origin = rayOrigin;
+    shadowRay.direction = rayDir;
+    bool referenceGeometryHit = AnyHit(shadowRay, maxDistance);
+    if (!referenceGeometryHit && !ground_enabled)
+        return 1.0;
+#endif
     int material;
     vec3 pW, nsW, ngW, TsW, baryCoord;
     vec2 texCoord;
     bool hit = trace(rayOrigin, rayDir, maxDistance,
                      pW, nsW, ngW, TsW, baryCoord, texCoord, material);
     if (hit && material == MATERIAL_OPENPBR && !mtlx_openpbr_is_opaque() && mtlx_openpbr_is_thinwalled())
+    {
+#ifdef REFERENCE_BVH_ENABLED
+        mtlxMaterialVariant = previousMaterialVariant;
+#endif
         return 1.0;
+    }
+#ifdef REFERENCE_BVH_ENABLED
+    mtlxMaterialVariant = previousMaterialVariant;
+    return (referenceGeometryHit || hit) ? 0.0 : 1.0;
+#else
     return hit ? 0.0 : 1.0;
+#endif
 }
 
 

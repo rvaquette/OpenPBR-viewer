@@ -1,0 +1,319 @@
+task: T017
+date: '2026-10-05'
+status: completed
+kind: reference-materialID-local-registry
+runtime_changes: false
+reference_renderer_executed: false
+evidence: [t017-materialid-registry.md, ../../src/mtlx/referenceMaterialRegistry.js, ../../glsl/pathtracing/mtlx/common.glsl, ../../glsl/pathtracing/mtlx/pathtracer.glsl, ../../tools/mtlx-reference-alignment/reference-material-registry.test.mjs, ../../tools/mtlx-reference-alignment/reference-material-registration-smoke.mjs, ../../artifacts/mtlx-reference-alignment/t017-material-registration-smoke.json]
+T017_validation:
+  command: npm test
+  exit_code: 0
+  passed: 69
+  failed: 0
+  build_exit_code: 0
+  registry_capacity: 64
+  ESSL_ID_variant_lookup: passed
+  host_DataTexture_rows: verified-by-browser-smoke
+  unregistered_ID: fail-closed
+  dispatch_mismatch: fail-closed
+  active_default_and_explicit_variants: passed
+  oracle_rays: 10000
+  closest_any_shadow_mismatches: 0
+  runtime_macro: REFERENCE_BVH_ENABLED-not-defined
+  reference_ready: false
+  not_claimed: [multiple-closures-with-different-code, full-T018-BSDF-emission-volume-parity, scene-loader-caller]
+T016_validation:
+  command: npm test
+  exit_code: 0
+  passed: 63
+  failed: 0
+  local_filter_test: six-cases-pass
+  no_remote_alpha_sources: verified
+  oracle_rays: 10000
+  any_hit_mismatches: 0
+  trace_shadow_mismatches: 0
+  build_exit_code: 0
+  docs_validator_exit_code: 0
+  default_branch_smoke: passed-Three.js-SwiftShader-64x64-2spp
+  default_branch_shader_error: null
+  reference_macro: undefined
+  reference_ready: false
+  not_claimed: [reference_materialID_to_registry, reference_thinwalled_per_ID, distant_alpha_cutouts]
+T016_validation:
+  command: npm test
+  exit_code: 0
+  passed: 63
+  failed: 0
+  local_filter_test: six-cases-pass
+  no_remote_alpha_sources: verified
+  oracle_rays: 10000
+  any_hit_mismatches: 0
+  trace_shadow_mismatches: 0
+  build_exit_code: 0
+  docs_validator_exit_code: 0
+  default_branch_smoke: passed-Three.js-SwiftShader-64x64-2spp
+  default_branch_shader_error: null
+  reference_macro: undefined
+  reference_ready: false
+  not_claimed: [reference_materialID_to_registry, reference_thinwalled_per_ID, distant_alpha_cutouts]
+T015_validation:
+  command: npx tsx --tsconfig tools/mtlx-reference-alignment/tsconfig.json tools/mtlx-reference-alignment/reference-ray-oracle.mjs
+  exit_code: 0
+  renderer: Chrome-ANGLE-Vulkan-SwiftShader-WebGL2
+  rays: 10000
+  truncated_segment_cases: 748
+  any_hit_mismatches: 0
+  trace_shadow_mismatches: 0
+  geometry_and_ground_visibility: passed
+  max_distance_segments: passed
+  upstream_sha256: e4ff7cdd408cb550ebddd4e8d4baacc33bd2efdda8b906e2ff3bf7ca9cde915d
+  compile_link_test: passed-ESSL300
+  runtime_macro: REFERENCE_BVH_ENABLED-not-defined
+  npm_test_exit_code: 0
+  npm_tests_passed: 62
+  build_exit_code: 0
+  default_branch_smoke: passed-Three.js-SwiftShader-64x64-2spp
+  default_branch_shader_error: null
+  reference_ready: false
+  not_claimed: [thinwalled_registry_resolution, alpha_test, reference_render, Adreno_validation]
+T014_validation:
+  command: npx tsx --tsconfig tools/mtlx-reference-alignment/tsconfig.json tools/mtlx-reference-alignment/reference-ray-oracle.mjs
+  exit_code: 0
+  renderer: Chrome-ANGLE-Vulkan-SwiftShader-WebGL2
+  rays: 10000
+  hits: 6946
+  misses: 3054
+  hit_mismatches: 0
+  value_mismatches: 0
+  max_absolute_error: 0.00006289907346978402
+  stack_requirement: 4
+  stack_capacity: 64
+  stack_overflow_preflight: tested-rejects-requirement-65
+  runtime_macro: REFERENCE_BVH_ENABLED-not-defined
+  GL_errors: 0
+  npm_test_exit_code: 0
+  npm_tests_passed: 61
+  build_exit_code: 0
+  default_branch_smoke: passed-Three.js-SwiftShader-64x64-2spp
+  default_branch_shader_error: null
+  reference_ready: false
+  not_claimed: [reference-render, Adreno-validation, any-hit-shadow, materialID-registry]
+T013_validation:
+  command: npm test
+  exit_code: 0
+  passed: 56
+  failed: 0
+  source_sha256: 864af40b7f85ae4f08c4207231c286c816f41805552f3d183543b17ef329b70b
+  byte_identical_to_upstream: true
+  raw_export: passed
+  compile_command: node tools/mtlx-reference-alignment/closest-hit-compile-smoke.mjs
+  compile_exit_code: 0
+  compile_target: isolated-ESSL-300-WebGL2-SwiftShader
+  compile_and_link: passed
+  build_exit_code: 0
+  runtime_changes: false
+  reference_ready: false
+  not_claimed: [trace-integration, CPU-GPU-ray-oracle, maxDistance-contract, reference-render]
+T012_validation:
+  command: node tools/mtlx-reference-alignment/gpu-readback-probe.mjs
+  exit_code: 0
+  renderer: Chrome-ANGLE-Vulkan-SwiftShader-WebGL2
+  observed_max_texture_size: 8192
+  observed_max_texture_image_units: 32
+  forced_texture_width: 8
+  physical_texels_read: 152
+  all_five_samplers_cross_row: true
+  integer_sampler: isampler2D
+  bitwise_comparison: passed
+  zero_w_padding: passed
+  unpack_flip_y: false
+  colorspace_conversion: none
+  nearest_clamp: passed
+  max_exact_float_id: 16777215
+  id_above_boundary_rejected: true
+  max_texture_capacity_rejected: true
+  sampler_budget_rejected: true
+  GL_errors: 0
+  npm_test_exit_code: 0
+  npm_tests_passed: 55
+  build_exit_code: 0
+  reference_ready: false
+  not_claimed: [Three.js_renderer_integration, BVH_traversal, Adreno_validation, reference_render]
+T011_validation:
+  command: npm test
+  exit_code: 0
+  passed: 55
+  failed: 0
+  added_tests: 6
+  build_exit_code: 0
+  smoke_command: node tools/mtlx-reference-alignment/gpu-upload-smoke.mjs
+  smoke_exit_code: 0
+  smoke_backend: Chrome-SwiftShader-WebGL2
+  smoke_scenes: [populated, empty]
+  GL_errors: 0
+  logical_RGB_ABI: preserved
+  physical_format: RGBA32F-RGBA32I
+  format_acceptance: explicit-user-decision-2026-10-05
+  reference_ready: false
+  not_claimed: [GPU-readback-T012, traversal, ray-oracle, Adreno-validation, reference-render]
+T010_validation:
+  command: npm test
+  exit_code: 0
+  passed: 49
+  failed: 0
+  added_tests: 6
+  build_exit_code: 0
+  same_cardinality_updates: 64
+  cardinality_transitions: 40
+  complete_A_B_A_cycles: 32
+  fresh_scene_snapshots: identical
+  BLAS_content_and_identity: unchanged
+  invalid_update_old_state: preserved
+  upstream_root_reuse_defect: reproduced
+  production_changes: false
+  reference_ready: false
+  not_claimed: [GPU-memory-leak-test, GPU-upload-traversal, ray-oracle, MTLX-material-registry-resolution]
+T009_validation:
+  command: npm test
+  exit_code: 0
+  passed: 43
+  failed: 0
+  scene_tests: 8
+  build_exit_code: 0
+  tlas_profile: Bvh-10-64-false
+  upstream_translation_snapshot: identical
+  world_bounds_oracle: eight-transformed-corners
+  BLAS_shared: true
+  update_rebuilds_BLAS: false
+  reference_ready: false
+  not_claimed: [full-repeat-cycle-gate-T010, GPU-upload-traversal, scene-loader, ray-oracle, reference-render]
+T008_validation:
+  command: npm test
+  exit_code: 0
+  passed: 35
+  failed: 0
+  structural_tests: 9
+  build_exit_code: 0
+  profile: SplitBvh-2-64-0-0.001-0
+  reference_duplicates_expected: 0
+  compared_upstream_primitives: 128
+  snapshots: identical-for-Bvh-and-SplitBvh
+  empty_policy: null-BVH-no-upstream-build
+  upstream_changes: false
+  reference_ready: false
+  not_claimed: [enabled-spatial-split-variants, TLAS-scene-integration, GPU-upload-traversal, ray-oracle, reference-render]
+T007_validation:
+  command: npm test
+  exit_code: 0
+  passed: 26
+  failed: 0
+  adapter_tests: 7
+  build_exit_code: 0
+  input_types: [indexed-BufferGeometry, non-indexed-BufferGeometry, interleaved-attributes, normalized-attributes]
+  preserved: [triangle-order, groups, drawRange, UVs, normals, tangent-handedness, neutralFlag, source-IDs, object-space-bounds]
+  reference_ready: false
+  BLAS_built: false
+  not_claimed: [GPU-reference-render, ray-oracle, scene-transform-baking, skinning-morph-baking]
+T006_validation:
+  command: npm test
+  exit_code: 0
+  passed: 19
+  failed: 0
+  runner: tsx-4.20.6
+  build_exit_code: 0
+  smoke_samples: 128
+  smoke_resolution: 256x256
+  smoke_backend: threejs
+  smoke_pixels_vs_T004: identical
+  rejection_exit_code: 1-expected
+  rejection_code: BVH_BACKEND_NOT_READY
+  rejection_dispatch_bytes: 0
+  reference_ready: false
+T005_validation:
+  command: node --test tools/mtlx-reference-alignment/reference-import.test.mjs
+  exit_code: 0
+  passed: 4
+  failed: 0
+  build_command: npm run build
+  build_exit_code: 0
+  source_files: 6
+  byte_identical_files: 5
+  type_only_import_adaptations: 1
+  algorithm_changes: false
+  backend_activated: false
+  checks: [source-hashes-and-byte-fidelity, AMD-and-host-MIT-notices, isolated-browser-TS-bundle, runtime-construction-probe, production-Three.js-backend-unchanged]
+  not_claimed: [full-tsc-typecheck, full-BLAS-TLAS-ray-oracle, reference-backend-render]
+T004_validation:
+  command: node tools/mtlx-reference-alignment/validate-baseline.mjs
+  exit_code: 0
+  runner_tests: 9
+  runner_exit_code: 0
+  build_exit_code: 0
+  local_cases: 16
+  reference_cases: 3
+  resolution: 256x256
+  samples: 128
+  denoise: false
+  backend: SwiftShader
+  repeatability_gold_rgb: identical
+  manual_review: assistant-contact-sheet-review
+  corrections: [explicit-gold-binding, blue-color-witness, complete-normal-map-fixture, normalized-Windows-reference-root, temporary-reference-maxspp-budget]
+  deferred_by_user: HDR-denoiser-to-stages-14-15
+T003_validation:
+  unit_command: node --test tools/mtlx-reference-alignment/run.test.mjs
+  unit_exit_code: 0
+  passed: 5
+  failed: 0
+  build_command: npm run build
+  build_exit_code: 0
+  local_smoke_exit_code: 0
+  material_smoke_exit_code: 0
+  smoke_resolution: 64x64
+  smoke_samples: 2
+  corpus_cases: 18
+  local_cases: 15
+  reference_cases: 3
+  reference_execution: not-run
+  baseline_T004: completed-capture-scope
+  initial_failures: [server-not-running, doubled-material-base-url]
+  repairs: [started-test-server, corrected-runner-material-url, readiness-pageerror-failfast]
+validation:
+  command: node specs/005-mtlx-reference-alignment/validate-t002.mjs
+  status: passed-static-only
+  pinned_source_hashes: 12
+  repository_revisions: 3
+  scene_files: 59
+  contracts: 8
+  reference_directive_tokens: 80
+  selected_non_mtlx_fixtures: 3
+  denoiser_source_revision: 48ee97a4f13ce50ed661faac5e87e0e2755dd12c
+  denoiser_pinned_local_files: 5
+  denoiser_weight_provenance: verified-local-and-published-archive
+  checks: [T001-prerequisite, directive-coverage-by-block, fixture-hashes-and-mesh-presence, camera-equations, hdr-model-selection, local-denoiser-weight-hashes-and-license-notices, requirement-coverage, provenance-gate-explicit]
+warnings:
+  - severity: high
+    message: npm install reports 9 vulnerabilities (1 low, 3 moderate, 5 high); dependency remediation not performed in T006.
+  - severity: medium
+    message: Reference scenes submodule has a modified test_material_disney_gold.scene; do not revert it.
+  - severity: high
+    message: Reference package declares MIT but root has no global LICENSE; TS source and asset provenance requires confirmation before redistribution.
+  - severity: high
+    message: Reference denoiser bundle differs from the npm/local dist bundle; its modifications and complete third-party notices remain to document.
+  - severity: medium
+    message: Denoiser source worktree is dirty; version, revision and relevant local file hashes are pinned. No files reverted or deployed.
+resolved:
+  - rt_hdr_small.tza and rt_ldr_small.tza exist locally and match denoiser@0.0.11 published bytes.
+  - Weight license Apache-2.0 and package MIT notice found in local Denoiser source.
+next_action: T018
+next_task: T018
+stage_1_status: completed-capture-scope
+stage_2_status: completed
+stage_3_status: completed-CPU-BLAS
+stage_4_status: completed-CPU-instances
+stage_5_status: completed-GPU-texture-readback
+stage_6_status: completed-closest-hit-dormant
+stage_7_status: completed-local-shadow-filters
+stage_8_status: partial-materialID-registry-complete-awaiting-T018-hooks
+stage_0_status: completed
+stage_0_acceptance: explicit-user-decision-2026-10-04
+provenance_warnings_policy: retained-as-non-blocking-followups-not-verified-rights

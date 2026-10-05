@@ -1,0 +1,16 @@
+status: proposed
+requirements_source: user-request-2026-10-04
+formal_contracts_status: technical-v1-frozen
+stage_0_status: completed
+stage_0_acceptance: explicit-user-decision-2026-10-04
+plan: ../plan.md
+reference_renderer_policy: non-mtlx-only
+mappings:
+  REQ-001: [0, 1, 2, 6, 7, 8, 10, 12, 13, 14, 15, 16, 17]
+  REQ-002: [0, 2, 3, 4, 5, 10, 17]
+  REQ-003: [0, 5, 6, 7, 17]
+  REQ-004: [0, 4, 8, 9, 10, 13]
+  REQ-005: [0, 9, 11, 13]
+  REQ-006: [0, 9, 12, 13]
+  REQ-007: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+  REQ-008: [0, 1, 14, 15, 16, 17]

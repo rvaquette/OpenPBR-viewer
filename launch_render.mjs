@@ -26,6 +26,7 @@
  *   --denoise=true|false    Débruitage OIDN après capture (défaut: false)
  *   --oidn=path             Chemin vers oidnDenoise.exe (défaut: oidnDenoise dans PATH)
  *   --dump-glsl=dir         Exporte les sources GLSL envoyées à WebGL et le dispatch MTLX généré
+ *   --report=file.json     Exporte l'etat observe du viewer et les erreurs navigateur
  *
  * Options rendu :
  *   --mode=Rasterizer MTLX|Pathtracer MTLX
@@ -173,6 +174,11 @@ function defaultOutputPath() {
     return `render_${ts}.png`;
 }
 const screenshotPath = options.output ?? options.screenshot ?? defaultOutputPath();
+const reportPath = options.report ? resolve(options.report) : null;
+const browserErrors = [];
+let rejectBrowserFailure;
+const browserFailure = new Promise((_resolve, reject) => { rejectBrowserFailure = reject; });
+browserFailure.catch(() => {});
 const waitSamples   = parseInt(options['spp'] ?? options['wait-samples'] ?? '16', 10);
 const dumpGlslDir   = options['dump-glsl']
     ? resolve(options['dump-glsl'] === 'true' ? 'artifacts/glsl-dump' : options['dump-glsl'])
@@ -198,6 +204,7 @@ delete options.browser; delete options['launch-timeout-ms'];
 delete options['start-server']; delete options.screenshot; delete options.output;
 delete options['wait-samples']; delete options['spp']; delete options.mode; delete options.size;
 delete options['dump-glsl'];
+delete options.report;
 delete options.mtlx; delete options.denoise; delete options.oidn;
 delete options.envmap; delete options.env_map_path; delete options.env_irradiance_path;
 
@@ -231,7 +238,7 @@ if (mtlxPath) {
 let viteProcess = null;
 if (startServer) {
     console.log('Démarrage du serveur Vite...');
-    viteProcess = spawn(`npx vite --port ${port}`, [], {
+    viteProcess = spawn(`npx vite --port ${port} --strictPort`, [], {
         shell: true,
         stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -381,12 +388,58 @@ if (dumpGlslDir) {
     });
 }
 
+if (reportPath) {
+    await page.addInitScript(() => {
+        window.__openpbrUniformSnapshots = {};
+        const programs = new WeakMap();
+        const locations = new WeakMap();
+        let programIndex = 0;
+        for (const contextType of [window.WebGL2RenderingContext, window.WebGLRenderingContext]) {
+            const prototype = contextType?.prototype;
+            if (!prototype || prototype.__openpbrUniformCaptureHook) continue;
+            prototype.__openpbrUniformCaptureHook = true;
+            const originalGetUniformLocation = prototype.getUniformLocation;
+            prototype.getUniformLocation = function(program, name) {
+                const location = originalGetUniformLocation.call(this, program, name);
+                if (location) {
+                    if (!programs.has(program)) programs.set(program, ++programIndex);
+                    locations.set(location, { program: programs.get(program), name });
+                }
+                return location;
+            };
+            for (const method of ['uniform1f', 'uniform2f', 'uniform3f', 'uniform4f',
+                'uniform1i', 'uniform2i', 'uniform3i', 'uniform4i',
+                'uniform1fv', 'uniform2fv', 'uniform3fv', 'uniform4fv',
+                'uniform1iv', 'uniform2iv', 'uniform3iv', 'uniform4iv',
+                'uniform1ui', 'uniform1uiv', 'uniformMatrix2fv', 'uniformMatrix3fv', 'uniformMatrix4fv']) {
+                const original = prototype[method];
+                if (!original) continue;
+                prototype[method] = function(location, ...values) {
+                    const identity = location && locations.get(location);
+                    if (identity) {
+                        window.__openpbrUniformSnapshots[`${identity.program}:${identity.name}`] = {
+                            ...identity, method,
+                            values: values.map((value) => ArrayBuffer.isView(value) ? Array.from(value) : value),
+                        };
+                    }
+                    return original.call(this, location, ...values);
+                };
+            }
+        }
+    });
+}
+
 // Relayer les logs console du navigateur vers le terminal
 page.on('console', msg => {
     if (msg.type() === 'warning') return;
+    if (msg.type() === 'error') browserErrors.push({ type: 'console', message: msg.text() });
     console.log(`[browser] ${msg.type().toUpperCase()}: ${msg.text()}`);
 });
-page.on('pageerror', err => console.error('[browser] PAGE ERROR:', err.stack ?? err.message));
+page.on('pageerror', err => {
+    browserErrors.push({ type: 'pageerror', message: err.stack ?? err.message });
+    rejectBrowserFailure(new Error(`Browser page error: ${err.message}`));
+    console.error('[browser] PAGE ERROR:', err.stack ?? err.message);
+});
 page.on('response',      resp => { if (resp.status() >= 400) console.error(`[browser] HTTP ${resp.status()}: ${resp.url()}`); });
 page.on('requestfailed', req  => console.error(`[browser] REQUEST FAILED: ${req.url()} — ${req.failure()?.errorText ?? ''}`));
 
@@ -415,15 +468,40 @@ async function hideUiForScreenshot() {
 
 // Attendre la fin de la compilation des shaders
 console.log('Attente de la fin de compilation des shaders...');
-await page.waitForFunction(() => window.__openpbrReady === true, null, { timeout: 1200_000 });
+try {
+    await Promise.race([
+        page.waitForFunction(() => window.__openpbrReady === true, null, { timeout: 1200_000 }),
+        browserFailure,
+    ]);
+} catch (error) {
+    if (reportPath) {
+        mkdirSync(dirname(reportPath), { recursive: true });
+        writeFileSync(reportPath, `${JSON.stringify({ version: 1, url, requestedMode: mode,
+            useGpu, denoiseEnabled, browserErrors, failure: error.message }, null, 2)}\n`, 'utf8');
+    }
+    await browser.close();
+    if (viteProcess) killProcessTree(viteProcess);
+    throw error;
+}
 
 // Vérifier qu'il n'y a pas eu d'erreur de compilation GLSL
 const shaderError = await page.evaluate(() => window.__openpbrShaderError ?? null);
 if (shaderError) {
     console.error('\n[ERREUR] Compilation GLSL échouée — arrêt du rendu.');
+    if (reportPath) {
+        const observed = await page.evaluate(() => ({
+            ready: window.__openpbrReady === true,
+            shaderError: window.__openpbrShaderError ?? null,
+            bvhBackend: window.__openpbrBvhBackend ?? null,
+            dispatchBytes: (window.__openpbrMtlxDispatch ?? '').length,
+        }));
+        mkdirSync(dirname(reportPath), { recursive: true });
+        writeFileSync(reportPath, `${JSON.stringify({ version: 1, url, requestedMode: mode,
+            useGpu, denoiseEnabled, failure: shaderError, observed, browserErrors }, null, 2)}\n`, 'utf8');
+    }
     process.exitCode = 1;
     await browser.close();
-    if (viteProcess) viteProcess.kill();
+    if (viteProcess) killProcessTree(viteProcess);
     process.exit(1);
 }
 
@@ -492,6 +570,24 @@ try {
     await hideUiForScreenshot();
     await page.screenshot({ path: screenshotPath, fullPage: false, timeout: 60_000 });
     console.log(`Image enregistrée : ${screenshotPath}`);
+    if (reportPath) {
+        const observed = await page.evaluate(() => ({
+            ready: window.__openpbrReady === true,
+            samples: window.__openpbrSamples ?? 0,
+            shaderError: window.__openpbrShaderError ?? null,
+            contextLoss: window.__openpbrContextLossReport ?? null,
+            gpu: window.__openpbrGpuInfo ?? null,
+            dispatchBytes: (window.__openpbrMtlxDispatch ?? '').length,
+            bvhBackend: window.__openpbrBvhBackend ?? null,
+            uniforms: window.__openpbrUniformSnapshots ?? {},
+        }));
+        mkdirSync(dirname(reportPath), { recursive: true });
+        writeFileSync(reportPath, `${JSON.stringify({
+            version: 1, url, requestedMode: mode, requestedSamples: waitSamples,
+            requestedSize: [renderW, renderH], useGpu, denoiseEnabled,
+            screenshotPath, observed, browserErrors,
+        }, null, 2)}\n`, 'utf8');
+    }
 
     if (denoiseEnabled) {
         const pfmIn  = screenshotPath.replace(/\.png$/i, '_oidn_in.pfm');
