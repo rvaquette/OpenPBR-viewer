@@ -5,11 +5,17 @@ function requireRegistry(condition, code, detail) {
     if (!condition) throw new Error(`${code}: ${detail}`);
 }
 
-export function createReferenceMaterialRegistry(records, { activeMaterialKey = null, maxEntries = MAX_REFERENCE_MATERIALS } = {}) {
+export function createReferenceMaterialRegistry(records, { activeMaterialKey = null, maxEntries = MAX_REFERENCE_MATERIALS,
+    parameterSchema = null } = {}) {
     requireRegistry(Array.isArray(records), 'REFERENCE_MATERIAL_REGISTRY_INVALID', 'array required');
     requireRegistry(Number.isSafeInteger(maxEntries) && maxEntries > 0 && maxEntries <= MAX_REFERENCE_MATERIALS,
         'REFERENCE_MATERIAL_REGISTRY_CAPACITY', 'registry limit must be 1..64');
     requireRegistry(records.length <= maxEntries, 'REFERENCE_MATERIAL_REGISTRY_CAPACITY', `${records.length} exceeds ${maxEntries}`);
+    if (parameterSchema !== null) {
+        requireRegistry(Array.isArray(parameterSchema) && parameterSchema.every((parameter) =>
+            typeof parameter?.name === 'string' && typeof parameter?.type === 'string'),
+        'REFERENCE_MATERIAL_SCHEMA_INVALID', 'ordered name/type pairs required');
+    }
     const ids = new Set();
     const entries = records.map((record, index) => {
         requireRegistry(record && typeof record === 'object', 'REFERENCE_MATERIAL_REGISTRY_ENTRY_INVALID', `entry ${index}`);
@@ -56,7 +62,23 @@ export function createReferenceMaterialRegistry(records, { activeMaterialKey = n
         packedData[offset + 3] = entry.parameterVariant;
     });
     const bySceneMaterialID = new Map(entries.map((entry) => [entry.sceneMaterialID, entry]));
-    return Object.freeze({ entries:Object.freeze(entries), packedData, bySceneMaterialID, activeMaterialKey, maxEntries });
+    const schema = parameterSchema === null ? null : Object.freeze(parameterSchema.map(({ name, type }) => Object.freeze({ name, type })));
+    return Object.freeze({ entries:Object.freeze(entries), packedData, bySceneMaterialID, activeMaterialKey, maxEntries,
+        parameterSchema:schema });
+}
+
+export function assertReferenceMaterialParameterSchema(registry, parameters) {
+    requireRegistry(registry?.parameterSchema === null || Array.isArray(registry?.parameterSchema),
+        'REFERENCE_MATERIAL_REGISTRY_INVALID', 'validated registry required');
+    if (registry.parameterSchema === null) return true;
+    requireRegistry(Array.isArray(parameters) && parameters.length === registry.parameterSchema.length,
+        'REFERENCE_MATERIAL_PARAMETER_SCHEMA_MISMATCH', 'parameter count changed');
+    for (let index = 0; index < parameters.length; index++) {
+        requireRegistry(parameters[index].name === registry.parameterSchema[index].name &&
+            parameters[index].type === registry.parameterSchema[index].type,
+        'REFERENCE_MATERIAL_PARAMETER_SCHEMA_MISMATCH', `parameter #${index} changed`);
+    }
+    return true;
 }
 
 export function assertReferenceMaterialCoverage(scene, registry) {

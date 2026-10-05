@@ -31,10 +31,37 @@ try {
         set('transmission_weight', 0.75);
         set('emission_luminance', 2.5);
         set('emission_color', [0.1,0.2,0.3]);
-        return window.__openpbrRegisterReferenceMaterialRegistry(scene, [
+        const registry = window.__openpbrRegisterReferenceMaterialRegistry(scene, [
             { sceneMaterialID:7, localMaterialID:1, materialKey:'default-material', kind:'openpbr', parameterVariant:0 },
             { sceneMaterialID:19, localMaterialID:1, materialKey:'default-material', kind:'openpbr', parameterVariant:2, parameterValues:values },
         ]);
+        const dispatch = window.__openpbrMtlxDispatch || '';
+        const hook = (name) => dispatch.match(new RegExp(`(?:bool|float|vec3)\\s+${name}\\s*\\([^)]*\\)\\s*\\{[^}]*\\}`))?.[0] || '';
+        const functionBody = (name) => {
+            const signature = new RegExp(`(?:^|\\n)(?:bool|float|vec[234]|void)\\s+${name}\\s*\\(`, 'm').exec(dispatch);
+            if (!signature) return '';
+            const open = dispatch.indexOf('{', signature.index + signature[0].length);
+            let depth = 0;
+            for (let index=open; index<dispatch.length; index++) {
+                if (dispatch[index] === '{') depth++;
+                else if (dispatch[index] === '}' && --depth === 0) return dispatch.slice(signature.index, index+1);
+            }
+            return '';
+        };
+        const prepare = functionBody('mtlx_openpbr_prepare');
+        const evaluate = functionBody('mtlx_openpbr_bsdf_evaluate');
+        const sample = functionBody('mtlx_openpbr_bsdf_sample');
+        const emissionAt = functionBody('mtlx_openpbr_emission_at');
+        return { ...registry, hookSnippets:{
+            opaque:hook('mtlx_openpbr_is_opaque'), thinWalled:hook('mtlx_openpbr_is_thinwalled'),
+            transmission:hook('mtlx_openpbr_transmission_weight'), specularRoughness:hook('mtlx_openpbr_specular_roughness'),
+            thinFilmWeight:hook('mtlx_openpbr_thin_film_weight'), thinFilmThickness:hook('mtlx_openpbr_thin_film_thickness_nm'),
+            thinFilmIor:hook('mtlx_openpbr_thin_film_ior'), specularIor:hook('mtlx_openpbr_specular_ior'),
+            prepare, evaluate, sample, emissionAt,
+            dispatchHasVariantReads:dispatch.includes('mtlxGetMaterialParam('),
+            dispatchHasHostEval:dispatch.includes('mtlxHostEvalSurface('),
+            sampleReturnsMedium:sample.includes('internal_medium.extinction') && sample.includes('internal_medium.albedo'),
+        } };
     });
     assert.equal(report.observed.count, 2);
     assert.equal(report.observed.activeMaterialKey, 'default-material');
@@ -48,7 +75,23 @@ try {
     assert.equal(report.observed.parameterRows[2].geometry_thin_walled[0], 1);
     assert.equal(report.observed.parameterRows[2].transmission_weight[0], 0.75);
     assert.equal(report.observed.parameterRows[2].emission_luminance[0], 2.5);
-    assert.deepEqual(report.observed.parameterRows[2].emission_color.slice(0,3), [0.1,0.2,0.3]);
+    assert.ok(report.observed.parameterRows[2].emission_color.slice(0,3)
+        .every((value,index) => Math.abs(value - [0.1,0.2,0.3][index]) < 1.0e-6));
+    assert.match(report.observed.hookSnippets.opaque, /mtlxGetMaterialParam\(/);
+    assert.match(report.observed.hookSnippets.thinWalled, /mtlxGetMaterialParam\(/);
+    assert.match(report.observed.hookSnippets.transmission, /mtlxGetMaterialParam\(/);
+    assert.match(report.observed.hookSnippets.specularRoughness, /mtlxGetMaterialParam\(/);
+    assert.match(report.observed.hookSnippets.thinFilmWeight, /mtlxGetMaterialParam\(/);
+    assert.match(report.observed.hookSnippets.thinFilmThickness, /mtlxGetMaterialParam\(/);
+    assert.match(report.observed.hookSnippets.thinFilmIor, /mtlxGetMaterialParam\(/);
+    assert.match(report.observed.hookSnippets.specularIor, /mtlxGetMaterialParam\(/);
+    assert.match(report.observed.hookSnippets.prepare, /mtlxGetMaterialParam\(/);
+    assert.match(report.observed.hookSnippets.evaluate, /mtlxHostEvalSurface/);
+    assert.match(report.observed.hookSnippets.sample, /mtlxGetMaterialParam\(/);
+    assert.equal(report.observed.hookSnippets.sampleReturnsMedium, true);
+    assert.match(report.observed.hookSnippets.emissionAt, /mtlx_openpbr_prepare/);
+    assert.equal(report.observed.hookSnippets.dispatchHasHostEval, true);
+    assert.equal(report.observed.hookSnippets.dispatchHasVariantReads, true);
     assert.deepEqual(report.errors, []);
     report.status = 'PASS';
     console.log(`PASS T017 main.js registry smoke: ${report.observed.count} scene IDs registered in active local dispatch.`);

@@ -44,12 +44,18 @@ const float DENOM_TOLERANCE = 1.0e-10;
 const int MATERIAL_PROPS = 0;
 const int MATERIAL_OPENPBR = 1;
 const int MATERIAL_GROUND = 2;
+struct Basis { vec3 nW; vec3 tW; vec3 bW; vec3 baryCoord; vec2 texCoord; };
+Basis makeBasis(vec3 nW, vec3 tW, vec3 baryCoord, vec2 texCoord) {
+    Basis basis; basis.nW=nW; basis.tW=tW; basis.bW=cross(nW,tW); basis.baryCoord=baryCoord; basis.texCoord=texCoord; return basis;
+}
+vec3 worldToLocal(vec3 value, Basis basis) { return vec3(dot(value,basis.tW),dot(value,basis.bW),dot(value,basis.nW)); }
 uniform bool ground_enabled;
 uniform float ground_y;
 vec3 safe_normalize(vec3 value) { float magnitude = length(value); return value / max(magnitude, DENOM_TOLERANCE); }
 ${trace}
 bool mtlx_openpbr_is_opaque() { return true; }
 bool mtlx_openpbr_is_thinwalled() { return false; }
+void mtlx_openpbr_prepare(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed) { rndSeed += 0u; }
 ${traceShadow}
 out vec4 outColor;
 void main() {

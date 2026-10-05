@@ -51,3 +51,47 @@ export function emitMtlxOpenPbrOpaqueFunction(summary, descriptors) {
     const transmissionWeight = mtlxParameterExpression('float', 'transmission_weight', summary.transmissionWeight, descriptors);
     return `bool mtlx_openpbr_is_opaque() { return !(${thinWalled}) && (${transmissionWeight} <= 0.0); }`;
 }
+
+export function bindMtlxVariantHookFunctions(glsl, descriptors) {
+    const opacity = descriptors.find((parameter) => parameter.name === 'geometry_opacity');
+    const thinWalled = descriptors.find((parameter) => parameter.name === 'geometry_thin_walled');
+    let source = String(glsl);
+    if (opacity) {
+        source = source.replace(/bool\s+mtlx_openpbr_is_opaque\s*\(\)\s*\{[^{}]*\}/,
+            `bool mtlx_openpbr_is_opaque() { return mtlxGetMaterialParam(${opacity.index}).x >= 1.0 - 1.0e-6; }`);
+    }
+    if (thinWalled) {
+        source = source.replace(/bool\s+mtlx_openpbr_is_thinwalled\s*\(\)\s*\{[^{}]*\}/,
+            `bool mtlx_openpbr_is_thinwalled() { return mtlxGetMaterialParam(${thinWalled.index}).x > 0.5; }`);
+    }
+    return source;
+}
+
+export function validateMtlxVariantFeatures(registry, descriptors, enabledFeatures) {
+    const descriptorIndex = new Map(descriptors.map((parameter, index) => [parameter.name, index]));
+    const valueFor = (entry, name) => {
+        const index = descriptorIndex.get(name);
+        if (index === undefined) return 0;
+        if (entry.parameterVariant === 0) return descriptors[index].value;
+        if (entry.parameterVariant === 1) return descriptors[index].defaultValue;
+        return entry.parameterValues[index];
+    };
+    for (const entry of registry.entries) {
+        if (entry.kind !== 'openpbr') continue;
+        const transmission = Number(valueFor(entry, 'transmission_weight')) > 0;
+        const depth = Number(valueFor(entry, 'transmission_depth')) > 0;
+        const thinWalled = Boolean(valueFor(entry, 'geometry_thin_walled'));
+        const dispersion = Number(valueFor(entry, 'transmission_dispersion_scale')) > 0;
+        const thinFilm = Number(valueFor(entry, 'thin_film_weight')) > 0;
+        const requirements = [
+            ['VOLUME_ENABLED', transmission && depth && !thinWalled],
+            ['TRANSMISSION_ENABLED', transmission && dispersion],
+            ['THIN_FILM_ENABLED', thinFilm],
+        ];
+        for (const [feature, required] of requirements) {
+            if (required && enabledFeatures[feature] !== true)
+                throw new Error(`REFERENCE_MATERIAL_FEATURE_UNAVAILABLE: scene material ${entry.sceneMaterialID} requires ${feature}`);
+        }
+    }
+    return true;
+}

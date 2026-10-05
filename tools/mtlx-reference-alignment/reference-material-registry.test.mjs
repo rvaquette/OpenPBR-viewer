@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright-core';
-import { assertReferenceMaterialCoverage, createReferenceMaterialRegistry } from '../../src/mtlx/referenceMaterialRegistry.js';
+import { assertReferenceMaterialCoverage, assertReferenceMaterialParameterSchema, createReferenceMaterialRegistry } from '../../src/mtlx/referenceMaterialRegistry.js';
 
 function extractFunction(source, signature) {
     const start = source.indexOf(signature);
@@ -138,4 +138,19 @@ void main() {
     } finally {
         await browser.close();
     }
+});
+
+test('registry pins ordered local parameter schema and rejects incompatible dispatch signatures', () => {
+    const registry = createReferenceMaterialRegistry([
+        {sceneMaterialID:5,localMaterialID:1,materialKey:'active',kind:'openpbr'},
+    ], {parameterSchema:[{name:'geometry_thin_walled',type:'bool'},{name:'transmission_weight',type:'float'}]});
+    assert.equal(assertReferenceMaterialParameterSchema(registry,[
+        {name:'geometry_thin_walled',type:'bool'},{name:'transmission_weight',type:'float'},
+    ]),true);
+    assert.throws(() => assertReferenceMaterialParameterSchema(registry,[
+        {name:'transmission_weight',type:'float'},{name:'geometry_thin_walled',type:'bool'},
+    ]),/SCHEMA_MISMATCH/);
+    assert.throws(() => assertReferenceMaterialParameterSchema(registry,[
+        {name:'geometry_thin_walled',type:'float'},{name:'transmission_weight',type:'float'},
+    ]),/SCHEMA_MISMATCH/);
 });

@@ -145,13 +145,25 @@ float TraceShadow(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance)
     shadowRay.direction = rayDir;
     bool referenceGeometryHit = AnyHit(shadowRay, maxDistance);
     if (!referenceGeometryHit && !ground_enabled)
+    {
+        mtlxMaterialVariant = previousMaterialVariant;
         return 1.0;
+    }
 #endif
     int material;
     vec3 pW, nsW, ngW, TsW, baryCoord;
     vec2 texCoord;
     bool hit = trace(rayOrigin, rayDir, maxDistance,
                      pW, nsW, ngW, TsW, baryCoord, texCoord, material);
+#ifdef REFERENCE_BVH_ENABLED
+    if (hit && material == MATERIAL_OPENPBR)
+    {
+        Basis shadowBasis = makeBasis(nsW, TsW, baryCoord, texCoord);
+        vec3 winputL = worldToLocal(-rayDir, shadowBasis);
+        uint shadowSeed = 0u;
+        mtlx_openpbr_prepare(pW, shadowBasis, winputL, shadowSeed);
+    }
+#endif
     if (hit && material == MATERIAL_OPENPBR && !mtlx_openpbr_is_opaque() && mtlx_openpbr_is_thinwalled())
     {
 #ifdef REFERENCE_BVH_ENABLED
