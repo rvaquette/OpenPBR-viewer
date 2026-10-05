@@ -5,7 +5,7 @@ import { Scene,
     PlaneGeometry,
     PerspectiveCamera, OrthographicCamera,
     DirectionalLight, AmbientLight, DoubleSide,
-    LinearSRGBColorSpace, SRGBColorSpace, RGBAFormat, FloatType,
+    LinearSRGBColorSpace, SRGBColorSpace, RGBAFormat, FloatType, UnsignedByteType,
     WebGLRenderer, WebGLRenderTarget, RepeatWrapping,
     EquirectangularReflectionMapping, CubeReflectionMapping,
     UniformsUtils, UniformsLib, ShaderLib,
@@ -18,6 +18,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { loadEnvironmentTexture } from './src/envmap/envLoader.js';
 import { loadNativeTexture } from './src/textures/textureLoader.js';
+import { disposeReferenceSceneResources, loadReferenceSceneResources, prepareReferenceScene } from './src/scene/referenceSceneAdapter.js';
 import { DEFAULT_BVH_BACKEND, AVAILABLE_BVH_BACKENDS, resolveBvhBackend } from './src/bvh/backend.mjs';
 import { assertReferenceMaterialCoverage, assertReferenceMaterialParameterSchema,
     createReferenceMaterialRegistry } from './src/mtlx/referenceMaterialRegistry.js';
@@ -221,6 +222,7 @@ var params =
     //////////////////////////////////////////////////////
 
     scene_name:                         'shader-ball',
+    scene_url:                          '',
     renderer_mode:                      'Rasterizer MTLX',
     bvh_backend:                        DEFAULT_BVH_BACKEND,
     mtlx_directory:                     '',
@@ -330,6 +332,9 @@ var mtlxRouteParamDescriptors = [];
 var mtlxDefaultParameterMaterialKey = '';
 var mtlxDefaultParameterValues = new Map();
 var activeMtlxMaterialText = null;
+var activeReferenceScene = null;
+var activeReferenceResources = null;
+var referenceSceneLoadRevision = 0;
 var mtlxParameterUpdateQueue = Promise.resolve();
 var mtlxRouteLightsTexture = null;
 var mtlxRouteReferenceMaterialRegistry = null;
@@ -2912,6 +2917,26 @@ var scene_names = {
     'Bearded Man':          'bearded-man'
 };
 
+function reportReferenceSceneError(error)
+{
+    const message = `[scene] ${error?.message || error}`;
+    console.error(message,error);
+    window.__openpbrSceneLoadError = message;
+    window.__openpbrShaderError = message;
+    window.__openpbrReady = true;
+    const progressOverlay = document.getElementById('progress_overlay');
+    if (progressOverlay) {
+        progressOverlay.classList.remove('is-loading');
+        progressOverlay.style.display = 'none';
+    }
+    const overlay = document.getElementById('shader-error');
+    const content = document.getElementById('shader-error-content');
+    if (overlay && content) {
+        content.textContent = message;
+        overlay.style.display = 'block';
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Apply URL query parameters to override params defaults before init()
 // Usage: ?renderer_mode=Pathtracing&base_color=1,0,0&base_metalness=1
@@ -2971,9 +2996,23 @@ initializeLoadingProgress();
         return;
     }
 
+    if (search.has('scene_url')) {
+        try {
+            if (search.has('mtlx_url')) throw new Error('SCENE_MATERIAL_SOURCE_CONFLICT: use the .scene material block instead of mtlx_url');
+            const sceneUrl = resolveViewerAssetUrl(params.scene_url);
+            activeReferenceScene = await prepareReferenceScene(sceneUrl);
+            params.scene_url = activeReferenceScene.sceneUrl;
+            params.mtlx_material = activeReferenceScene.materialName;
+            window.__openpbrScene = { url:activeReferenceScene.sceneUrl, status:'prepared', material:activeReferenceScene.materialName };
+        } catch (error) {
+            reportReferenceSceneError(error);
+            return;
+        }
+    }
+
     // Generate GLSL from .mtlx before building the first shader.
-    let mtlxText = DEFAULT_MTLX;
-    let mtlxMaterialBaseUrl = getPublicAssetUrl('');
+    let mtlxText = activeReferenceScene?.materialText || DEFAULT_MTLX;
+    let mtlxMaterialBaseUrl = activeReferenceScene?.materialBaseUrl || getPublicAssetUrl('');
     if (search.has('mtlx_url')) {
         try {
             let mtlxUrl = search.get('mtlx_url');
@@ -3750,8 +3789,181 @@ function load_geometry(scene_name)
     } );
 }
 
+function loadReferenceScene(scene_name)
+{
+    const revision = ++referenceSceneLoadRevision;
+    setGpuDebugStage('loading-scene');
+    setLoadingProgress('Chargement de la scene...');
+    window.__openpbrScene = { url:activeReferenceScene.sceneUrl, status:'loading', material:activeReferenceScene.materialName };
+
+    (async () => {
+        let resources;
+        try {
+            resources = await loadReferenceSceneResources(activeReferenceScene,{
+                loadGltf:(url) => mesh_loader.loader.loadAsync(url),
+                loadEnvironment:(url) => loadEnvironmentTexture(url),
+                isCurrent:() => revision === referenceSceneLoadRevision && !!params.scene_url,
+            });
+            if (resources.environment === undefined) {
+                const envPath = params.env_map_path || 'textures/envmaps/Malibu_Overlook_8k.jpg';
+                const envUrl = /^(?:https?:)?\/\//i.test(envPath) ? envPath : getPublicAssetUrl(envPath);
+                resources.environment = { ...await loadEnvironmentTexture(envUrl),url:envUrl };
+            }
+            if (!resources.environment) {
+                const black = new DataTexture(new Uint8Array([0,0,0,255]),1,1,RGBAFormat,UnsignedByteType);
+                black.colorSpace = SRGBColorSpace;
+                black.needsUpdate = true;
+                resources.environment = { texture:black, importance:null, url:null };
+            }
+            for (const environment of new Set([resources.environment,resources.irradiance])) {
+                if (!environment) continue;
+                if (!environment.texture) continue;
+                const texture = environment.texture;
+                const latLongTexture = texture.clone();
+                latLongTexture.needsUpdate = true;
+                texture.mapping = EquirectangularReflectionMapping;
+                if (!/\.hdr(?:$|[?#])/i.test(environment.url || '')) {
+                    texture.colorSpace = SRGBColorSpace;
+                    latLongTexture.colorSpace = SRGBColorSpace;
+                }
+                environment.latLongTexture = latLongTexture;
+            }
+            if (resources.irradiance === undefined) resources.irradiance = resources.environment;
+            if (revision !== referenceSceneLoadRevision || !params.scene_url) {
+                disposeReferenceSceneResources(resources);
+                return;
+            }
+
+            const previousResources = activeReferenceResources;
+            create_materials();
+            FULLSCREEN_BVH_ROUTE = is_fullscreen_bvh_route();
+            scene = new Scene();
+            env_map_texture = resources.environment.texture;
+            env_map_latlong_texture = resources.environment.latLongTexture || resources.environment.texture;
+            env_map_importance = resources.environment.importance || null;
+            env_irradiance_texture = resources.irradiance?.texture || null;
+            env_irradiance_latlong_texture = resources.irradiance?.latLongTexture || null;
+            scene.background = env_map_texture;
+            if (!FULLSCREEN_BVH_ROUTE) {
+                neutralMaterial.envMap = env_map_texture;
+                neutralMaterial.uniforms.envMap.value = env_map_texture;
+                openpbrMaterial.envMap = env_map_texture;
+                openpbrMaterial.uniforms.envMap.value = env_map_texture;
+            } else {
+                for (const material of get_pathtrace_materials()) {
+                    if (material.uniforms.envMapLatLong) material.uniforms.envMapLatLong.value = env_map_latlong_texture;
+                    if (material.uniforms.envMapIrradiance)
+                        material.uniforms.envMapIrradiance.value = env_irradiance_latlong_texture || env_map_latlong_texture;
+                    if (material.uniforms.has_env_cdf) {
+                        const importance = env_map_importance;
+                        material.uniforms.has_env_cdf.value = params.env_cdf_sampling === true && !!importance;
+                        material.uniforms.envMapEquirect.value = importance ? importance.equirectTexture : null;
+                        material.uniforms.envMapCDFTex.value = importance ? importance.cdfTexture : null;
+                        material.uniforms.envMapRes.value.set(importance ? importance.width : 1,importance ? importance.height : 1);
+                        material.uniforms.envMapTotalSum.value = importance ? importance.totalSum : 0.0;
+                    }
+                }
+            }
+
+            resources.objectScene.traverse((object) => {
+                if (!object.isMesh) return;
+                object.material = FULLSCREEN_BVH_ROUTE ? object.material : openpbrMaterial;
+                object.receiveShadow = true;
+                object.castShadow = true;
+                if (!FULLSCREEN_BVH_ROUTE) object.material.side = DoubleSide;
+            });
+            scene.add(resources.objectScene);
+            MESH_SURFACE = new Mesh(resources.geometry,null);
+            MESH_PROPS = FULLSCREEN_BVH_ROUTE ? null : MESH_SURFACE;
+            BVH_PROPS = null;
+            BVH_SURFACE = FULLSCREEN_BVH_ROUTE ? buildBvh(resources.geometry) : null;
+
+            if (FULLSCREEN_BVH_ROUTE) {
+                for (const material of get_pathtrace_materials()) {
+                    if (material.uniforms.geomN_surface) {
+                        const combinedGeometry = buildCombinedSurfaceGeometry(null,resources.geometry);
+                        const combined = { bvh:buildBvh(combinedGeometry), packed:packSurfaceGeom(combinedGeometry) };
+                        assignBvhUniforms(material.uniforms,'bvh_surface',combined.bvh);
+                        material.uniforms.geomN_surface.value.updateFrom(combined.packed.gN);
+                        material.uniforms.geomT_surface.value.updateFrom(combined.packed.gT);
+                        material.uniforms.geomS_surface.value.updateFrom(combined.packed.gS);
+                        material.uniforms.has_normals_surface.value = combined.packed.has_normals;
+                        material.uniforms.has_tangents_surface.value = combined.packed.has_tangents;
+                        material.uniforms.has_uvs_surface.value = combined.packed.has_uvs;
+                    } else {
+                        assignBvhUniforms(material.uniforms,'bvh_surface',BVH_SURFACE);
+                        material.uniforms.has_normals_surface.value = !!resources.geometry.attributes.normal;
+                        material.uniforms.has_tangents_surface.value = !!resources.geometry.attributes.tangent;
+                        if (material.uniforms.has_uvs_surface)
+                            material.uniforms.has_uvs_surface.value = !!resources.geometry.attributes.uv;
+                        if (resources.geometry.attributes.normal)
+                            material.uniforms.normalAttribute_surface.value.updateFrom(resources.geometry.attributes.normal);
+                        if (resources.geometry.attributes.tangent)
+                            material.uniforms.tangentAttribute_surface.value.updateFrom(resources.geometry.attributes.tangent);
+                        if (material.uniforms.uvAttribute_surface && resources.geometry.attributes.uv)
+                            material.uniforms.uvAttribute_surface.value.updateFrom(resources.geometry.attributes.uv);
+                    }
+                }
+            }
+
+            const groundBounds = new Box3();
+            resources.geometry.computeBoundingBox();
+            if (resources.geometry.boundingBox) groundBounds.union(resources.geometry.boundingBox);
+            sceneGroundY = groundBounds.isEmpty() ? 0.01 : groundBounds.min.y - 0.01;
+            const groundTexture = loadNativeTexture(getPublicAssetUrl('textures/ground.png'));
+            resources.groundTexture = groundTexture;
+            groundTexture.wrapS = RepeatWrapping;
+            groundTexture.wrapT = RepeatWrapping;
+            groundTexture.colorSpace = SRGBColorSpace;
+            if (!FULLSCREEN_BVH_ROUTE) {
+                groundTexture.repeat.set(2,2);
+                groundTexture.offset.set(0.5,0.5);
+                const groundGeometry = new PlaneGeometry(200,200);
+                const groundMaterial = new MeshLambertMaterial({ map:groundTexture,polygonOffset:true,polygonOffsetFactor:-1,polygonOffsetUnits:-1 });
+                const groundMesh = new Mesh(groundGeometry,groundMaterial);
+                groundMesh.rotation.x = -Math.PI / 2;
+                groundMesh.position.y = sceneGroundY;
+                groundMesh.receiveShadow = true;
+                scene.add(groundMesh);
+            } else {
+                for (const material of get_pathtrace_materials())
+                    if (material.uniforms.ground_texture) material.uniforms.ground_texture.value = groundTexture;
+            }
+
+            activeReferenceResources = resources;
+            if (previousResources) disposeReferenceSceneResources(previousResources);
+            LOADED = true;
+            setGpuDebugStage('scene-loaded');
+            window.__openpbrScene = { url:activeReferenceScene.sceneUrl, status:'loaded', material:activeReferenceScene.materialName,
+                geometryBlocks:resources.objectScene.children.length, geometryTriangles:resources.geometry.index
+                    ? resources.geometry.index.count / 3 : resources.geometry.attributes.position.count / 3 };
+            post_load_setup();
+            progress_finished_timer = performance.now();
+        } catch (error) {
+            if (error?.code === 'SCENE_LOAD_SUPERSEDED') return;
+            if (resources && resources !== activeReferenceResources) disposeReferenceSceneResources(resources);
+            reportReferenceSceneError(error);
+        }
+    })();
+}
+
 function load_scene(scene_name)
 {
+    if (activeReferenceScene && params.scene_url) {
+        loadReferenceScene(scene_name);
+        return;
+    }
+    referenceSceneLoadRevision++;
+    if (activeReferenceResources) {
+        disposeReferenceSceneResources(activeReferenceResources);
+        activeReferenceResources = null;
+        env_map_texture = null;
+        env_map_latlong_texture = null;
+        env_map_importance = null;
+        env_irradiance_texture = null;
+        env_irradiance_latlong_texture = null;
+    }
+    if (window.__openpbrScene) delete window.__openpbrScene;
     setGpuDebugStage('loading-scene');
     console.log('Loading scene: ', scene_name);
     LOADED = false;
@@ -4195,7 +4407,12 @@ function setup_gui()
         pathtracedMaterial.needsUpdate = true;
         trigger_recompile();
     });
-    renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => { setPaused(true); load_scene(v); });
+    renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => {
+        params.scene_url = '';
+        activeReferenceScene = null;
+        setPaused(true);
+        load_scene(v);
+    });
     renderer_folder.add( params, 'smooth_normals' ).onChange(                                         v => { resetSamples(); });
     renderer_folder.add( params, 'wireframe' ).onChange(                                              v => { resetSamples(); });
     renderer_folder.addColor(params, 'neutral_color').onChange(                                       v => { resetSamples(); });
@@ -4225,9 +4442,9 @@ function post_load_setup()
 
         updateSunDir()
         let dL = 20.0;
-        directionalLight.position.set(MESH_PROPS.position[0] + dL*params.sunDir[0],
-                                      MESH_PROPS.position[1] + dL*params.sunDir[1],
-                                      MESH_PROPS.position[2] + dL*params.sunDir[2]);
+        directionalLight.position.set(MESH_PROPS.position.x + dL*params.sunDir[0],
+                          MESH_PROPS.position.y + dL*params.sunDir[1],
+                          MESH_PROPS.position.z + dL*params.sunDir[2]);
         directionalLight.target.position.copy( MESH_PROPS.position );
         directionalLight.castShadow = true; // default false
 

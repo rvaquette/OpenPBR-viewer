@@ -34,6 +34,7 @@
  *                                        --mode=raster-mtlx pour le rasterizer MTLX)
  *   --gpu=true|false              false = rendu logiciel SwiftShader (défaut: true)
  *   --scene=shader-ball|standard-shader-ball|glavenus|terrain|bearded-man
+ *   --scene_url=/scenes/example.scene   Charge une scene .scene locale
  *   --smooth_normals=true|false   Lissage des normales (défaut: true)
  *   --bounces=N                   Nombre de rebonds (défaut: 6)
  *   --max_samples=N               Samples max avant arrêt (défaut: 512)
@@ -445,6 +446,16 @@ page.on('requestfailed', req  => console.error(`[browser] REQUEST FAILED: ${req.
 
 await page.goto(url, { waitUntil: 'domcontentloaded' });
 
+if (options.scene_url) {
+    await page.waitForFunction(() => window.__openpbrScene?.status === 'loaded' || window.__openpbrSceneLoadError,
+        null,{ timeout:1200_000 });
+    const sceneLoad = await page.evaluate(() => window.__openpbrScene ?? null);
+    if (sceneLoad?.status !== 'loaded') {
+        const message = await page.evaluate(() => window.__openpbrSceneLoadError || 'scene_url did not load');
+        throw new Error(`[scene_url] ${message}`);
+    }
+}
+
 // Masquer l'UI (GUI, stats, overlays) pour un screenshot propre
 if (headless) {
     await page.addStyleTag({ content: `
@@ -579,6 +590,7 @@ try {
             gpu: window.__openpbrGpuInfo ?? null,
             dispatchBytes: (window.__openpbrMtlxDispatch ?? '').length,
             bvhBackend: window.__openpbrBvhBackend ?? null,
+            scene: window.__openpbrScene ?? null,
             uniforms: window.__openpbrUniformSnapshots ?? {},
         }));
         mkdirSync(dirname(reportPath), { recursive: true });

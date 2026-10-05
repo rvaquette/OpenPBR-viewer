@@ -41,7 +41,6 @@ test('registry rejects duplicate IDs, invalid precision, unsupported variants an
     const openpbr = { sceneMaterialID:1, localMaterialID:1, materialKey:'active', kind:'openpbr' };
     assert.throws(() => createReferenceMaterialRegistry([openpbr,{...openpbr}]), /ID_DUPLICATE/);
     assert.throws(() => createReferenceMaterialRegistry([{...openpbr,sceneMaterialID:0x1000000}]), /ID_INVALID/);
-    assert.throws(() => createReferenceMaterialRegistry([{...openpbr,parameterVariant:1}]), /VARIANT_RESERVED/);
     assert.throws(() => createReferenceMaterialRegistry([{...openpbr,parameterVariant:64}]), /VARIANT_INVALID/);
     assert.throws(() => createReferenceMaterialRegistry([{...openpbr,parameterVariant:2}]), /PARAMETERS_REQUIRED/);
     assert.throws(() => createReferenceMaterialRegistry([{...openpbr,localMaterialID:4}]), /KIND_MISMATCH/);
@@ -153,4 +152,11 @@ test('registry pins ordered local parameter schema and rejects incompatible disp
     assert.throws(() => assertReferenceMaterialParameterSchema(registry,[
         {name:'geometry_thin_walled',type:'float'},{name:'transmission_weight',type:'float'},
     ]),/SCHEMA_MISMATCH/);
+});
+
+test('OpenPBR registry entries may explicitly select the generated default parameter block', () => {
+    const registry = createReferenceMaterialRegistry([
+        {sceneMaterialID:6,localMaterialID:1,materialKey:'active',kind:'openpbr',parameterVariant:1},
+    ]);
+    assert.equal(registry.bySceneMaterialID.get(6).parameterVariant, 1);
 });

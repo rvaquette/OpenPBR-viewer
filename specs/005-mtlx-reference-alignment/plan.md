@@ -1,7 +1,7 @@
 # Rapprochement du pathtracer MTLX avec la reference
 
-Date : 2026-10-04. Statut au 2026-10-05 : jalons 0 a 7 valides ; T013-T017
-closest/any-hit et registre materialID termines sous macro dormante. Backend reference non active.
+Date : 2026-10-04. Statut au 2026-10-05 : jalons 0 a 8 valides ; T013-T018
+closest/any-hit, registre et hooks de variants termines sous macro dormante. Backend reference non active.
 Reference : D:/WebGL2/GLSL-PathTracer-JS, notamment src/core/pathtracer/.
 
 ## Contraintes
@@ -203,15 +203,15 @@ thin-walled et segments bornes verifies. Le mapping des IDs reference est T017.
 - [x] T017 [Plan:8] Relier IDs TLAS au registre local dans main.js sans reduction a un flag. [Evidence: t017-materialid-registry.md ; referenceMaterialRegistry.js ; t017-material-registration-smoke.json]
 Registry sparse sceneID/kind/localID/parameterVariant ; coverage fail-closed et
 parametres de closure verifies. IDs distincts gardes, variantes partageant la meme closure.
-- [ ] T018 [Plan:8] Verifier prepare/evaluate/sample/opacite/thinwalled/emission/milieu du materiau touche dans le GLSL local.
+- [x] T018 [Plan:8] Verifier prepare/evaluate/sample/opacite/thinwalled/emission/milieu du materiau touche dans le GLSL local. [Evidence: t018-material-variant-hooks.md ; reference-material-hooks.test.mjs ; t018-material-hooks-smoke.json]
+Hooks et sorties medium suivent le variant MaterialX actif ; defines volume/dispersion/film manquants refusent le variant.
 Controle : corpus A/B LOCAL, instances a materiaux distincts, normal-map/UV/anisotropie,
-volume/transmission/film ; dispatch local stable pour entrees identiques.
-Si closures heterogenes depassent le registre actuel, sous-jalon bloqueur dedie.
-T018 verifie l’application des variants dans tous les hooks et la fidelite des materiaux.
+volume/transmission/film verifies par smoke local Honey et oracle CPU/GPU. Le dispatch reste une closure partagee.
+Un document exigeant un code closure different est rejete ; le loader scene et les fixtures A/B completes restent a venir.
 
 ### 9. Parser .scene sans renderer [REQ-004, REQ-005, REQ-006, REQ-007]
-- [ ] T019 [Plan:9] Adapter syntaxe dans src/scene/sceneLoader.js, parsing pur separe du chargement. [Source: D:/WebGL2/GLSL-PathTracer-JS/src/core/pathtracer/loaders/sceneLoader.ts]
-- [ ] T020 [Plan:9] Parser material/light/camera/renderer/mesh/gltf, MTLX inline/document, object/glob ; diagnostics ligne/nom/directive.
+- [x] T019 [Plan:9] Adapter syntaxe dans src/scene/sceneLoader.js, parsing pur separe du chargement. [Source: D:/WebGL2/GLSL-PathTracer-JS/src/core/pathtracer/loaders/sceneLoader.ts]
+- [x] T020 [Plan:9] Parser material/light/camera/renderer/mesh/gltf, MTLX inline/document, object/glob ; diagnostics ligne/nom/directive. [Evidence: t019-t020-scene-parser.md ; ../../src/scene/sceneLoader.js ; ../../tools/mtlx-reference-alignment/scene-loader.test.mjs]
 Controle auto : BOM/CRLF/commentaires/espaces/guillemets/matrix-TRS, valeurs non finies,
 bloc ouvert, refs inconnues et MTLX ambigu. Parsing distant avec doubles de services
 seulement, jamais generateur distant. Passage : chaque directive supportee/adaptee/rejetee.

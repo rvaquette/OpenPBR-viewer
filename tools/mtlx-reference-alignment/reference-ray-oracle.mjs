@@ -243,10 +243,16 @@ uniform sampler2D rayDirectionTexture;
 uniform int rayTextureWidth;
 uniform int resultPass;
 uniform int traceWidth;
+struct Basis { vec3 nW; vec3 tW; vec3 bW; vec3 baryCoord; vec2 texCoord; };
+Basis makeBasis(vec3 nW, vec3 tW, vec3 baryCoord, vec2 texCoord) {
+    Basis basis; basis.nW=nW; basis.tW=tW; basis.bW=cross(nW,tW); basis.baryCoord=baryCoord; basis.texCoord=texCoord; return basis;
+}
+vec3 worldToLocal(vec3 value, Basis basis) { return vec3(dot(value,basis.tW),dot(value,basis.bW),dot(value,basis.nW)); }
 vec3 safe_normalize(vec3 value) { float magnitude = length(value); return value / max(magnitude, DENOM_TOLERANCE); }
 ${traceFunction}
 bool mtlx_openpbr_is_opaque() { return shadowOpaque; }
 bool mtlx_openpbr_is_thinwalled() { return shadowThinWalled; }
+void mtlx_openpbr_prepare(in vec3 pW, in Basis basis, in vec3 winputL, inout uint rndSeed) { rndSeed += 0u; }
 ${traceShadowFunction}
 layout(location=0) out vec4 out0;
 layout(location=1) out vec4 out1;

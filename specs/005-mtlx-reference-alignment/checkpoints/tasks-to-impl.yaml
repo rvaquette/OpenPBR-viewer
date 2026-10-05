@@ -1,5 +1,5 @@
 status: partial
-scope: T001-T017
+scope: T001-T020
 stage_0_status: completed
 stage_0_acceptance: explicit-user-decision-2026-10-04
 runtime_changes: backend-selection-validation-only
@@ -196,14 +196,46 @@ tasks:
     host_DataTexture_rows: runtime-smoke-verified
     reference_macro_runtime_enabled: false
     reference_ready: false
+  T018:
+    status: completed
+    plan_item: 8
+    requirements: [REQ-001, REQ-004, REQ-007]
+    evidence: [../t018-material-variant-hooks.md, ../../../src/mtlx/referenceMaterialHooks.js, ../../../tools/mtlx-reference-alignment/reference-material-hooks.test.mjs, ../../../tools/mtlx-reference-alignment/reference-material-registration-smoke.mjs, ../../../artifacts/mtlx-reference-alignment/t018-material-hooks-smoke.json]
+    validation: passed-75-tests-build-Honey-volume-variant-smoke-10000-ray-oracle
+    hooks: [prepare, evaluate, sample, opaque, thinwalled, emission, thinfilm, specular, medium]
+    all_parameter_block_fields_table_backed: true
+    variant_schema_mismatch: rejected
+    missing_volume_dispersion_film_defines: rejected
+    active_volume_variant: Honey
+    reference_macro_runtime_enabled: false
+    reference_ready: false
+  T019:
+    status: completed
+    plan_item: 9
+    requirements: [REQ-004, REQ-005, REQ-006, REQ-007]
+    evidence: [../t019-t020-scene-parser.md, ../../../src/scene/sceneLoader.js, ../../../src/scene/package.json, ../../../tools/mtlx-reference-alignment/scene-loader.test.mjs]
+    validation: passed-82-tests-build-and-7-parser-tests
+    parsing_pure: true
+    runtime_changes: false
+  T020:
+    status: completed
+    plan_item: 9
+    requirements: [REQ-004, REQ-005, REQ-006, REQ-007]
+    evidence: [../t019-t020-scene-parser.md, ../scene-directives.json, ../../../tools/mtlx-reference-alignment/scene-loader.test.mjs]
+    validation: passed-82-tests-build-and-7-parser-tests
+    approved_non_mtlx_fixtures: [cornell_box_orig.scene, cornell_box_sphere.scene]
+    disney_specular_witness: rejected
+    reference_renderer_executed: false
+    resources_loaded: false
 blockers: []
 non_blocking_followups:
   - TS-and-asset-provenance-authorization
   - complete-denoiser-bundle-license-notices
+  - 'T001-local-HEAD-pin-mismatch: pinned-5a863b2-current-e8e16fe-two-step-commits'
 resolved_blockers:
   - rt_hdr_small.tza-origin-version-sha256-license
 denoiser_weight_provenance: verified-local-and-published-archive
-next_task: T018
+next_task: T021
 stage_1_status: completed-capture-scope
 stage_2_status: completed
 stage_3_status: completed-CPU-BLAS
@@ -211,4 +243,5 @@ stage_4_status: completed-CPU-instances
 stage_5_status: completed-GPU-texture-readback
 stage_6_status: completed-closest-hit-dormant
 stage_7_status: completed-local-shadow-filters
-stage_8_status: partial-registry-complete-awaiting-T018-shading-hooks
+stage_8_status: completed-material-hooks-variant-aware
+stage_9_status: completed-pure-scene-parser

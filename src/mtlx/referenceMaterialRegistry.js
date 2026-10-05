@@ -33,18 +33,17 @@ export function createReferenceMaterialRegistry(records, { activeMaterialKey = n
             `${kind} must map to local pathtracer material ID ${REFERENCE_MATERIAL_KIND[kind]}`);
         requireRegistry(Number.isSafeInteger(parameterVariant) && parameterVariant >= 0 && parameterVariant < maxEntries,
             'REFERENCE_MATERIAL_REGISTRY_VARIANT_INVALID', `parameter variant at entry ${index}`);
-        requireRegistry(parameterVariant !== 1 || kind === 'props', 'REFERENCE_MATERIAL_REGISTRY_VARIANT_RESERVED',
-            'parameter variant 1 is reserved for generated defaults');
         requireRegistry(Array.isArray(parameterValues) && parameterValues.every((value) => {
             const components = Array.isArray(value) ? value : [value];
             return components.every((component) => typeof component === 'boolean' ||
                 typeof component === 'number' && Number.isFinite(component) && Number.isFinite(Math.fround(component)));
         }), 'REFERENCE_MATERIAL_REGISTRY_PARAMETERS_INVALID', `parameter values at entry ${index}`);
-        if (kind === 'props')
+        if (kind === 'props') {
             requireRegistry(parameterVariant === 0 && parameterValues.length === 0,
                 'REFERENCE_MATERIAL_REGISTRY_PROPS_VARIANT_INVALID', `props entry ${index} cannot use MTLX parameter variants`);
-        else if (parameterVariant >= 2)
+        } else if (parameterVariant >= 2) {
             requireRegistry(parameterValues.length > 0, 'REFERENCE_MATERIAL_REGISTRY_PARAMETERS_REQUIRED', `variant ${parameterVariant} entry ${index}`);
+        } else requireRegistry(parameterValues.length === 0, 'REFERENCE_MATERIAL_REGISTRY_PARAMETERS_UNEXPECTED', `host-owned variant ${parameterVariant} entry ${index}`);
         if (kind === 'openpbr' && activeMaterialKey !== null) {
             requireRegistry(materialKey === activeMaterialKey, 'REFERENCE_MATERIAL_DISPATCH_MISMATCH',
                 `${materialKey} does not match the active local dispatch ${activeMaterialKey}`);

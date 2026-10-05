@@ -1,0 +1,15 @@
+material default
+{
+    material_type materialx
+    materialx_document ../mtlx-defaults/open_pbr_default.mtlx
+}
+gltf
+{
+    file ../standard-shader-ball/openpbr_objects.glb
+    object * default
+}
+renderer
+{
+    envmapfile ../textures/envmaps/etzwihl_4k.jpg
+    envmapirradiancefile none
+}

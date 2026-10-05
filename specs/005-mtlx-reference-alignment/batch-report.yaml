@@ -1,10 +1,46 @@
-task: T017
+task: T020
 date: '2026-10-05'
 status: completed
-kind: reference-materialID-local-registry
+kind: scene-parser-directive-policy
 runtime_changes: false
 reference_renderer_executed: false
-evidence: [t017-materialid-registry.md, ../../src/mtlx/referenceMaterialRegistry.js, ../../glsl/pathtracing/mtlx/common.glsl, ../../glsl/pathtracing/mtlx/pathtracer.glsl, ../../tools/mtlx-reference-alignment/reference-material-registry.test.mjs, ../../tools/mtlx-reference-alignment/reference-material-registration-smoke.mjs, ../../artifacts/mtlx-reference-alignment/t017-material-registration-smoke.json]
+evidence: [t019-t020-scene-parser.md, ../../src/scene/sceneLoader.js, ../../src/scene/package.json, ../../tools/mtlx-reference-alignment/scene-loader.test.mjs, scene-directives.json]
+next_task: T021
+T018_validation:
+  command: npm test
+  exit_code: 0
+  passed: 75
+  failed: 0
+  build_exit_code: 0
+  hook_tests: prepare-evaluate-sample-opaque-thinwalled-emission-film-specular-medium
+  generated_dispatch_honey: compiled
+  active_volume_feature: true
+  variant_volume_sample: table-backed
+  missing_volume_dispersion_film_features: rejected
+  reconfiguration_schema_mismatch: rejected
+  oracle_rays: 10000
+  closest_any_shadow_material_mismatches: 0
+  reference_macro_runtime_enabled: false
+  reference_ready: false
+  not_claimed: [different-closure-code-in-one-scene, scene-loader-registration, Adreno-runtime]
+T019_T020_validation:
+  command: npm test
+  exit_code: 0
+  passed: 82
+  failed: 0
+  parser_command: node --test tools/mtlx-reference-alignment/scene-loader.test.mjs
+  parser_tests: 7
+  parser_exit_code: 0
+  build_command: npm run build
+  build_exit_code: 0
+  directive_policy: block-for-block-matches-scene-directives.json
+  approved_non_mtlx_fixtures: [cornell_box_orig.scene, cornell_box_sphere.scene]
+  disney_specular_witness: rejected
+  reference_renderer_executed: false
+  runtime_changes: false
+  resources_loaded: false
+  reference_ready: false
+  not_claimed: [T021-resource-loaders, T022-viewer-integration]
 T017_validation:
   command: npm test
   exit_code: 0
@@ -21,24 +57,7 @@ T017_validation:
   closest_any_shadow_mismatches: 0
   runtime_macro: REFERENCE_BVH_ENABLED-not-defined
   reference_ready: false
-  not_claimed: [multiple-closures-with-different-code, full-T018-BSDF-emission-volume-parity, scene-loader-caller]
-T016_validation:
-  command: npm test
-  exit_code: 0
-  passed: 63
-  failed: 0
-  local_filter_test: six-cases-pass
-  no_remote_alpha_sources: verified
-  oracle_rays: 10000
-  any_hit_mismatches: 0
-  trace_shadow_mismatches: 0
-  build_exit_code: 0
-  docs_validator_exit_code: 0
-  default_branch_smoke: passed-Three.js-SwiftShader-64x64-2spp
-  default_branch_shader_error: null
-  reference_macro: undefined
-  reference_ready: false
-  not_claimed: [reference_materialID_to_registry, reference_thinwalled_per_ID, distant_alpha_cutouts]
+  not_claimed: [multiple-closures-with-different-code, scene-loader-caller, Adreno-runtime]
 T016_validation:
   command: npm test
   exit_code: 0
@@ -301,11 +320,13 @@ warnings:
     message: Reference denoiser bundle differs from the npm/local dist bundle; its modifications and complete third-party notices remain to document.
   - severity: medium
     message: Denoiser source worktree is dirty; version, revision and relevant local file hashes are pinned. No files reverted or deployed.
+  - severity: medium
+    message: validate-t002 currently exits 1 because local HEAD e8e16fe differs from the T001-pinned 5a863b2 after two branch commits; T001 source hashes remain unchanged and the frozen provenance report was not rewritten.
 resolved:
   - rt_hdr_small.tza and rt_ldr_small.tza exist locally and match denoiser@0.0.11 published bytes.
   - Weight license Apache-2.0 and package MIT notice found in local Denoiser source.
-next_action: T018
-next_task: T018
+next_action: T019
+next_task: T019
 stage_1_status: completed-capture-scope
 stage_2_status: completed
 stage_3_status: completed-CPU-BLAS
@@ -313,7 +334,8 @@ stage_4_status: completed-CPU-instances
 stage_5_status: completed-GPU-texture-readback
 stage_6_status: completed-closest-hit-dormant
 stage_7_status: completed-local-shadow-filters
-stage_8_status: partial-materialID-registry-complete-awaiting-T018-hooks
+stage_8_status: completed-variant-aware-material-hooks
+stage_9_status: pending-scene-parser
 stage_0_status: completed
 stage_0_acceptance: explicit-user-decision-2026-10-04
 provenance_warnings_policy: retained-as-non-blocking-followups-not-verified-rights
