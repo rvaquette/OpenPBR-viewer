@@ -225,16 +225,16 @@ generation/reloads concurrents. Passage : chargement atomique, bons IDs/comptes,
 pas de scene/programme stale. Ajouter scene_url au runner apres verification CLI/URL.
 
 ### 11. Camera et profondeur de champ [REQ-005, REQ-007]
-- [ ] T023 [Plan:11] Implementer src/scene/cameraAdapter.js : position/lookat/matrix/FOV, priorite scene puis overrides explicites. [Source: D:/WebGL2/GLSL-PathTracer-JS/src/core/camera.ts]
-- [ ] T024 [Plan:11] Adapter reset_camera/sync_shader_uniforms et seulement les rayons primaires locaux pour aperture/focalDist.
+- [x] T023 [Plan:11] Implementer src/scene/cameraAdapter.js : position/lookat/matrix/FOV, priorite scene puis overrides explicites. [Source: D:/WebGL2/GLSL-PathTracer-JS/src/core/camera.ts] [Evidence: t023-t024-camera-dof.md ; ../../src/scene/cameraAdapter.js]
+- [x] T024 [Plan:11] Adapter reset_camera/sync_shader_uniforms et seulement les rayons primaires locaux pour aperture/focalDist. [Evidence: t023-t024-camera-dof.md ; ../../glsl/pathtracing/mtlx/pathtracer.glsl ; ../../tools/mtlx-reference-alignment/camera-adapter.test.mjs]
 Controle CPU/GPU et distant NON-MTLX : base/forward/FOV horizontal-vertical/degres-radians,
 column-row-major, rayons centre/coins, aspects 1:1/16:9/9:16, aperture=0 puis plan focal.
 Documenter roll de matrix -> lookat. Passage : cadrage/DOF corrects, camera non ecrasee,
 orbit/resize/reload remettent l'accumulation a zero.
 
 ### 12. Lumieres et emetteurs [REQ-001, REQ-006, REQ-007]
-- [ ] T025 [Plan:12] Implementer src/scene/lightAdapter.js, enums/buffers reference et extensions point/spot locales. [Source: D:/WebGL2/GLSL-PathTracer-JS/src/core/light.ts]
-- [ ] T026 [Plan:12] Adapter GetMtlxLight/LiDirect/LiPDF et hits d'emetteurs dans le GLSL local, sans remplacer l'integrateur.
+- [x] T025 [Plan:12] Implementer src/scene/lightAdapter.js, enums/buffers et extensions point/spot locales. [Source: D:/WebGL2/GLSL-PathTracer-JS/src/core/light.ts] [Evidence: t025-t026-lights.md ; ../../src/scene/lightAdapter.js ; ../../tools/mtlx-reference-alignment/light-adapter.test.mjs]
+- [x] T026 [Plan:12] Adapter GetMtlxLight/LiDirect/LiPDF et hits d'emetteurs dans le GLSL local, sans remplacer l'integrateur. [Implementation evidence: t025-t026-lights.md ; ../../glsl/pathtracing/mtlx/pathtracer.glsl]
 Quatre sous-jalons, controle obligatoire apres chacun :
 1. Parsing/packing : v1/v2 -> u/v, aire quad/sphere, rayon, distant, emission lineaire,
    enums/comptes/relecture GPU ; zero lumiere inclus.
@@ -247,6 +247,8 @@ Quatre sous-jalons, controle obligatoire apres chacun :
    marge statistique calibree, aucune luminosite doublee.
 Definir sens distant depuis sampling. Lumieres .scene autoritaires, fusion MTLX/overrides
 uniquement explicite. Passage : quatre controles passes, puis plusieurs lumieres + envmap.
+Les gates de rendu/GPU NEE/emetteurs/MIS de T026 restent a executer : seuls les
+compiles ESSL isoles ont passe sous SwiftShader, pas un rendu de scene complet.
 
 ### 13. Options et cycle de vie [REQ-001, REQ-004, REQ-005, REQ-006, REQ-007]
 - [ ] T027 [Plan:13] Mapper renderer resolution/maxdepth/maxspp/volume/clamp/envmap/affichage dans main.js ; autres options rejetees/documentees.

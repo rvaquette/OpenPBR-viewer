@@ -1,11 +1,42 @@
-task: T022
+task: T026
 date: '2026-10-05'
-status: completed
-kind: scene-url-resource-loading
+status: implemented-runtime-gates-deferred
+kind: scene-lights-nee-emitter-mis
 runtime_changes: true
 reference_renderer_executed: false
-evidence: [t021-t022-scene-loading.md, ../../src/scene/referenceSceneAdapter.js, ../../main.js, ../../launch_render.mjs, ../../tools/mtlx-reference-alignment/reference-scene-adapter.test.mjs, ../../artifacts/mtlx-reference-alignment/t021-t022-scene-url-raster-smoke.json]
-next_task: T023
+evidence: [t025-t026-lights.md, ../../src/scene/lightAdapter.js, ../../main.js, ../../glsl/pathtracing/mtlx/common.glsl, ../../glsl/pathtracing/mtlx/pathtracer.glsl, ../../tools/mtlx-reference-alignment/light-adapter.test.mjs]
+next_task: T027
+T025_T026_validation:
+  command: node --test tools/mtlx-reference-alignment/light-adapter.test.mjs
+  exit_code: 0
+  light_adapter_tests: 6
+  combined_cpu_tests: 20
+  build_command: npm run build
+  build_exit_code: 0
+  static_trace_test: passed-non-browser
+  reference_renderer_executed: false
+  GPU_readback: not-run-user-preference
+  NEE_render: not-run-user-preference
+  emitter_render: not-run-user-preference
+  MIS_convergence: not-run-user-preference
+  browser_shader_compile: not-run-after-fixture-fix-user-preference
+  previous_full_npm_test: 98-pass-2-browser-compile-fixture-failures-before-fixture-update
+T023_T024_validation:
+  command: npm test
+  exit_code: 0
+  passed: 94
+  failed: 0
+  camera_command: node --test tools/mtlx-reference-alignment/camera-adapter.test.mjs
+  camera_tests: 7
+  camera_exit_code: 0
+  build_command: npm run build
+  build_exit_code: 0
+  fov_cases: [1x1, 16x9, 9x16]
+  matrix_layout: row-major
+  aperture_zero: pinhole-preserved
+  depth_of_field_cpu: focal-point-convergence-passed
+  browser_gpu_render: not-run-user-preference
+  distant_non_mtlx_camera_comparison: not-run
 T021_T022_validation:
   command: npm test
   exit_code: 0

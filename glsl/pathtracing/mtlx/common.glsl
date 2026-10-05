@@ -9,6 +9,8 @@ uniform mat4 cameraWorldMatrix;
 uniform mat4 invProjectionMatrix;
 uniform mat4 invModelMatrix;
 uniform vec2 resolution;
+uniform float cameraAperture;
+uniform float cameraFocalDist;
 
 //////////////////////////////////////////////////////
 // geometry uniforms
@@ -78,6 +80,7 @@ uniform bool has_env_cdf;
 // alignment): (6 x N) RGBA float texture, one row per light, read via
 // GetMtlxLight(i) in pathtracer.glsl. No shader recompile on light-count change.
 uniform int mtlxLightCount;
+uniform bool sceneHideEmitters;
 uniform int mtlxMaterialParamCount;
 uniform sampler2D mtlxLightsTex;
 int mtlxMaterialVariant = 0;
@@ -144,6 +147,7 @@ const float FLT_EPSILON           = 1.1920929e-7;
 const int MATERIAL_PROPS   = 0;
 const int MATERIAL_OPENPBR = 1;
 const int MATERIAL_GROUND  = 2;
+const int MATERIAL_SCENE_LIGHT_BASE = 10000;
 
 bool strictGeneratedContractFailure()
 {

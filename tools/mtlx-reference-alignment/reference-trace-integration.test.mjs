@@ -44,14 +44,19 @@ const float DENOM_TOLERANCE = 1.0e-10;
 const int MATERIAL_PROPS = 0;
 const int MATERIAL_OPENPBR = 1;
 const int MATERIAL_GROUND = 2;
+const int MATERIAL_SCENE_LIGHT_BASE = 10000;
 struct Basis { vec3 nW; vec3 tW; vec3 bW; vec3 baryCoord; vec2 texCoord; };
 Basis makeBasis(vec3 nW, vec3 tW, vec3 baryCoord, vec2 texCoord) {
     Basis basis; basis.nW=nW; basis.tW=tW; basis.bW=cross(nW,tW); basis.baryCoord=baryCoord; basis.texCoord=texCoord; return basis;
 }
 vec3 worldToLocal(vec3 value, Basis basis) { return vec3(dot(value,basis.tW),dot(value,basis.bW),dot(value,basis.nW)); }
+vec3 normalToTangent(vec3 value) { return normalize(cross(abs(value.y)<0.9?vec3(0,1,0):vec3(1,0,0),value)); }
 uniform bool ground_enabled;
 uniform float ground_y;
 vec3 safe_normalize(vec3 value) { float magnitude = length(value); return value / max(magnitude, DENOM_TOLERANCE); }
+bool intersectSceneLight(vec3 origin,vec3 direction,float limit,out int index,out float distance,out vec3 normal) {
+    index=-1; distance=limit; normal=vec3(0,1,0); return false;
+}
 ${trace}
 bool mtlx_openpbr_is_opaque() { return true; }
 bool mtlx_openpbr_is_thinwalled() { return false; }
@@ -62,7 +67,7 @@ void main() {
     vec3 P, Ns, Ng, Ts, bary;
     vec2 uv;
     int material;
-    bool hit = trace(vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, -1.0), 100.0,
+    bool hit = trace(vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, -1.0), 100.0,true,
         P, Ns, Ng, Ts, bary, uv, material);
     float visibility = TraceShadow(vec3(0.0, 0.0, 1.0), vec3(0.0, 0.0, -1.0), 100.0);
     outColor = vec4(hit ? Ng : vec3(0.0), visibility);

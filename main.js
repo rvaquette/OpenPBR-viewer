@@ -19,6 +19,8 @@ import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { loadEnvironmentTexture } from './src/envmap/envLoader.js';
 import { loadNativeTexture } from './src/textures/textureLoader.js';
 import { disposeReferenceSceneResources, loadReferenceSceneResources, prepareReferenceScene } from './src/scene/referenceSceneAdapter.js';
+import { createSceneCamera, parseSceneCameraOverrides, verticalFovFromHorizontal } from './src/scene/cameraAdapter.js';
+import { adaptSceneLights, packLocalLightTexels } from './src/scene/lightAdapter.js';
 import { DEFAULT_BVH_BACKEND, AVAILABLE_BVH_BACKENDS, resolveBvhBackend } from './src/bvh/backend.mjs';
 import { assertReferenceMaterialCoverage, assertReferenceMaterialParameterSchema,
     createReferenceMaterialRegistry } from './src/mtlx/referenceMaterialRegistry.js';
@@ -335,6 +337,8 @@ var activeMtlxMaterialText = null;
 var activeReferenceScene = null;
 var activeReferenceResources = null;
 var referenceSceneLoadRevision = 0;
+var activeSceneCameraOverrides = Object.freeze({});
+var activeSceneCameraState = null;
 var mtlxParameterUpdateQueue = Promise.resolve();
 var mtlxRouteLightsTexture = null;
 var mtlxRouteReferenceMaterialRegistry = null;
@@ -798,16 +802,7 @@ function createMtlxLightsTexture()
     const registryRowOffset = parameterRowOffset + parameters.length * variantCount;
     const height = registryRowOffset + registryEntries.length;
     const data = new Float32Array(MTLX_LIGHT_TEXELS_PER_LIGHT * height * 4);
-    lights.forEach((l, i) => {
-        const base = i * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
-        data[base + 0] = l.position[0]; data[base + 1] = l.position[1]; data[base + 2] = l.position[2]; data[base + 3] = l.decayRate;
-        data[base + 4] = l.direction[0]; data[base + 5] = l.direction[1]; data[base + 6] = l.direction[2]; data[base + 7] = l.type;
-        data[base + 8] = l.color[0]; data[base + 9] = l.color[1]; data[base + 10] = l.color[2]; data[base + 11] = l.intensity;
-        data[base + 12] = l.innerCone; data[base + 13] = l.outerCone; data[base + 14] = 0; data[base + 15] = 0;
-        const u = l.u || [0, 0, 0]; const v = l.v || [0, 0, 0];
-        data[base + 16] = u[0]; data[base + 17] = u[1]; data[base + 18] = u[2]; data[base + 19] = 0;
-        data[base + 20] = v[0]; data[base + 21] = v[1]; data[base + 22] = v[2]; data[base + 23] = Number(l.radius) || 0;
-    });
+    data.set(packLocalLightTexels(lights).data);
     parameters.forEach((parameter, i) => {
         for (const [variant, value] of [[0, parameter.value], [1, parameter.defaultValue]]) {
             const base = (parameterRowOffset + variant * parameters.length + i) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
@@ -850,6 +845,7 @@ function createMtlxLightUniforms()
         mtlxRouteParamDescriptors.length * mtlxReferenceParameterVariantCount();
     return {
         mtlxLightCount: { value: mtlxRouteLights.length },
+        sceneHideEmitters: { value: false },
         mtlxMaterialParamCount: { value: mtlxRouteParamDescriptors.length },
         mtlxReferenceMaterialRegistryCount: { value: mtlxRouteReferenceMaterialRegistry?.entries.length || 0 },
         mtlxReferenceMaterialRegistryRowOffset: { value: registryRowOffset },
@@ -2972,6 +2968,12 @@ initializeLoadingProgress();
         }
         console.log('[URL params] renderer_mode =', params.renderer_mode);
     }
+    try {
+        activeSceneCameraOverrides = parseSceneCameraOverrides(search);
+    } catch (error) {
+        reportReferenceSceneError(error);
+        return;
+    }
 
     window.__openpbrBvhBackend = {
         requested: params.bvh_backend, active: null,
@@ -3057,9 +3059,11 @@ initializeLoadingProgress();
                 : '';
             activeMtlxMaterialText = mtlxText;
             mtlxRouteMaterialSummary = summarizeMtlxRouteMaterialParams(result.mtlxParams);
-            mtlxRouteLights = extractMtlxLights(mtlxText);
-
-            mtlxRouteLights.push(...extractMtlxLightOverrides(search));
+            mtlxRouteLights = activeReferenceScene
+                ? adaptSceneLights(activeReferenceScene.scene)
+                : extractMtlxLights(mtlxText);
+            if (!activeReferenceScene || search.has('mtlx_lights_json'))
+                mtlxRouteLights.push(...extractMtlxLightOverrides(search));
             if (mtlxRouteTextureBindings.length > 0) {
                 console.log('[mtlx-route] textures', mtlxRouteTextureBindings.map(t => `${t.sampler}=${t.source}`).join(', '));
             }
@@ -3331,6 +3335,8 @@ function create_materials()
                 cameraWorldMatrix:     { value: new Matrix4() },
                 invProjectionMatrix:   { value: new Matrix4() },
                 invModelMatrix:        { value: new Matrix4() },
+                cameraAperture:        { value: 0.0 },
+                cameraFocalDist:       { value: 1.0 },
                 resolution:            { value: new Vector2() },
 
                 samples:               { value: 0 },
@@ -3937,6 +3943,7 @@ function loadReferenceScene(scene_name)
             window.__openpbrScene = { url:activeReferenceScene.sceneUrl, status:'loaded', material:activeReferenceScene.materialName,
                 geometryBlocks:resources.objectScene.children.length, geometryTriangles:resources.geometry.index
                     ? resources.geometry.index.count / 3 : resources.geometry.attributes.position.count / 3 };
+            camera_initialized = false;
             post_load_setup();
             progress_finished_timer = performance.now();
         } catch (error) {
@@ -4039,10 +4046,43 @@ function reset_camera(scene_name)
     let camera_fov = scene_name === 'test-material-disney-gold' ? 45.0 : 23.6701655;
     let camera_near = 0.01;
     let camera_far = 1000.0;
-    camera = new PerspectiveCamera( camera_fov, window.innerWidth / window.innerHeight, camera_near, camera_far );
+    if (!activeReferenceScene || !params.scene_url) {
+        camera = new PerspectiveCamera( camera_fov, window.innerWidth / window.innerHeight, camera_near, camera_far );
+        if (orbitControls) orbitControls.dispose();
+        orbitControls = new OrbitControls( camera, renderer.domElement );
+    }
+    if (activeReferenceScene && params.scene_url) {
+        const renderDimensions = getRenderDimensions();
+        const framingGeometry = MESH_SURFACE?.geometry;
+        let bounds = null;
+        if (framingGeometry) {
+            framingGeometry.computeBoundingBox();
+            if (framingGeometry.boundingBox && !framingGeometry.boundingBox.isEmpty()) {
+                bounds = { min:framingGeometry.boundingBox.min.toArray(),max:framingGeometry.boundingBox.max.toArray() };
+            }
+        }
+        const cameraBlock = activeReferenceScene.scene.blocks.find((block) => block.type === 'camera') || null;
+        activeSceneCameraState = createSceneCamera(cameraBlock,{ aspect:renderDimensions.w/renderDimensions.h,
+            overrides:activeSceneCameraOverrides,bounds });
+        camera = new PerspectiveCamera(activeSceneCameraState.fovVertical,renderDimensions.w/renderDimensions.h,0.01,1000.0);
+        camera.position.fromArray(activeSceneCameraState.position);
+        camera.up.fromArray(activeSceneCameraState.up);
+        camera.lookAt(new Vector3(...activeSceneCameraState.target));
+        camera.updateMatrixWorld();
+        camera.updateProjectionMatrix();
 
-    orbitControls = new OrbitControls( camera, renderer.domElement );
-    orbitControls.addEventListener( 'change', handleCameraChange );
+        if (orbitControls) orbitControls.dispose();
+        orbitControls = new OrbitControls(camera,renderer.domElement);
+        orbitControls.addEventListener('change',handleCameraChange);
+        orbitControls.target.fromArray(activeSceneCameraState.target);
+        orbitControls.zoomSpeed = 1.5;
+        orbitControls.flySpeed = 0.01;
+        orbitControls.update();
+        window.__openpbrScene.cameraWarnings = [...activeSceneCameraState.warnings];
+        resetSamples();
+        return;
+    }
+    activeSceneCameraState = null;
     let matrixWorld = new Matrix4();
 
     if (scene_name == 'standard-shader-ball')
@@ -4410,6 +4450,7 @@ function setup_gui()
     renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => {
         params.scene_url = '';
         activeReferenceScene = null;
+        camera_initialized = false;
         setPaused(true);
         load_scene(v);
     });
@@ -4737,10 +4778,17 @@ function sync_shader_uniforms(uniforms)
     // sync camera
     uniforms.cameraWorldMatrix.value.copy( camera.matrixWorld );
     uniforms.invProjectionMatrix.value.copy( camera.projectionMatrixInverse );
+    if (uniforms.cameraAperture) uniforms.cameraAperture.value = activeSceneCameraState?.aperture ?? 0.0;
+    if (uniforms.cameraFocalDist) uniforms.cameraFocalDist.value = activeSceneCameraState?.focaldist ?? 1.0;
     uniforms.invModelMatrix.value.copy( scene.matrixWorld ).invert();
 
     // sync renderer params
     let resolution = new Vector2(rd.w, rd.h);
+    if (activeSceneCameraState) {
+        activeSceneCameraState = Object.freeze({ ...activeSceneCameraState,
+            aspect:camera.aspect,fovVertical:verticalFovFromHorizontal(activeSceneCameraState.fovHorizontal,camera.aspect) });
+        camera.fov = activeSceneCameraState.fovVertical;
+    }
     uniforms.resolution.value.copy(resolution);
     uniforms.accumulation_weight.value                    = 1.0 / (samples + 1.0); // implements Monte-Carlo accumulation
     uniforms.samples.value                                = samples;
@@ -4767,7 +4815,11 @@ function sync_shader_uniforms(uniforms)
     uniforms.sunColor.value.copy(get_vector3(               params.sunColor));
     updateSunDir();
     uniforms.sunDir.value.copy(get_vector3(                 params.sunDir));
-    if (uniforms.mtlxDisableSun) uniforms.mtlxDisableSun.value = params.env_map_provided === true;
+    if (uniforms.mtlxDisableSun) uniforms.mtlxDisableSun.value = !!activeReferenceScene || params.env_map_provided === true;
+    if (uniforms.sceneHideEmitters) {
+        const rendererBlock = activeReferenceScene?.scene.blocks.find((block) => block.type === 'renderer');
+        uniforms.sceneHideEmitters.value = rendererBlock?.values.hideemitters === true;
+    }
 
     // Extra uniforms for the legacy pathtracer (material params as uniforms, not GLSL globals).
     if (uniforms.base_weight !== undefined) {

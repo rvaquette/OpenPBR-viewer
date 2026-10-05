@@ -1,8 +1,8 @@
 status: partial
-scope: T001-T022
+scope: T001-T026
 stage_0_status: completed
 stage_0_acceptance: explicit-user-decision-2026-10-04
-runtime_changes: T021-T022-scene-url-only
+runtime_changes: T021-T026-local-scene-camera-lights-and-primary-rays
 tasks:
   T001:
     status: completed
@@ -249,6 +249,50 @@ tasks:
     unsupported_material_dispatch: fail-closed
     unsupported_mesh_formats: fail-closed
     camera_light_renderer_options: deferred-to-T023-T028
+  T023:
+    status: completed
+    plan_item: 11
+    requirements: [REQ-005, REQ-007]
+    evidence: [../t023-t024-camera-dof.md, ../../../src/scene/cameraAdapter.js, ../../../tools/mtlx-reference-alignment/camera-adapter.test.mjs, ../../../main.js]
+    validation: passed-94-tests-build-and-7-camera-cpu-tests
+    fov_source: horizontal-degrees
+    matrix_layout: row-major
+    matrix_roll: explicitly-dropped-warning
+    bounds_fallback: true
+    explicit_url_overrides: [camera_position, camera_lookat, camera_fov, camera_aperture, camera_focaldist]
+  T024:
+    status: completed
+    plan_item: 11
+    requirements: [REQ-005, REQ-007]
+    evidence: [../t023-t024-camera-dof.md, ../../../glsl/pathtracing/mtlx/common.glsl, ../../../glsl/pathtracing/mtlx/pathtracer.glsl, ../../../tools/mtlx-reference-alignment/camera-adapter.test.mjs]
+    validation: passed-94-tests-build-and-static-glsl-contract
+    dof_scope: pathtracer-mtlx-primary-rays-only
+    aperture_zero: preserves-pinhole-ray-and-rng-sequence
+    cpu_focal_point: passed
+    browser_gpu_render: not-run-user-preference
+    distant_non_mtlx_camera_comparison: not-run
+  T025:
+    status: completed
+    plan_item: 12
+    requirements: [REQ-001, REQ-006, REQ-007]
+    evidence: [../t025-t026-lights.md, ../../../src/scene/lightAdapter.js, ../../../tools/mtlx-reference-alignment/light-adapter.test.mjs]
+    validation: passed-6-light-adapter-tests-and-build
+    scene_enum_mapping: [quad-0-to-local-3, sphere-1-to-local-4, distant-2-to-directional-1]
+    texels_per_light: 6
+    zero_light_sentinel: tested
+    GPU_texture_readback: not-run-user-preference
+  T026:
+    status: implemented-runtime-gates-deferred
+    plan_item: 12
+    requirements: [REQ-001, REQ-006, REQ-007]
+    evidence: [../t025-t026-lights.md, ../../../glsl/pathtracing/mtlx/pathtracer.glsl, ../../../tools/mtlx-reference-alignment/light-adapter.test.mjs]
+    validation: passed-20-cpu-tests-build-static-bvh-assertion
+    nee_quad_sphere: implemented-not-render-validated
+    visible_emitter_hits: implemented-not-render-validated
+    area_light_mis: implemented-not-convergence-validated
+    delta_light_mis: continuous-pdf-excluded-static-assertion
+    browser_webgl_tests: not-run-user-preference
+    full_npm_test_after_fixture_update: not-run-user-preference
 blockers: []
 non_blocking_followups:
   - TS-and-asset-provenance-authorization
@@ -257,7 +301,7 @@ non_blocking_followups:
 resolved_blockers:
   - rt_hdr_small.tza-origin-version-sha256-license
 denoiser_weight_provenance: verified-local-and-published-archive
-next_task: T023
+next_task: T027
 stage_1_status: completed-capture-scope
 stage_2_status: completed
 stage_3_status: completed-CPU-BLAS
@@ -268,3 +312,5 @@ stage_7_status: completed-local-shadow-filters
 stage_8_status: completed-material-hooks-variant-aware
 stage_9_status: completed-pure-scene-parser
 stage_10_status: completed-scene-url-resource-loading
+stage_11_status: completed-camera-and-primary-ray-cpu-validation
+stage_12_status: implemented-lights-runtime-gates-deferred

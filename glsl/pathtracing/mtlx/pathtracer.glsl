@@ -29,7 +29,10 @@ bool bvhIntersectFirstHitWithinDistance(
                                                     faceIndices, faceNormal, barycoord, side, dist);
 }
 
-bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
+bool intersectSceneLight(in vec3 rayOrigin,in vec3 rayDir,in float maxDistance,
+                         out int lightIndex,out float lightDistance,out vec3 lightNormal);
+
+bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance, in bool includeSceneEmitters,
             out vec3 P, out vec3 Ns, out vec3 Ng, out vec3 Ts, out vec3 baryCoord, out vec2 texCoord, out int material)
 {
 #ifdef REFERENCE_BVH_ENABLED
@@ -87,11 +90,28 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
         }
     }
 
-    bool hit = hit_surface || hit_ground;
+    int sceneLightIndex = -1;
+    float dist_scene_light = HUGE_DIST;
+    vec3 sceneLightNormal = vec3(0.0,1.0,0.0);
+    float lightLimit = min(maxDistance,min(dist_closest,dist_ground));
+    bool hit_scene_light = includeSceneEmitters && intersectSceneLight(rayOrigin,rayDir,lightLimit,
+        sceneLightIndex,dist_scene_light,sceneLightNormal);
+
+    bool hit = hit_surface || hit_ground || hit_scene_light;
     if (!hit)
         return false;
 
-    if (hit_surface && (!hit_ground || (dist_surface <= dist_ground)))
+    if (hit_scene_light && (!hit_surface || dist_scene_light < dist_surface) && (!hit_ground || dist_scene_light < dist_ground))
+    {
+        P = rayOrigin + dist_scene_light * rayDir;
+        Ng = sceneLightNormal;
+        Ns = sceneLightNormal;
+        Ts = normalToTangent(Ns);
+        baryCoord = vec3(0.0);
+        texCoord = vec2(0.0);
+        material = MATERIAL_SCENE_LIGHT_BASE + sceneLightIndex;
+    }
+    else if (hit_surface && (!hit_ground || (dist_surface <= dist_ground)))
     {
 #ifdef REFERENCE_BVH_ENABLED
         P = referenceHitState.fhp;
@@ -153,7 +173,7 @@ float TraceShadow(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance)
     int material;
     vec3 pW, nsW, ngW, TsW, baryCoord;
     vec2 texCoord;
-    bool hit = trace(rayOrigin, rayDir, maxDistance,
+    bool hit = trace(rayOrigin, rayDir, maxDistance, true,
                      pW, nsW, ngW, TsW, baryCoord, texCoord, material);
 #ifdef REFERENCE_BVH_ENABLED
     if (hit && material == MATERIAL_OPENPBR)
@@ -334,6 +354,60 @@ MtlxLight GetMtlxLight(int i)
     return l;
 }
 
+bool intersectSceneLight(in vec3 rayOrigin,in vec3 rayDir,in float maxDistance,
+                         out int lightIndex,out float lightDistance,out vec3 lightNormal)
+{
+    lightIndex = -1;
+    lightDistance = maxDistance;
+    lightNormal = vec3(0.0,1.0,0.0);
+    for (int i = 0; i < MAX_MTLX_LIGHTS; ++i)
+    {
+        if (i >= mtlxLightCount) break;
+        MtlxLight light = GetMtlxLight(i);
+        float candidate = HUGE_DIST;
+        vec3 candidateNormal = vec3(0.0,1.0,0.0);
+        if (light.type == 3)
+        {
+            vec3 edgeNormal = cross(light.u,light.v);
+            float area = length(edgeNormal);
+            if (area <= DENOM_TOLERANCE) continue;
+            vec3 normal = edgeNormal / area;
+            if (dot(normal,-rayDir) <= DENOM_TOLERANCE) continue;
+            float denominator = dot(normal,rayDir);
+            candidate = dot(normal,light.position-rayOrigin) / denominator;
+            if (!(candidate > 0.0 && candidate < lightDistance)) continue;
+            vec3 relative = rayOrigin + candidate*rayDir - light.position;
+            float u = dot(relative,light.u) / max(dot(light.u,light.u),DENOM_TOLERANCE);
+            float v = dot(relative,light.v) / max(dot(light.v,light.v),DENOM_TOLERANCE);
+            if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0) continue;
+            candidateNormal = normal;
+        }
+        else if (light.type == 4)
+        {
+            float radius = max(light.radius,0.0);
+            if (radius <= 0.0) continue;
+            vec3 offset = rayOrigin-light.position;
+            float halfB = dot(offset,rayDir);
+            float discriminant = halfB*halfB-dot(offset,offset)+radius*radius;
+            if (discriminant < 0.0) continue;
+            float root = sqrt(discriminant);
+            candidate = -halfB-root;
+            if (candidate <= 0.0) candidate = -halfB+root;
+            if (!(candidate > 0.0 && candidate < lightDistance)) continue;
+            candidateNormal = safe_normalize(rayOrigin+candidate*rayDir-light.position);
+        }
+        else continue;
+
+        if (candidate < lightDistance && candidate < maxDistance)
+        {
+            lightIndex = i;
+            lightDistance = candidate;
+            lightNormal = candidateNormal;
+        }
+    }
+    return lightIndex >= 0;
+}
+
 float mtlxLightTotalPower(int index)
 {
     MtlxLight l = GetMtlxLight(index);
@@ -395,11 +469,30 @@ vec3 mtlxLightSample(int index, in vec3 pW, in Basis basis,
         vec3 toCenter = l.position - pW;
         float centerDistanceSq = dot(toCenter, toCenter);
         float centerDistance = sqrt(centerDistanceSq);
-        if (radius <= 0.0 || centerDistance <= radius)
+        if (radius <= 0.0)
         {
-            woutputW = safe_normalize(toCenter);
+            woutputW = vec3(0.0,1.0,0.0);
             woutputL = worldToLocal(woutputW, basis);
             return vec3(0.0);
+        }
+
+        if (centerDistance <= radius)
+        {
+            float cosTheta = 1.0 - 2.0*rand(rndSeed);
+            float sinTheta = sqrt(max(0.0,1.0-cosTheta*cosTheta));
+            float phi = 6.28318530718*rand(rndSeed);
+            woutputW = vec3(sinTheta*cos(phi),sinTheta*sin(phi),cosTheta);
+            float distanceAlong = dot(toCenter,woutputW);
+            float distanceToLight = distanceAlong + sqrt(max(0.0,distanceAlong*distanceAlong + radius*radius - centerDistanceSq));
+            if (distanceToLight <= 0.0)
+            {
+                woutputL = worldToLocal(woutputW,basis);
+                return vec3(0.0);
+            }
+            directionPdf = 0.0795774715459; // 1 / (4*pi), full-sphere sampling from inside
+            maxDistance = max(0.0,distanceToLight-2.0*RAY_OFFSET);
+            woutputL = worldToLocal(woutputW,basis);
+            return intensity;
         }
 
         vec3 axis = toCenter / centerDistance;
@@ -447,6 +540,46 @@ vec3 mtlxLightSample(int index, in vec3 pW, in Basis basis,
 
     woutputL = worldToLocal(woutputW, basis);
     return intensity;
+}
+
+float mtlxLightDirectionalPdf(int index,in vec3 pW,in vec3 directionW)
+{
+    MtlxLight light = GetMtlxLight(index);
+    if (light.type == 3)
+    {
+        vec3 edgeNormal = cross(light.u,light.v);
+        float area = length(edgeNormal);
+        if (area <= DENOM_TOLERANCE) return 0.0;
+        vec3 normal = edgeNormal/area;
+        float cosLight = dot(normal,-directionW);
+        if (cosLight <= DENOM_TOLERANCE) return 0.0;
+        float denominator = dot(normal,directionW);
+        float distanceToLight = dot(normal,light.position-pW)/denominator;
+        if (distanceToLight <= 0.0) return 0.0;
+        vec3 relative = pW+distanceToLight*directionW-light.position;
+        float u = dot(relative,light.u)/max(dot(light.u,light.u),DENOM_TOLERANCE);
+        float v = dot(relative,light.v)/max(dot(light.v,light.v),DENOM_TOLERANCE);
+        if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0) return 0.0;
+        return distanceToLight*distanceToLight/(area*cosLight);
+    }
+    if (light.type == 4)
+    {
+        float radius = max(light.radius,0.0);
+        if (radius <= 0.0) return 0.0;
+        vec3 toCenter = light.position-pW;
+        float centerDistanceSq = dot(toCenter,toCenter);
+        if (centerDistanceSq <= radius*radius) return 0.0795774715459;
+        float halfB = dot(pW-light.position,directionW);
+        float discriminant = halfB*halfB-centerDistanceSq+radius*radius;
+        if (discriminant < 0.0) return 0.0;
+        float nearDistance = -halfB-sqrt(discriminant);
+        if (nearDistance <= 0.0) return 0.0;
+        float cosThetaMax = sqrt(max(0.0,1.0-radius*radius/centerDistanceSq));
+        if (dot(toCenter/sqrt(centerDistanceSq),directionW) < cosThetaMax) return 0.0;
+        float solidAngle = 6.28318530718*(1.0-cosThetaMax);
+        return solidAngle > DENOM_TOLERANCE ? 1.0/solidAngle : 0.0;
+    }
+    return 0.0; // delta lights have no continuous BSDF PDF competitor
 }
 
 vec3 skyRadiance(in vec3 woutputW)
@@ -561,10 +694,12 @@ float skyPdf(in vec3 woutputL, in vec3 woutputW)
 vec3 LiDirect(in vec3 pW, in Basis basis,
               out vec3 shadowL, out vec3 shadowW,
               out float lightPdf,
+              out bool lightIsDelta,
               inout uint rndSeed)
 {
     // Do 1-sample MIS between sky, sun, and MaterialX document lights.
     vec3 Li;
+    lightIsDelta = false;
     {
         float w_mtlx = mtlxLightsTotalPower();
         float w_sun = (mtlxDisableSun || mtlxLightCount > 0) ? 0.0 : sunTotalPower();
@@ -605,6 +740,8 @@ vec3 LiDirect(in vec3 pW, in Basis basis,
             }
             float selectedPower = max(mtlxLightTotalPower(selected), DENOM_TOLERANCE);
             float directionPdf;
+            MtlxLight selectedLight = GetMtlxLight(selected);
+            lightIsDelta = selectedLight.type == 0 || selectedLight.type == 1 || selectedLight.type == 2;
             Li = mtlxLightSample(selected, pW, basis, shadowL, shadowW, maxDistance, directionPdf, rndSeed);
             pdf_sun = sunPdf(shadowL, shadowW);
             pdf_sky = skyPdf(shadowL, shadowW);
@@ -625,17 +762,28 @@ vec3 LiDirect(in vec3 pW, in Basis basis,
 }
 
 // Corresponding PDF of direct radiance in the given shadow ray direction (for MIS)
-float LiPDF(in vec3 shadowW, in Basis basis)
+float LiPDF(in vec3 pW,in vec3 shadowW,in Basis basis)
 {
     vec3 shadowL = worldToLocal(shadowW, basis);
     float pdf_sky = skyPdf(shadowL, shadowW);
     float pdf_sun = sunPdf(shadowL, shadowW);
     float w_sun = (mtlxDisableSun || mtlxLightCount > 0) ? 0.0 : sunTotalPower();
     float w_sky = skyTotalPower();
-    float w_total = max(DENOM_TOLERANCE, w_sun + w_sky);
+    float w_mtlx = mtlxLightsTotalPower();
+    float w_total = max(DENOM_TOLERANCE, w_sun + w_sky + w_mtlx);
     float P_sun = w_sun / w_total;
     float P_sky = w_sky / w_total;
-    float lightPdf = P_sun*pdf_sun + P_sky*pdf_sky; // Light PDF according to 1-sample MIS
+    float P_mtlx = w_mtlx / w_total;
+    float lightPdf = P_sun*pdf_sun + P_sky*pdf_sky;
+    if (w_mtlx > DENOM_TOLERANCE)
+    {
+        for (int i=0; i<MAX_MTLX_LIGHTS; ++i)
+        {
+            if (i >= mtlxLightCount) break;
+            float selectedPower = mtlxLightTotalPower(i);
+            lightPdf += P_mtlx * selectedPower / w_mtlx * mtlxLightDirectionalPdf(i,pW,shadowW);
+        }
+    }
     return lightPdf;
 }
 
@@ -693,7 +841,7 @@ int sample_channel(in vec3 albedo, in vec3 throughput, inout uint rndSeed, inout
 }
 
 #ifdef VOLUME_ENABLED
-bool trace_volumetric(in vec3 pW, in vec3 dW, inout uint rndSeed,
+bool trace_volumetric(in vec3 pW, in vec3 dW, inout uint rndSeed,in bool includeSceneEmitters,
                       in Volume volume,
                       out vec3 volume_throughput,
                       out vec3 pW_hit,
@@ -709,6 +857,7 @@ bool trace_volumetric(in vec3 pW, in vec3 dW, inout uint rndSeed,
     // Returns whether a surface hit occurred (and the hit data), and the volumetric path throughput.
     vec3 pWalk = pW;
     vec3 dWalk = dW;
+    bool includeEmitterHits = includeSceneEmitters;
     vec3 mfp = 1.0 / max(vec3(DENOM_TOLERANCE), volume.extinction);
     volume_throughput = vec3(1.0);
     for (int n=0; n < max_volume_steps; ++n)
@@ -716,7 +865,7 @@ bool trace_volumetric(in vec3 pW, in vec3 dW, inout uint rndSeed,
         vec3 channel_probs;
         int channel = sample_channel(volume.albedo, volume_throughput, rndSeed, channel_probs);
         float walk_step = -log(rand(rndSeed)) * mfp[channel];
-        bool surface_hit = trace(pWalk, dWalk, walk_step,
+        bool surface_hit = trace(pWalk, dWalk, walk_step, includeEmitterHits,
                                  pW_hit, NsW_hit, NgW_hit, TsW_hit, baryCoord_hit, texCoord_hit, material_hit);
         if (surface_hit)
         {
@@ -747,6 +896,7 @@ bool trace_volumetric(in vec3 pW, in vec3 dW, inout uint rndSeed,
 
         // walk in the sampled direction, staying inside the medium
         pWalk += walk_step * dWalk;
+        includeEmitterHits = true;
 
         // scatter into a new direction sampled from Henyey-Greenstein phase function
         dWalk = samplePhaseFunction(dWalk, volume.anisotropy, rndSeed);
@@ -780,8 +930,19 @@ void main()
     vec3 cameraUp = cameraWorldMatrix[1].xyz;
     vec3 cameraForward = -cameraWorldMatrix[2].xyz;
     vec3 rayDirection = normalize(screenPosition.x * cameraRight + screenPosition.y * cameraUp + cameraForward);
-    vec3 pW = (invModelMatrix * vec4(cameraWorldMatrix[3].xyz, 1.0)).xyz;
-    vec3 dW = normalize((invModelMatrix * vec4(rayDirection, 0.0)).xyz);
+    vec3 cameraPosition = cameraWorldMatrix[3].xyz;
+    vec3 rayOrigin = cameraPosition;
+    vec3 rayDirectionWorld = rayDirection;
+    if (cameraAperture > 0.0) {
+        float lensRadius = sqrt(rand(rndSeed) * cameraAperture);
+        float lensAngle = 6.28318530718 * rand(rndSeed);
+        vec3 lensOffset = lensRadius * (cos(lensAngle) * cameraRight + sin(lensAngle) * cameraUp);
+        rayOrigin += lensOffset;
+        vec3 focalPoint = cameraPosition + cameraFocalDist * rayDirection;
+        rayDirectionWorld = normalize(focalPoint - rayOrigin);
+    }
+    vec3 pW = (invModelMatrix * vec4(rayOrigin, 1.0)).xyz;
+    vec3 dW = normalize((invModelMatrix * vec4(rayDirectionWorld, 0.0)).xyz);
 
     // Setup sun basis
     sunBasis = makeBasis(sunDir);
@@ -828,7 +989,7 @@ void main()
         if (!inside_scattering_volume)
         {
             // Raycast along current propagation direction dW, from current vertex pW
-            surface_hit = trace(pW, dW, HUGE_DIST,
+            surface_hit = trace(pW, dW, HUGE_DIST,vertex > 0 || !sceneHideEmitters,
                                 pW_next, NsW_next, NgW_next, TsW_next, baryCoord_next, texCoord_next, material_next);
 
 #ifdef VOLUME_ENABLED
@@ -847,7 +1008,7 @@ void main()
         {
             vec3 volume_throughput;
             vec3 dW_next;
-            surface_hit = trace_volumetric(pW, dW, rndSeed, current_medium, volume_throughput,
+            surface_hit = trace_volumetric(pW,dW,rndSeed,vertex > 0 || !sceneHideEmitters,current_medium,volume_throughput,
                                            pW_next, dW_next, NsW_next, NgW_next, TsW_next, baryCoord_next, texCoord_next, material_next);
             dW = dW_next;
             throughput *= volume_throughput;
@@ -864,14 +1025,27 @@ void main()
             // Skip MIS for volumetric paths: dW is a random scatter direction decoupled from the entry BSDF
             if (vertex > 0 && !inside_scattering_volume)
             {
-                float lightPdf = LiPDF(dW, basis); // surface basis of previous hit
+                float lightPdf = LiPDF(pW,dW,basis); // surface basis of previous hit
                 misWeightLight = powerHeuristic(bsdfPdf_continuation, lightPdf);
             }
-            vec3 Lenv = throughput * misWeightLight * (sunRadiance(dW) + skyRadiance(dW));
+            vec3 sun = mtlxDisableSun ? vec3(0.0) : sunRadiance(dW);
+            vec3 Lenv = throughput * misWeightLight * (sun + skyRadiance(dW));
             float maxLenv = maxComponent(Lenv);
             if (maxLenv > firefly_clamp) Lenv *= firefly_clamp / maxLenv;
             L += Lenv;
             break; // Ray escapes to infinity, terminate path
+        }
+
+        if (material_next >= MATERIAL_SCENE_LIGHT_BASE)
+        {
+            int lightIndex = material_next - MATERIAL_SCENE_LIGHT_BASE;
+            MtlxLight emitter = GetMtlxLight(lightIndex);
+            vec3 emitted = emitter.color * emitter.intensity;
+            float misWeight = 1.0;
+            if (vertex > 0 && !inside_scattering_volume)
+                misWeight = powerHeuristic(bsdfPdf_continuation,LiPDF(pW,dW,basis));
+            L += throughput * misWeight * emitted;
+            break;
         }
 
         // Terminate at max bounce count (biased)
@@ -988,12 +1162,13 @@ void main()
         {
             vec3 shadowL, shadowW; // sampled shadow ray direction
             float lightPdf;
-            vec3 Li = LiDirect(pW, basis, shadowL, shadowW, lightPdf, rndSeed);
+            bool lightIsDelta;
+            vec3 Li = LiDirect(pW, basis, shadowL, shadowW, lightPdf, lightIsDelta, rndSeed);
             if (maxComponent(Li) > RADIANCE_EPSILON)
             {
                 float bsdfPdf_shadow = PDF_EPSILON;
                 vec3 fshadow = evaluateBsdf(pW, basis, winputL, shadowL, material, bsdfPdf_shadow);
-                float misWeightLight = powerHeuristic(lightPdf, bsdfPdf_shadow);
+                float misWeightLight = lightIsDelta ? 1.0 : powerHeuristic(lightPdf, bsdfPdf_shadow);
                 float cos_shadow = (material == MATERIAL_OPENPBR) ? 1.0 : abs(dot(shadowW, basis.nW));
                 vec3 Ld = misWeightLight * fshadow * cos_shadow * Li / max(PDF_EPSILON, lightPdf);
                 vec3 Lcontrib = throughput * Ld;

@@ -28,7 +28,7 @@ uniform bool mockedHit;
 uniform int mockedMaterial;
 uniform bool mockedOpaque;
 uniform bool mockedThinWalled;
-bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
+bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance, in bool includeSceneEmitters,
     out vec3 P, out vec3 Ns, out vec3 Ng, out vec3 Ts, out vec3 baryCoord, out vec2 texCoord, out int material) {
     P=vec3(0.0); Ns=vec3(0.0,0.0,1.0); Ng=Ns; Ts=vec3(1.0,0.0,0.0);
     baryCoord=vec3(0.0); texCoord=vec2(0.0); material=mockedMaterial;
