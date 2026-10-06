@@ -1,5 +1,6 @@
 export const SCENE_LIGHT_TYPE = Object.freeze({ quad:0, sphere:1, distant:2 });
 export const LOCAL_MTLX_LIGHT_TYPE = Object.freeze({ point:0, directional:1, spot:2, quad:3, sphere:4 });
+export const LIGHT_SAMPLING_MODE = Object.freeze({ mis:0, nee:1, bsdf:2 });
 export const LIGHT_TEXELS_PER_LIGHT = 6;
 const EPSILON = 1.0e-12;
 

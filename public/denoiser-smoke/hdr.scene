@@ -1,0 +1,35 @@
+material default
+{
+    material_type materialx
+    materialx_document ../mtlx-defaults/open_pbr_default.mtlx
+}
+camera
+{
+    position 7.5 5 7
+    lookat 0 0 0
+    fov 45
+    aperture 0
+    focaldist 8
+}
+gltf
+{
+    file ../test-material-disney-gold/openpbr_objects.glb
+    object * default
+}
+light
+{
+    type quad
+    position -1 4 -1
+    v1 1 4 -1
+    v2 -1 4 1
+    emission 500 500 500
+}
+renderer
+{
+    envmapfile none
+    envmapirradiancefile none
+    maxspp 256
+    maxdepth 2
+    fireflyclamp 100000
+    hideemitters true
+}

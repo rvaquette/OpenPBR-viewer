@@ -1,26 +1,60 @@
 task: T026
 date: '2026-10-05'
-status: implemented-runtime-gates-deferred
-kind: scene-lights-nee-emitter-mis
+status: cpu-analytic-and-mis-hdr-linear-convergence-passed-fixture-only-per-light-gate-pending
 runtime_changes: true
 reference_renderer_executed: false
 evidence: [t025-t026-lights.md, ../../src/scene/lightAdapter.js, ../../main.js, ../../glsl/pathtracing/mtlx/common.glsl, ../../glsl/pathtracing/mtlx/pathtracer.glsl, ../../tools/mtlx-reference-alignment/light-adapter.test.mjs]
-next_task: T027
+next_task: T028
 T025_T026_validation:
-  command: node --test tools/mtlx-reference-alignment/light-adapter.test.mjs
+  command: npm test
   exit_code: 0
-  light_adapter_tests: 6
-  combined_cpu_tests: 20
+  passed: 101
+  failed: 0
+  light_adapter_tests: 7
+  mis_cpu_samples_per_mode: 100000
+  mis_cpu_mean_error_max: 0.015
+  mis_cpu_variance: MIS-below-BSDF-only
   build_command: npm run build
-  build_exit_code: 0
+  validation: passed-21-cpu-tests-build-swiftshader-smokes-and-cpu-convergence
   static_trace_test: passed-non-browser
+  headless_pathtracer_command: node launch_render.mjs
+  headless_renderer: Pathtracer-MTLX-Chrome-ANGLE-Vulkan-SwiftShader
+  headless_samples: 64
+  headless_resolution: 64x64
+  headless_scene_status: loaded
+  headless_shader_error: null
+  headless_light_types: [quad-3, sphere-4, distant-1]
+  headless_mtlx_light_count: 3
+  headless_skyPower: 0
+  headless_capture: ../../artifacts/mtlx-reference-alignment/t025-t026-lights-swiftshader-64spp.png
+  headless_report: ../../artifacts/mtlx-reference-alignment/t025-t026-lights-swiftshader-64spp.json
+  headless_mode_comparison: [mis-nee-swiftshader.json, mis-bsdf-swiftshader.json, mis-mis-swiftshader.json]
+  display_rgb_means_64spp: [nee-51.18, bsdf-41.34, mis-51.23]
+  bsdf_only_256spp_display_mean: 50.51
+  bsdf_only_256spp_capture: ../../artifacts/mtlx-reference-alignment/mis-bsdf-swiftshader-256spp.png
+  bsdf_only_256spp_report: ../../artifacts/mtlx-reference-alignment/mis-bsdf-swiftshader-256spp.json
   reference_renderer_executed: false
-  GPU_readback: not-run-user-preference
-  NEE_render: not-run-user-preference
-  emitter_render: not-run-user-preference
-  MIS_convergence: not-run-user-preference
-  browser_shader_compile: not-run-after-fixture-fix-user-preference
-  previous_full_npm_test: 98-pass-2-browser-compile-fixture-failures-before-fixture-update
+  GPU_readback: not-run
+  NEE_render: passed-headless-smoke
+  emitter_render: exercised-headless-smoke
+  MIS_cpu_analytic_convergence: passed
+  MIS_gpu_linear_energy_convergence: passed-mis-hdr-fixture-only-not-analytic-or-per-mode
+  linear_energy_evidence: ../../artifacts/mtlx-reference-alignment/t031-linear-radiance-quality.json
+  per_light_visibility_orientation: not-run
+  previous_full_npm_test: 98-pass-2-browser-fixture-failures-before-fixture-update
+  final_full_npm_test: 101-pass-0-fail
+T027_T036_validation:
+  report: t027-t036-validation.md
+  full_npm_test: 111-pass-0-fail
+  build: passed
+  renderer_options_T027: completed
+  runtime_transitions_T028: blocked-direct-swiftshader-page-samples-zero-app-not-loaded
+  denoiser_quality_T031: failed-HDR-energy-bias
+  runner_T032: smoke-passed-quality-gate-blocked
+  corpus_T033: not-run
+  android_T034: blocked-no-device
+  default_backend_T035: withheld
+  cleanup_docs_T036: documented-final-rollout-open
 T023_T024_validation:
   command: npm test
   exit_code: 0

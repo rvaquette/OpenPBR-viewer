@@ -700,6 +700,13 @@ vec3 LiDirect(in vec3 pW, in Basis basis,
     // Do 1-sample MIS between sky, sun, and MaterialX document lights.
     vec3 Li;
     lightIsDelta = false;
+    if (sceneLightSamplingMode == 2)
+    {
+        shadowL = vec3(0.0);
+        shadowW = vec3(0.0,0.0,1.0);
+        lightPdf = 0.0;
+        return vec3(0.0);
+    }
     {
         float w_mtlx = mtlxLightsTotalPower();
         float w_sun = (mtlxDisableSun || mtlxLightCount > 0) ? 0.0 : sunTotalPower();
@@ -1029,7 +1036,12 @@ void main()
                 misWeightLight = powerHeuristic(bsdfPdf_continuation, lightPdf);
             }
             vec3 sun = mtlxDisableSun ? vec3(0.0) : sunRadiance(dW);
-            vec3 Lenv = throughput * misWeightLight * (sun + skyRadiance(dW));
+            vec3 environmentRadiance = sun + skyRadiance(dW);
+            if (vertex == 0) {
+                if (!sceneBackgroundEnabled) environmentRadiance = vec3(0.0);
+                else if (sceneBackgroundColorEnabled) environmentRadiance = sceneBackgroundColor;
+            }
+            vec3 Lenv = throughput * misWeightLight * environmentRadiance;
             float maxLenv = maxComponent(Lenv);
             if (maxLenv > firefly_clamp) Lenv *= firefly_clamp / maxLenv;
             L += Lenv;
@@ -1038,11 +1050,12 @@ void main()
 
         if (material_next >= MATERIAL_SCENE_LIGHT_BASE)
         {
+            if (sceneLightSamplingMode == 1 && vertex > 0) break;
             int lightIndex = material_next - MATERIAL_SCENE_LIGHT_BASE;
             MtlxLight emitter = GetMtlxLight(lightIndex);
             vec3 emitted = emitter.color * emitter.intensity;
             float misWeight = 1.0;
-            if (vertex > 0 && !inside_scattering_volume)
+            if (sceneLightSamplingMode == 0 && vertex > 0 && !inside_scattering_volume)
                 misWeight = powerHeuristic(bsdfPdf_continuation,LiPDF(pW,dW,basis));
             L += throughput * misWeight * emitted;
             break;
@@ -1168,7 +1181,8 @@ void main()
             {
                 float bsdfPdf_shadow = PDF_EPSILON;
                 vec3 fshadow = evaluateBsdf(pW, basis, winputL, shadowL, material, bsdfPdf_shadow);
-                float misWeightLight = lightIsDelta ? 1.0 : powerHeuristic(lightPdf, bsdfPdf_shadow);
+                float misWeightLight = lightIsDelta || sceneLightSamplingMode == 1
+                    ? 1.0 : powerHeuristic(lightPdf, bsdfPdf_shadow);
                 float cos_shadow = (material == MATERIAL_OPENPBR) ? 1.0 : abs(dot(shadowW, basis.nW));
                 vec3 Ld = misWeightLight * fshadow * cos_shadow * Li / max(PDF_EPSILON, lightPdf);
                 vec3 Lcontrib = throughput * Ld;

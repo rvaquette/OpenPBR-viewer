@@ -81,6 +81,10 @@ uniform bool has_env_cdf;
 // GetMtlxLight(i) in pathtracer.glsl. No shader recompile on light-count change.
 uniform int mtlxLightCount;
 uniform bool sceneHideEmitters;
+uniform int sceneLightSamplingMode; // 0=MIS, 1=NEE-only, 2=BSDF-only (validation/control)
+uniform bool sceneBackgroundEnabled;
+uniform bool sceneBackgroundColorEnabled;
+uniform vec3 sceneBackgroundColor;
 uniform int mtlxMaterialParamCount;
 uniform sampler2D mtlxLightsTex;
 int mtlxMaterialVariant = 0;

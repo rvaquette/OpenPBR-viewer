@@ -91,6 +91,17 @@ The route fails explicitly if the generated dispatch is missing or references a
 forbidden dependency; it never switches to another shading implementation or a
 generic approximation path.
 
+## Experimental MTLX denoiser
+
+Pathtracer MTLX exposes a local browser denoiser using vendored code and weights;
+no external OIDN executable is launched. For headless captures, `launch_render.mjs`
+accepts `--denoise=true` or `--denoise=false`; `--gpu=false` selects SwiftShader.
+The denoiser can also be run from the viewer's renderer controls. Its HDR quality
+is not yet validated: the current 64x64 high-dynamic-range check substantially
+darkens the image and increases linear-radiance error. Use `--denoise=false` for
+trusted HDR captures until the quality and mobile gates pass. The obsolete
+`--oidn` option is rejected.
+
 <img src="https://github.com/portsmouth/OpenPBR-viewer/blob/main/images/metal2.png" width="49%"> <img src="https://github.com/portsmouth/OpenPBR-viewer/blob/main/images/absorption.png" width="49%">
 
 <img src="https://github.com/portsmouth/OpenPBR-viewer/blob/main/images/dispersion2.png" width="49%"> <img src="https://github.com/portsmouth/OpenPBR-viewer/blob/main/images/bubbles.png" width="49%">

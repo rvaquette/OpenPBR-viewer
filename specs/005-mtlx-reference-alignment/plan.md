@@ -247,11 +247,15 @@ Quatre sous-jalons, controle obligatoire apres chacun :
    marge statistique calibree, aucune luminosite doublee.
 Definir sens distant depuis sampling. Lumieres .scene autoritaires, fusion MTLX/overrides
 uniquement explicite. Passage : quatre controles passes, puis plusieurs lumieres + envmap.
-Les gates de rendu/GPU NEE/emetteurs/MIS de T026 restent a executer : seuls les
-compiles ESSL isoles ont passe sous SwiftShader, pas un rendu de scene complet.
+Le test CPU deterministe 100k echantillons NEE/BSDF/MIS converge a moins de 1.5%
+de l'integrale analytique et MIS reduit la variance BSDF-only. Sous SwiftShader,
+NEE/MIS concordent a 64 spp et la moyenne display-space BSDF-only a 256 spp est
+proche. Une fixture HDR MIS converge aussi en radiance Float32 lineaire de 16 a
+64 spp contre une reference 256 spp ; cela ne remplace pas l'oracle analytique GPU.
+Texture readback et controles par lumiere restent a executer.
 
 ### 13. Options et cycle de vie [REQ-001, REQ-004, REQ-005, REQ-006, REQ-007]
-- [ ] T027 [Plan:13] Mapper renderer resolution/maxdepth/maxspp/volume/clamp/envmap/affichage dans main.js ; autres options rejetees/documentees.
+- [X] T027 [Plan:13] Mapper renderer resolution/maxdepth/maxspp/volume/clamp/envmap/affichage dans main.js ; autres options rejetees/documentees.
 - [ ] T028 [Plan:13] Verifier ressources/invalidation shaders/accumulation aux transitions.
 Controle : A -> B -> A, scene/materiau/camera/lumiere/instance, resize, R raster ->
 pathtracer, erreur puis reprise. Uniforms avant warm-up, samplers cube/2D distincts.

@@ -9,8 +9,8 @@ import { Scene,
     WebGLRenderer, WebGLRenderTarget, RepeatWrapping,
     EquirectangularReflectionMapping, CubeReflectionMapping,
     UniformsUtils, UniformsLib, ShaderLib,
-    DataTexture, NearestFilter,
-    PCFSoftShadowMap, CameraHelper  } from 'three';
+    DataTexture, NearestFilter, LinearFilter,
+    PCFSoftShadowMap, CameraHelper, ACESFilmicToneMapping, LinearToneMapping, NoToneMapping  } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -20,7 +20,9 @@ import { loadEnvironmentTexture } from './src/envmap/envLoader.js';
 import { loadNativeTexture } from './src/textures/textureLoader.js';
 import { disposeReferenceSceneResources, loadReferenceSceneResources, prepareReferenceScene } from './src/scene/referenceSceneAdapter.js';
 import { createSceneCamera, parseSceneCameraOverrides, verticalFovFromHorizontal } from './src/scene/cameraAdapter.js';
-import { adaptSceneLights, packLocalLightTexels } from './src/scene/lightAdapter.js';
+import { adaptSceneLights, LIGHT_SAMPLING_MODE, packLocalLightTexels } from './src/scene/lightAdapter.js';
+import { mapSceneRendererOptions } from './src/scene/rendererAdapter.js';
+import { ReferenceDenoiserAdapter } from './src/denoiser/referenceDenoiserAdapter.js';
 import { DEFAULT_BVH_BACKEND, AVAILABLE_BVH_BACKENDS, resolveBvhBackend } from './src/bvh/backend.mjs';
 import { assertReferenceMaterialCoverage, assertReferenceMaterialParameterSchema,
     createReferenceMaterialRegistry } from './src/mtlx/referenceMaterialRegistry.js';
@@ -225,6 +227,9 @@ var params =
 
     scene_name:                         'shader-ball',
     scene_url:                          '',
+    scene_light_sampling_mode:          'mis',
+    denoiser_backend:                    'webgl',
+    show_denoised:                      false,
     renderer_mode:                      'Rasterizer MTLX',
     bvh_backend:                        DEFAULT_BVH_BACKEND,
     mtlx_directory:                     '',
@@ -339,6 +344,14 @@ var activeReferenceResources = null;
 var referenceSceneLoadRevision = 0;
 var activeSceneCameraOverrides = Object.freeze({});
 var activeSceneCameraState = null;
+var activeSceneRendererOptions = null;
+var activeSceneRenderResolution = null;
+var referenceDenoiserAdapter = null;
+var denoisedPresentationTexture = null;
+var denoiserRevision = 0;
+var denoiserRunPromise = null;
+var denoisedAtSamples = -1;
+var denoiserLastError = null;
 var mtlxParameterUpdateQueue = Promise.resolve();
 var mtlxRouteLightsTexture = null;
 var mtlxRouteReferenceMaterialRegistry = null;
@@ -846,6 +859,10 @@ function createMtlxLightUniforms()
     return {
         mtlxLightCount: { value: mtlxRouteLights.length },
         sceneHideEmitters: { value: false },
+        sceneLightSamplingMode: { value: LIGHT_SAMPLING_MODE[params.scene_light_sampling_mode] },
+        sceneBackgroundEnabled: { value: true },
+        sceneBackgroundColorEnabled: { value: false },
+        sceneBackgroundColor: { value: new Vector3() },
         mtlxMaterialParamCount: { value: mtlxRouteParamDescriptors.length },
         mtlxReferenceMaterialRegistryCount: { value: mtlxRouteReferenceMaterialRegistry?.entries.length || 0 },
         mtlxReferenceMaterialRegistryRowOffset: { value: registryRowOffset },
@@ -2970,6 +2987,8 @@ initializeLoadingProgress();
     }
     try {
         activeSceneCameraOverrides = parseSceneCameraOverrides(search);
+        if (!Object.hasOwn(LIGHT_SAMPLING_MODE,params.scene_light_sampling_mode))
+            throw new Error('SCENE_LIGHT_SAMPLING_MODE_INVALID: expected mis, nee or bsdf');
     } catch (error) {
         reportReferenceSceneError(error);
         return;
@@ -3005,6 +3024,14 @@ initializeLoadingProgress();
             activeReferenceScene = await prepareReferenceScene(sceneUrl);
             params.scene_url = activeReferenceScene.sceneUrl;
             params.mtlx_material = activeReferenceScene.materialName;
+            const sceneRenderer = activeReferenceScene.scene.blocks.find((block) => block.type === 'renderer')?.values || {};
+            const explicitRendererOverrides = new Set();
+            for (const key of ['bounces','max_volume_steps','firefly_clamp','max_samples','skyPower','render_size'])
+                if (search.has(key)) explicitRendererOverrides.add(key);
+            activeSceneRendererOptions = mapSceneRendererOptions(sceneRenderer,explicitRendererOverrides);
+            activeSceneRenderResolution = activeSceneRendererOptions.resolution || null;
+            for (const key of ['bounces','max_volume_steps','firefly_clamp','max_samples','skyPower'])
+                if (activeSceneRendererOptions[key] !== undefined) params[key] = activeSceneRendererOptions[key];
             window.__openpbrScene = { url:activeReferenceScene.sceneUrl, status:'prepared', material:activeReferenceScene.materialName };
         } catch (error) {
             reportReferenceSceneError(error);
@@ -3474,6 +3501,7 @@ function init()
     // renderer setup
     setGpuDebugStage('creating-renderer');
     renderer = new WebGLRenderer( { antialias: true, preserveDrawingBuffer: true } );
+    applySceneToneMapping();
     renderer.setPixelRatio( window.devicePixelRatio );
     renderer.setClearColor( 0x09141a );
     renderer.setSize( window.innerWidth, window.innerHeight );
@@ -3803,6 +3831,7 @@ function loadReferenceScene(scene_name)
     window.__openpbrScene = { url:activeReferenceScene.sceneUrl, status:'loading', material:activeReferenceScene.materialName };
 
     (async () => {
+    invalidateDenoiserResult();
         let resources;
         try {
             resources = await loadReferenceSceneResources(activeReferenceScene,{
@@ -3849,7 +3878,10 @@ function loadReferenceScene(scene_name)
             env_map_importance = resources.environment.importance || null;
             env_irradiance_texture = resources.irradiance?.texture || null;
             env_irradiance_latlong_texture = resources.irradiance?.latLongTexture || null;
-            scene.background = env_map_texture;
+            const rendererOptions = activeSceneRendererOptions || {};
+            scene.background = rendererOptions.backgroundColor
+                ? new Color().setRGB(...rendererOptions.backgroundColor,LinearSRGBColorSpace)
+                : rendererOptions.enablebackground === false ? null : env_map_texture;
             if (!FULLSCREEN_BVH_ROUTE) {
                 neutralMaterial.envMap = env_map_texture;
                 neutralMaterial.uniforms.envMap.value = env_map_texture;
@@ -3960,6 +3992,7 @@ function load_scene(scene_name)
         loadReferenceScene(scene_name);
         return;
     }
+        invalidateDenoiserResult();
     referenceSceneLoadRevision++;
     if (activeReferenceResources) {
         disposeReferenceSceneResources(activeReferenceResources);
@@ -3971,6 +4004,8 @@ function load_scene(scene_name)
         env_irradiance_latlong_texture = null;
     }
     if (window.__openpbrScene) delete window.__openpbrScene;
+    activeSceneRendererOptions = null;
+    activeSceneRenderResolution = null;
     setGpuDebugStage('loading-scene');
     console.log('Loading scene: ', scene_name);
     LOADED = false;
@@ -4196,6 +4231,15 @@ function reset_camera(scene_name)
             }
         }
     }
+}
+
+function applySceneToneMapping()
+{
+    if (!renderer) return;
+    if (activeSceneRendererOptions?.enabletonemap === false) renderer.toneMapping = NoToneMapping;
+    else if (activeSceneRendererOptions?.enableaces === true) renderer.toneMapping = ACESFilmicToneMapping;
+    else if (activeSceneRendererOptions?.enabletonemap === true) renderer.toneMapping = LinearToneMapping;
+    else renderer.toneMapping = NoToneMapping;
 }
 
 
@@ -4462,6 +4506,12 @@ function setup_gui()
     renderer_folder.add( params, 'render_size', ['256x256', '512x512', 'max'] ).name('render size').onChange( v => { resize(); });
     renderer_folder.add( params, 'max_volume_steps', 1, 100, 1 ).onChange(                            v => { resetSamples(); } );
     renderer_folder.add( params, 'firefly_clamp', 1, 1000 ).onChange(                                v => { resetSamples(); } );
+    renderer_folder.add(params,'show_denoised').name('show denoised').onChange(value => window.__openpbrSetDenoisedVisible(value));
+    const denoiserActions = { denoise_current:() => runReferenceDenoiser().catch((error) => {
+        denoiserLastError = error?.message || String(error);
+        console.error('[denoiser]',denoiserLastError);
+    }) };
+    renderer_folder.add(denoiserActions,'denoise_current').name('Denoise current');
     renderer_folder.close();
 
     gui.add( params, 'reset_camera' );
@@ -4649,6 +4699,7 @@ function finishCompilationProgress()
 function getRenderDimensions()
 {
     const W = window.innerWidth, H = window.innerHeight;
+    if (activeSceneRenderResolution) return { w:activeSceneRenderResolution[0],h:activeSceneRenderResolution[1] };
     if (params.render_size === 'max') return { w: W, h: H };
     const side = params.render_size === '512x512' ? 512 : 256;
     return { w: Math.min(side, W), h: Math.min(side, H) };
@@ -4663,6 +4714,142 @@ function getPathtracerRenderDimensions()
         h: Math.max(1, Math.round(dimensions.h * PATH_TRACER_INTERACTIVE_SCALE)),
     };
 }
+
+function readPathtracerLinearRadiance({ includePixels = false } = {})
+{
+    if (!pathtracingRenderTarget || !renderer || !FULLSCREEN_BVH_ROUTE)
+        throw new Error('LINEAR_RADIANCE_TARGET_UNAVAILABLE: pathtracer render target is not initialized');
+    const width = pathtracingRenderTarget.width;
+    const height = pathtracingRenderTarget.height;
+    const rgba = new Float32Array(width*height*4);
+    renderer.readRenderTargetPixels(pathtracingRenderTarget,0,0,width,height,rgba);
+    const sum = [0,0,0];
+    const sumSquared = [0,0,0];
+    const min = [Infinity,Infinity,Infinity];
+    const max = [-Infinity,-Infinity,-Infinity];
+    let finitePixels = 0;
+    let nonFiniteComponents = 0;
+    let negativeComponents = 0;
+    let aboveOneComponents = 0;
+    for (let offset=0; offset<rgba.length; offset+=4) {
+        let finitePixel = true;
+        for (let channel=0; channel<3; channel++) {
+            const value = rgba[offset+channel];
+            if (!Number.isFinite(value)) { nonFiniteComponents++; finitePixel=false; continue; }
+            if (value < 0) negativeComponents++;
+            if (value > 1) aboveOneComponents++;
+            sum[channel] += value;
+            sumSquared[channel] += value*value;
+            min[channel] = Math.min(min[channel],value);
+            max[channel] = Math.max(max[channel],value);
+        }
+        if (finitePixel) finitePixels++;
+    }
+    const pixelCount = width*height;
+    const mean = sum.map((value) => value/pixelCount);
+    const variance = sumSquared.map((value,channel) => Math.max(0,value/pixelCount-mean[channel]*mean[channel]));
+    return { width,height,samples,format:'RGBA32F',colorSpace:'linear-srgb',stage:'accumulation-target-before-presentation',
+        finitePixels,nonFiniteComponents,negativeComponents,aboveOneComponents,meanRGB:mean,varianceRGB:variance,minRGB:min,maxRGB:max,
+        ...(includePixels ? { rgba } : {}) };
+}
+
+if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('linear_radiance_capture') === 'true') {
+    window.__openpbrReadLinearRadiance = readPathtracerLinearRadiance;
+    window.__openpbrReadDenoisedRadiance = () => denoisedPresentationTexture?.image?.data?.slice() || null;
+}
+
+window.__openpbrGetRendererState = () => ({ mode:params.renderer_mode,loaded:LOADED,compiling:COMPILING,samples });
+
+function updateDenoiserPresentation()
+{
+    if (!pathtracedFinalQuad?.material) return;
+    const showResult = params.show_denoised && denoisedPresentationTexture && denoisedAtSamples === samples;
+    pathtracedFinalQuad.material.map = showResult ? denoisedPresentationTexture : pathtracingRenderTarget?.texture || null;
+    if (LOADED && renderer && !COMPILING) {
+        const previousTarget = renderer.getRenderTarget();
+        const previousAutoClear = renderer.autoClear;
+        renderer.setRenderTarget(null);
+        renderer.autoClear = true;
+        pathtracedFinalQuad.render(renderer);
+        renderer.setRenderTarget(previousTarget);
+        renderer.autoClear = previousAutoClear;
+    }
+}
+
+function invalidateDenoiserResult()
+{
+    denoiserRevision++;
+    referenceDenoiserAdapter?.abort();
+    if (denoisedPresentationTexture) {
+        denoisedPresentationTexture.dispose();
+        denoisedPresentationTexture = null;
+    }
+    denoisedAtSamples = -1;
+    updateDenoiserPresentation();
+}
+
+async function runReferenceDenoiser()
+{
+    if (!FULLSCREEN_BVH_ROUTE || !pathtracingRenderTarget || !is_pathtracing_route())
+        throw new Error('DENOISER_ROUTE_UNSUPPORTED: Pathtracer MTLX is required');
+    if (samples < 1) throw new Error('DENOISER_INPUT_NOT_READY: accumulate at least one sample first');
+    if (denoiserRunPromise) return denoiserRunPromise;
+
+    const revision = denoiserRevision;
+    const sampleSnapshot = samples;
+    const raw = readPathtracerLinearRadiance({ includePixels:true });
+    const width = raw.width;
+    const height = raw.height;
+    if (raw.nonFiniteComponents) throw new Error(`DENOISER_INPUT_NONFINITE: ${raw.nonFiniteComponents}`);
+    const weightsBaseUrl = getPublicAssetUrl('denoiser/tzas');
+    if (!referenceDenoiserAdapter) {
+        referenceDenoiserAdapter = new ReferenceDenoiserAdapter({ weightsBaseUrl,backend:params.denoiser_backend || 'webgl',quality:'fast' });
+    }
+    window.__openpbrDenoiserState = { status:'running',revision,samples:sampleSnapshot,width,height,
+        inputAboveOne:raw.aboveOneComponents,weightsBaseUrl };
+
+    const run = referenceDenoiserAdapter.execute(raw.rgba,width,height,{ revision,signal:undefined,
+        isCurrent:(candidateRevision) => candidateRevision === denoiserRevision && samples === sampleSnapshot &&
+            pathtracingRenderTarget?.width === width && pathtracingRenderTarget?.height === height });
+    denoiserRunPromise = run;
+    try {
+        const result = await run;
+        if (revision !== denoiserRevision || samples !== sampleSnapshot)
+            throw new Error('DENOISER_RESULT_STALE: render state changed after execution');
+        const texture = new DataTexture(result.data,width,height,RGBAFormat,FloatType);
+        texture.colorSpace = LinearSRGBColorSpace;
+        texture.minFilter = LinearFilter;
+        texture.magFilter = LinearFilter;
+        texture.generateMipmaps = false;
+        texture.flipY = false;
+        texture.needsUpdate = true;
+        denoisedPresentationTexture?.dispose();
+        denoisedPresentationTexture = texture;
+        denoisedAtSamples = sampleSnapshot;
+        let outputMin = Infinity;
+        let outputMax = -Infinity;
+        for (const value of result.data) {
+            outputMin = Math.min(outputMin,value);
+            outputMax = Math.max(outputMax,value);
+        }
+        window.__openpbrDenoiserState = { status:'ready',revision,samples:sampleSnapshot,width,height,
+            inputAboveOne:result.aboveOneInput,outputMin,outputMax,weightsBaseUrl };
+        updateDenoiserPresentation();
+        return window.__openpbrDenoiserState;
+    } catch (error) {
+        window.__openpbrDenoiserState = { status:'error',revision,samples:sampleSnapshot,error:error?.message || String(error) };
+        updateDenoiserPresentation();
+        throw error;
+    } finally {
+        if (denoiserRunPromise === run) denoiserRunPromise = null;
+    }
+}
+
+window.__openpbrDenoiseCurrent = runReferenceDenoiser;
+window.__openpbrSetDenoisedVisible = (visible) => {
+    params.show_denoised = visible === true;
+    updateDenoiserPresentation();
+};
 
 function updatePathtracingRenderTargetSize()
 {
@@ -4718,9 +4905,11 @@ function get_vector3(array3)
 
 function resetSamples()
 {
+    invalidateDenoiserResult();
     samples = 0;
     pathtracerTileIndex = 0;
 }
+    invalidateDenoiserResult();
 
 // Force the render into (or out of) pause and keep the GUI toggle in sync.
 function setPaused(state)
@@ -4816,10 +5005,16 @@ function sync_shader_uniforms(uniforms)
     updateSunDir();
     uniforms.sunDir.value.copy(get_vector3(                 params.sunDir));
     if (uniforms.mtlxDisableSun) uniforms.mtlxDisableSun.value = !!activeReferenceScene || params.env_map_provided === true;
+    if (uniforms.sceneLightSamplingMode)
+        uniforms.sceneLightSamplingMode.value = LIGHT_SAMPLING_MODE[params.scene_light_sampling_mode] ?? LIGHT_SAMPLING_MODE.mis;
     if (uniforms.sceneHideEmitters) {
         const rendererBlock = activeReferenceScene?.scene.blocks.find((block) => block.type === 'renderer');
         uniforms.sceneHideEmitters.value = rendererBlock?.values.hideemitters === true;
     }
+    if (uniforms.sceneBackgroundEnabled) uniforms.sceneBackgroundEnabled.value = activeSceneRendererOptions?.enablebackground !== false;
+    if (uniforms.sceneBackgroundColorEnabled) uniforms.sceneBackgroundColorEnabled.value = !!activeSceneRendererOptions?.backgroundColor;
+    if (uniforms.sceneBackgroundColor && activeSceneRendererOptions?.backgroundColor)
+        uniforms.sceneBackgroundColor.value.fromArray(activeSceneRendererOptions.backgroundColor);
 
     // Extra uniforms for the legacy pathtracer (material params as uniforms, not GLSL globals).
     if (uniforms.base_weight !== undefined) {

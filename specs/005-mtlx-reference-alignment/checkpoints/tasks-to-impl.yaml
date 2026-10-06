@@ -276,24 +276,103 @@ tasks:
     plan_item: 12
     requirements: [REQ-001, REQ-006, REQ-007]
     evidence: [../t025-t026-lights.md, ../../../src/scene/lightAdapter.js, ../../../tools/mtlx-reference-alignment/light-adapter.test.mjs]
-    validation: passed-6-light-adapter-tests-and-build
+    validation: passed-7-light-adapter-tests-build-and-swiftshader-mode-smokes
     scene_enum_mapping: [quad-0-to-local-3, sphere-1-to-local-4, distant-2-to-directional-1]
     texels_per_light: 6
     zero_light_sentinel: tested
-    GPU_texture_readback: not-run-user-preference
+    GPU_texture_readback: not-run
   T026:
-    status: implemented-runtime-gates-deferred
+    status: implemented-cpu-and-gpu-linear-convergence-fixture-only-per-light-gate-pending
     plan_item: 12
     requirements: [REQ-001, REQ-006, REQ-007]
     evidence: [../t025-t026-lights.md, ../../../glsl/pathtracing/mtlx/pathtracer.glsl, ../../../tools/mtlx-reference-alignment/light-adapter.test.mjs]
-    validation: passed-20-cpu-tests-build-static-bvh-assertion
-    nee_quad_sphere: implemented-not-render-validated
-    visible_emitter_hits: implemented-not-render-validated
-    area_light_mis: implemented-not-convergence-validated
+    validation: passed-21-targeted-cpu-tests-build-and-swiftshader-tests
+    nee_quad_sphere: headless-smoke-passed-skyPower-zero-64spp
+    visible_emitter_hits: exercised-by-headless-smoke
+    area_light_mis: cpu-convergence-passed-gpu-high-spp-pending
     delta_light_mis: continuous-pdf-excluded-static-assertion
-    browser_webgl_tests: not-run-user-preference
-    full_npm_test_after_fixture_update: not-run-user-preference
-blockers: []
+    browser_essl_compile_tests: passed-swiftshader
+    headless_pathtracer_scene_smoke: passed-swiftshader-64spp
+    light_sampling_modes: [nee-64spp, bsdf-64spp, mis-64spp]
+    headless_linearized_rgb_means: [nee-51.18, bsdf-41.34, mis-51.23]
+    cpu_convergence: 100000-samples-each-within-1.5-percent-analytic
+    cpu_mis_variance: lower-than-bsdf-only
+    full_npm_test_after_mode_comparison: passed-101
+    bsdf_gpu_256spp_display_mean: 50.51
+    nee_gpu_64spp_display_mean: 51.18
+    mis_gpu_64spp_display_mean: 51.23
+    high_spp_gpu_linear_energy_convergence: passed-mis-hdr-fixture-16-64-vs-256spp-not-analytic-or-per-mode
+    high_spp_linear_energy_evidence: ../../../artifacts/mtlx-reference-alignment/t031-linear-radiance-quality.json
+    analytic_MIS_convergence: passed-cpu-reference
+  T027:
+    status: completed
+    plan_item: 13
+    requirements: [REQ-001, REQ-004, REQ-005, REQ-006, REQ-007]
+    evidence: [../../../src/scene/rendererAdapter.js, ../../../tools/mtlx-reference-alignment/renderer-adapter.test.mjs, ../t027-t036-validation.md]
+    validation: passed-4-adapter-tests-111-full-tests-build
+    unsupported_options: fail-closed
+    explicit_url_precedence: tested
+  T028:
+    status: incomplete-runtime-transitions
+    plan_item: 13
+    requirements: [REQ-001, REQ-004, REQ-005, REQ-006, REQ-007]
+    evidence: [../../../main.js, ../t027-t036-validation.md]
+    validation: direct-swiftshader-startup-scene-loaded-shaders-compiled-but-samples-zero-app-not-loaded
+  T029:
+    status: implementation-present-validation-open
+    plan_item: 14
+    requirements: [REQ-001, REQ-007, REQ-008]
+    evidence: [../../../src/denoiser/referenceDenoiserAdapter.js, ../../../src/denoiser/reference/README.md, ../../../public/denoiser/tzas/rt_hdr_small.tza, ../t027-t036-validation.md]
+    validation: adapter-tests-and-16spp-swiftshader-cpu-smoke-passed
+    weights_url: same-origin-local
+    weights_sha256: c9171947f2bceb4367725b7a0d5b4e0d663ac44108386af42f1b49e4361952e7
+  T030:
+    status: implementation-present-validation-open
+    plan_item: 14
+    requirements: [REQ-001, REQ-007, REQ-008]
+    evidence: [../../../main.js, ../../../tools/mtlx-reference-alignment/denoiser-adapter.test.mjs, ../t027-t036-validation.md]
+    validation: separate-presentation-texture-and-raw-buffer-preservation-tested
+    browser_lifecycle_gate: open
+  T031:
+    status: hdr-quality-gate-failed
+    plan_item: 15
+    requirements: [REQ-001, REQ-007, REQ-008]
+    evidence: [../t027-t036-validation.md, ../../../artifacts/mtlx-reference-alignment/t031-linear-radiance-quality.json]
+    raw_linear_convergence: passed-for-single-mis-hdr-fixture
+    denoiser_quality: failed-rmse-0.8529-raw-vs-4.7765-denoised
+    next_action: investigate-denoiser-linear-hdr-contract-before-rollout
+  T032:
+    status: runner-implemented-quality-gate-blocked
+    plan_item: 15
+    requirements: [REQ-001, REQ-007, REQ-008]
+    evidence: [../../../launch_render.mjs, ../t027-t036-validation.md]
+    node_syntax: passed
+    denoise_true_false_smokes: passed
+    oidn_option: explicitly-rejected
+  T033:
+    status: not-run-corpus-gate-open
+    plan_item: 16
+    requirements: [REQ-001, REQ-002, REQ-003, REQ-007, REQ-008]
+    evidence: [../t027-t036-validation.md]
+  T034:
+    status: blocked-no-android-device
+    plan_item: 16
+    requirements: [REQ-001, REQ-002, REQ-003, REQ-007, REQ-008]
+    evidence: [../t027-t036-validation.md]
+    adb_devices: none
+  T035:
+    status: blocked-on-T028-T031-T033-T034
+    plan_item: 17
+    requirements: [REQ-001, REQ-002, REQ-003, REQ-007, REQ-008]
+    evidence: [../t027-t036-validation.md]
+    default_backend_changed: false
+  T036:
+    status: documentation-updated-final-rollout-cleanup-open
+    plan_item: 17
+    requirements: [REQ-001, REQ-002, REQ-003, REQ-007, REQ-008]
+    evidence: [../../../README.md, ../t027-t036-validation.md]
+    external_oidn_executable_in_viewer: false
+blockers: [T031-denoiser-HDR-quality, T034-no-Android-device]
 non_blocking_followups:
   - TS-and-asset-provenance-authorization
   - complete-denoiser-bundle-license-notices
@@ -301,7 +380,7 @@ non_blocking_followups:
 resolved_blockers:
   - rt_hdr_small.tza-origin-version-sha256-license
 denoiser_weight_provenance: verified-local-and-published-archive
-next_task: T027
+next_task: T028
 stage_1_status: completed-capture-scope
 stage_2_status: completed
 stage_3_status: completed-CPU-BLAS
@@ -313,4 +392,9 @@ stage_8_status: completed-material-hooks-variant-aware
 stage_9_status: completed-pure-scene-parser
 stage_10_status: completed-scene-url-resource-loading
 stage_11_status: completed-camera-and-primary-ray-cpu-validation
-stage_12_status: implemented-lights-runtime-gates-deferred
+stage_12_status: cpu-analytic-and-mis-hdr-linear-convergence-passed-fixture-only-per-light-gate-pending
+stage_13_status: T027-complete-T028-runtime-transitions-open
+stage_14_status: denoiser-integration-present-quality-and-lifecycle-gates-open
+stage_15_status: denoiser-HDR-quality-failed-runner-smokes-passed
+stage_16_status: corpus-not-run-Android-blocked
+stage_17_status: default-backend-withheld-documentation-updated

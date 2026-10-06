@@ -23,8 +23,7 @@
  *   --mtlx=file.mtlx       Charge les paramètres matériau depuis un fichier MaterialX OpenPBR
  *   --contract_url=/mtlx/material-contract.json  Contrat de fonctions générées par matériau
  *   --strict_generated_contract=true|false       Active l'echec strict sans fallback legacy (defaut: true)
- *   --denoise=true|false    Débruitage OIDN après capture (défaut: false)
- *   --oidn=path             Chemin vers oidnDenoise.exe (défaut: oidnDenoise dans PATH)
+ *   --denoise=true|false    Débruitage HDR local dans le navigateur (défaut: true pour Pathtracer MTLX)
  *   --dump-glsl=dir         Exporte les sources GLSL envoyées à WebGL et le dispatch MTLX généré
  *   --report=file.json     Exporte l'etat observe du viewer et les erreurs navigateur
  *
@@ -35,6 +34,7 @@
  *   --gpu=true|false              false = rendu logiciel SwiftShader (défaut: true)
  *   --scene=shader-ball|standard-shader-ball|glavenus|terrain|bearded-man
  *   --scene_url=/scenes/example.scene   Charge une scene .scene locale
+ *   --linear_radiance_capture=true     Ajoute les stats RGBA32F avant présentation
  *   --smooth_normals=true|false   Lissage des normales (défaut: true)
  *   --bounces=N                   Nombre de rebonds (défaut: 6)
  *   --max_samples=N               Samples max avant arrêt (défaut: 512)
@@ -66,10 +66,9 @@
 
 import { chromium }    from 'playwright-core';
 import { spawn, execSync } from 'child_process';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, unlinkSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { basename, dirname, isAbsolute, join, resolve } from 'path';
 import { setTimeout as sleep } from 'timers/promises';
-import sharp from 'sharp';
 
 function killProcessTree(proc) {
     if (!proc) return;
@@ -191,11 +190,13 @@ const MODE_ALIASES = {
 };
 const rawMode       = options.mode ?? 'Rasterizer MTLX';
 const mode          = MODE_ALIASES[rawMode.toLowerCase()] ?? rawMode;
+if (options.oidn !== undefined) throw new Error('--oidn was removed; denoising runs locally in the browser');
+const denoiseEnabled = options.denoise === undefined ? mode === 'Pathtracer MTLX' : options.denoise !== 'false';
+const linearRadianceOutput = options['linear-radiance-output'] ? resolve(options['linear-radiance-output']) : null;
+if (linearRadianceOutput) options.linear_radiance_capture = 'true';
 const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').map(Number);
 
 const mtlxPath      = options.mtlx    ?? null;
-const denoiseEnabled = (options.denoise ?? 'true') !== 'false';
-const oidnPath       = options.oidn    ?? 'D:\\oidn-2.5.0\\bin\\oidnDenoise.exe';
 const DEFAULT_ENV_MAP = 'D:\\WebGL2\\MaterialX\\MaterialX-rva\\resources\\Lights\\san_giuseppe_bridge.hdr';
 const DEFAULT_ENV_IRRADIANCE = 'D:\\WebGL2\\MaterialX\\MaterialX-rva\\resources\\Lights\\irradiance\\san_giuseppe_bridge.hdr';
 const envMapInput = options.envmap ?? options.env_map_path ?? DEFAULT_ENV_MAP;
@@ -205,7 +206,7 @@ delete options.browser; delete options['launch-timeout-ms'];
 delete options['start-server']; delete options.screenshot; delete options.output;
 delete options['wait-samples']; delete options['spp']; delete options.mode; delete options.size;
 delete options['dump-glsl'];
-delete options.report;
+delete options.report; delete options['linear-radiance-output'];
 delete options.mtlx; delete options.denoise; delete options.oidn;
 delete options.envmap; delete options.env_map_path; delete options.env_irradiance_path;
 
@@ -578,11 +579,46 @@ if (isPathtracing && waitSamples > 0) {
 try {
   if (waitSamples > 0) {
     await sleep(500); // let GPU compositor finish before screenshot
+    let linearRadiance = null;
+    if (options.linear_radiance_capture === 'true' || options.linear_radiance_capture === '1') {
+        linearRadiance = await page.evaluate(() => window.__openpbrReadLinearRadiance?.() ?? null);
+        if (!linearRadiance) throw new Error('LINEAR_RADIANCE_CAPTURE_UNAVAILABLE: hook did not return target data');
+        if (linearRadiance.nonFiniteComponents !== 0 || linearRadiance.finitePixels !== linearRadiance.width * linearRadiance.height)
+            throw new Error(`LINEAR_RADIANCE_NONFINITE: ${linearRadiance.nonFiniteComponents} nonfinite component(s)`);
+        console.log(`Linear radiance ${linearRadiance.width}x${linearRadiance.height} @ ${linearRadiance.samples} spp: mean=${linearRadiance.meanRGB.join(',')}, >1=${linearRadiance.aboveOneComponents}`);
+    }
     await hideUiForScreenshot();
+    let rawScreenshotPath = null;
+    if (denoiseEnabled) {
+        if (mode !== 'Pathtracer MTLX') throw new Error('--denoise=true requires Pathtracer MTLX');
+        rawScreenshotPath = screenshotPath.replace(/\.png$/i,'_raw.png');
+        await page.screenshot({ path:rawScreenshotPath,fullPage:false,timeout:60_000 });
+        console.log(`Image brute enregistrée : ${rawScreenshotPath}`);
+        const denoiseResult = await page.evaluate(async () => {
+            if (typeof window.__openpbrDenoiseCurrent !== 'function')
+                throw new Error('DENOISER_API_UNAVAILABLE');
+            const result = await window.__openpbrDenoiseCurrent();
+            if (result?.status !== 'ready') throw new Error(window.__openpbrDenoiserState?.error || 'DENOISER_NOT_READY');
+            window.__openpbrSetDenoisedVisible(true);
+            return result;
+        });
+        console.log(`Denoiser local prêt: ${denoiseResult.width}x${denoiseResult.height} @ ${denoiseResult.samples} spp`);
+    }
+    if (linearRadianceOutput) {
+        const linearCapture = await page.evaluate(() => {
+            if (typeof window.__openpbrReadLinearRadiance !== 'function') throw new Error('LINEAR_RADIANCE_CAPTURE_UNAVAILABLE');
+            const raw = window.__openpbrReadLinearRadiance({ includePixels:true });
+            const denoised = window.__openpbrReadDenoisedRadiance?.() ?? null;
+            return { ...raw,rgba:Array.from(raw.rgba),denoised:denoised ? Array.from(denoised) : null };
+        });
+        mkdirSync(dirname(linearRadianceOutput),{recursive:true});
+        writeFileSync(linearRadianceOutput,`${JSON.stringify(linearCapture)}\n`,'utf8');
+        console.log(`Radiance linéaire exportée : ${linearRadianceOutput}`);
+    }
     await page.screenshot({ path: screenshotPath, fullPage: false, timeout: 60_000 });
     console.log(`Image enregistrée : ${screenshotPath}`);
     if (reportPath) {
-        const observed = await page.evaluate(() => ({
+        const observed = await page.evaluate((linearRadiance) => ({
             ready: window.__openpbrReady === true,
             samples: window.__openpbrSamples ?? 0,
             shaderError: window.__openpbrShaderError ?? null,
@@ -591,64 +627,18 @@ try {
             dispatchBytes: (window.__openpbrMtlxDispatch ?? '').length,
             bvhBackend: window.__openpbrBvhBackend ?? null,
             scene: window.__openpbrScene ?? null,
+            linearRadiance,
+            denoiser: window.__openpbrDenoiserState ?? null,
             uniforms: window.__openpbrUniformSnapshots ?? {},
-        }));
+        }),linearRadiance);
         mkdirSync(dirname(reportPath), { recursive: true });
         writeFileSync(reportPath, `${JSON.stringify({
             version: 1, url, requestedMode: mode, requestedSamples: waitSamples,
             requestedSize: [renderW, renderH], useGpu, denoiseEnabled,
-            screenshotPath, observed, browserErrors,
+            screenshotPath,rawScreenshotPath,observed,browserErrors,
         }, null, 2)}\n`, 'utf8');
     }
 
-    if (denoiseEnabled) {
-        const pfmIn  = screenshotPath.replace(/\.png$/i, '_oidn_in.pfm');
-        const pfmOut = screenshotPath.replace(/\.png$/i, '_oidn_out.pfm');
-        console.log('Débruitage OIDN...');
-        try {
-            // OIDN 2.x accepte PFM (float32, rows bottom-to-top, little-endian avec scale -1.0)
-            const { data, info } = await sharp(screenshotPath).removeAlpha().raw().toBuffer({ resolveWithObject: true });
-            const { width, height } = info;
-            const floatBuf = Buffer.allocUnsafe(width * height * 3 * 4);
-            for (let row = 0; row < height; row++) {
-                const dstRow = height - 1 - row; // PFM: bottom-to-top
-                for (let col = 0; col < width; col++) {
-                    const s = (row * width + col) * 3;
-                    const d = (dstRow * width + col) * 3 * 4;
-                    floatBuf.writeFloatLE(data[s]   / 255, d);
-                    floatBuf.writeFloatLE(data[s+1] / 255, d + 4);
-                    floatBuf.writeFloatLE(data[s+2] / 255, d + 8);
-                }
-            }
-            writeFileSync(pfmIn, Buffer.concat([
-                Buffer.from(`PF\n${width} ${height}\n-1.0\n`, 'ascii'), floatBuf
-            ]));
-            execSync(`"${oidnPath}" --ldr "${pfmIn}" -o "${pfmOut}"`, { stdio: 'pipe' });
-            // PFM → PNG (rows bottom-to-top → flip back, float32 → uint8)
-            const pfmBuf = readFileSync(pfmOut);
-            let pos = 0, nl = 0;
-            while (nl < 3) if (pfmBuf[pos++] === 0x0A) nl++;
-            const [outW, outH] = pfmBuf.slice(pfmBuf.indexOf(0x0A) + 1).toString('ascii', 0, 30).trim().split(/\s+/).map(Number);
-            const rgbOut = Buffer.allocUnsafe(outW * outH * 3);
-            for (let row = 0; row < outH; row++) {
-                const srcRow = outH - 1 - row;
-                for (let col = 0; col < outW; col++) {
-                    const s = pos + (srcRow * outW + col) * 3 * 4;
-                    const d = (row * outW + col) * 3;
-                    rgbOut[d]   = Math.min(255, Math.max(0, Math.round(pfmBuf.readFloatLE(s)     * 255)));
-                    rgbOut[d+1] = Math.min(255, Math.max(0, Math.round(pfmBuf.readFloatLE(s + 4) * 255)));
-                    rgbOut[d+2] = Math.min(255, Math.max(0, Math.round(pfmBuf.readFloatLE(s + 8) * 255)));
-                }
-            }
-            await sharp(rgbOut, { raw: { width: outW, height: outH, channels: 3 } }).png().toFile(screenshotPath);
-            unlinkSync(pfmIn); unlinkSync(pfmOut);
-            console.log('Débruitage terminé.');
-        } catch (e) {
-            console.warn('OIDN échoué :', e.message.trim());
-            try { unlinkSync(pfmIn); } catch {}
-            try { unlinkSync(pfmOut); } catch {}
-        }
-    }
   } else {
     console.log('spp=0 : aucune capture générée (mode aperçu).');
   }
