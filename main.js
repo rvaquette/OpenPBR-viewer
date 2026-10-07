@@ -116,6 +116,41 @@ function assignBvhUniforms(uniforms, prefix, bvh)
     uniforms[prefix].value.updateFrom(bvh);
 }
 
+function disposeMaterialGpuResources(materials)
+{
+    const disposed = new Set();
+    for (const material of materials) {
+        for (const [name,uniform] of Object.entries(material?.uniforms || {})) {
+            const bvh = uniform?.value;
+            if (!bvh?.index || !bvh?.position || !bvh?.bvhBounds || !bvh?.bvhContents ||
+                typeof bvh.dispose !== 'function') {
+                if (!['geomN_surface','geomT_surface','geomS_surface'].includes(name) ||
+                    !bvh?.isTexture || typeof bvh.dispose !== 'function' || disposed.has(bvh)) continue;
+            }
+            if (disposed.has(bvh)) continue;
+            bvh.dispose();
+            disposed.add(bvh);
+        }
+    }
+}
+
+function disposeRouteGpuResources()
+{
+    pathtracedQuad?.dispose();
+    pathtracedQuad = null;
+    if (pathtracedFinalQuad) {
+        pathtracedFinalQuad.dispose();
+        pathtracedFinalQuad.material.dispose();
+        pathtracedFinalQuad = null;
+    }
+    pathtracingRenderTarget?.dispose();
+    pathtracingRenderTarget = null;
+    directionalLight?.shadow?.map?.dispose();
+    if (directionalLight?.shadow) directionalLight.shadow.map = null;
+    directionalLight = null;
+    ambientLight = null;
+}
+
 // Rewrites the sampler-based route GLSL into the three-mesh-bvh interface
 // (one `BVH` struct uniform + shaderStructs/shaderIntersectFunction).
 // The bvhIntersectFirstHitWithinDistance(...) call site is identical text in every
@@ -2798,6 +2833,7 @@ var LOADED;
 var COMPILING;
 var FULLSCREEN_BVH_ROUTE;
 var samples = 0;
+var sampleResetRevision = 0;
 const PATH_TRACER_TILE_SIZE = 64;
 const PATH_TRACER_INTERACTIVE_SCALE = 0.25;
 const PATH_TRACER_CAMERA_SETTLE_MS = 200;
@@ -3160,6 +3196,9 @@ function createMtlxRouteFragmentShader()
 function create_materials()
 {
     renderer.outputColorSpace = SRGBColorSpace;
+
+    disposeRouteGpuResources();
+    disposeMaterialGpuResources([openpbrMaterial,neutralMaterial,pathtracedMaterial]);
 
     if (mtlxRouteLightsTexture) {
         mtlxRouteLightsTexture.dispose();
@@ -4758,7 +4797,11 @@ if (typeof window !== 'undefined' && new URLSearchParams(window.location.search)
     window.__openpbrReadDenoisedRadiance = () => denoisedPresentationTexture?.image?.data?.slice() || null;
 }
 
-window.__openpbrGetRendererState = () => ({ mode:params.renderer_mode,loaded:LOADED,compiling:COMPILING,samples });
+window.__openpbrGetRendererState = () => ({ mode:params.renderer_mode,loaded:LOADED,compiling:COMPILING,
+    samples,sampleResetRevision,sceneLoadRevision:referenceSceneLoadRevision,
+    resources:renderer ? { geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,
+        programs:renderer.info.programs?.length ?? null } : null,
+    pathTargetSize:pathtracingRenderTarget ? [pathtracingRenderTarget.width,pathtracingRenderTarget.height] : null });
 
 function updateDenoiserPresentation()
 {
@@ -4907,6 +4950,7 @@ function resetSamples()
 {
     invalidateDenoiserResult();
     samples = 0;
+    sampleResetRevision++;
     pathtracerTileIndex = 0;
 }
     invalidateDenoiserResult();

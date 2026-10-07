@@ -37,4 +37,5 @@ application is also left for later tasks.
   browser smoke for this milestone.
 
 T023/T024 camera and depth-of-field behavior, T025/T026 light parsing/shading,
-and T027/T028 renderer-option/lifecycle behavior remain unstarted.
+T027 renderer-option mapping and the T028 route-transition/resize smoke are complete;
+broader material/light/error-recovery lifecycle cases remain outside that smoke.

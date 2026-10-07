@@ -309,37 +309,60 @@ tasks:
     plan_item: 13
     requirements: [REQ-001, REQ-004, REQ-005, REQ-006, REQ-007]
     evidence: [../../../src/scene/rendererAdapter.js, ../../../tools/mtlx-reference-alignment/renderer-adapter.test.mjs, ../t027-t036-validation.md]
-    validation: passed-4-adapter-tests-111-full-tests-build
+    validation: passed-4-adapter-tests-112-full-tests-build
     unsupported_options: fail-closed
     explicit_url_precedence: tested
   T028:
-    status: incomplete-runtime-transitions
+    status: completed-route-transitions-resize-and-resource-cleanup
     plan_item: 13
     requirements: [REQ-001, REQ-004, REQ-005, REQ-006, REQ-007]
-    evidence: [../../../main.js, ../t027-t036-validation.md]
-    validation: direct-swiftshader-startup-scene-loaded-shaders-compiled-but-samples-zero-app-not-loaded
+    evidence: [../../../main.js, ../../../tools/mtlx-reference-alignment/lifecycle-smoke.mjs, ../../../artifacts/mtlx-reference-alignment/t028-lifecycle-smoke.json, ../t027-t036-validation.md]
+    validation: passed-swiftshader-A-B-A-resize-no-browser-errors-or-context-loss
+    scene_load_revisions: [1, 2, 3]
+    sample_reset_revisions: [3, 6, 9, 10]
+    stable_renderer_resources: { geometries: 1, textures: 11, programs: 4 }
+    final_path_target: [128, 80]
+    coverage_scope: [renderer-route-transition, resize]
+    not_covered: [material-change, light-change, error-recovery, Adreno]
   T029:
-    status: implementation-present-validation-open
+    status: completed-local-package-and-float32-runtime-smoke
     plan_item: 14
     requirements: [REQ-001, REQ-007, REQ-008]
-    evidence: [../../../src/denoiser/referenceDenoiserAdapter.js, ../../../src/denoiser/reference/README.md, ../../../public/denoiser/tzas/rt_hdr_small.tza, ../t027-t036-validation.md]
-    validation: adapter-tests-and-16spp-swiftshader-cpu-smoke-passed
+    evidence: [../../../src/denoiser/referenceDenoiserAdapter.js, ../../../src/denoiser/reference/README.md, ../../../public/denoiser/tzas/rt_hdr_small.tza, ../../../tools/mtlx-reference-alignment/denoiser-runtime-smoke.mjs, ../../../artifacts/mtlx-reference-alignment/t029-denoiser-runtime.json, ../t027-t036-validation.md]
+    validation: passed-known-float32-buffer-real-model-and-local-weight-fetch
     weights_url: same-origin-local
     weights_sha256: c9171947f2bceb4367725b7a0d5b4e0d663ac44108386af42f1b49e4361952e7
+    runtime_backend: cpu-under-chrome-swiftshader
+    input_shape: [64, 64, 4]
+    input_components_above_one: 5440
+    input_zero_components: 128
+    input_fractional_components: 9984
+    output_finite_components: 16384
+    local_weight_http_status: 200
+    cross_origin_requests: 0
+    browser_errors: 0
   T030:
-    status: implementation-present-validation-open
+    status: completed-raw-preservation-toggle-dimensions-and-camera-invalidation
     plan_item: 14
     requirements: [REQ-001, REQ-007, REQ-008]
-    evidence: [../../../main.js, ../../../tools/mtlx-reference-alignment/denoiser-adapter.test.mjs, ../t027-t036-validation.md]
-    validation: separate-presentation-texture-and-raw-buffer-preservation-tested
-    browser_lifecycle_gate: open
+    evidence: [../../../main.js, ../../../tools/mtlx-reference-alignment/denoiser-adapter.test.mjs, ../../../tools/mtlx-reference-alignment/denoiser-integration-smoke.mjs, ../../../artifacts/mtlx-reference-alignment/t030-denoiser-integration.json, ../t027-t036-validation.md]
+    validation: passed-browser-raw-hash-toggle-dimensions-finiteness-and-camera-invalidation
+    raw_hash_before_after: identical
+    output_shape: [64, 64, 4]
+    output_finite_components: 16384
+    presentation: denoised-toggle-and-raw-restore-passed
+    camera_invalidation: denoised-output-cleared
+    hdr_quality: evaluated-separately-by-T031
   T031:
-    status: hdr-quality-gate-failed
+    status: quality-test-implementation-complete-hdr-gate-failed
     plan_item: 15
     requirements: [REQ-001, REQ-007, REQ-008]
-    evidence: [../t027-t036-validation.md, ../../../artifacts/mtlx-reference-alignment/t031-linear-radiance-quality.json]
+    evidence: [../t027-t036-validation.md, ../../../tools/mtlx-reference-alignment/denoiser-quality-summary.mjs, ../../../tools/mtlx-reference-alignment/denoiser-quality-sweep.mjs, ../../../artifacts/mtlx-reference-alignment/t031-quality-summary.json, ../../../artifacts/mtlx-reference-alignment/t031-linear-radiance-quality.json]
     raw_linear_convergence: passed-for-single-mis-hdr-fixture
-    denoiser_quality: failed-rmse-0.8529-raw-vs-4.7765-denoised
+    fixtures: [hdr-quad, brick-texture-normal, emissive-marble, soapbubble-transmission-film]
+    denoiser_quality: failed-three-of-four-one-textured-fixture-improved
+    exposure_sweep: no-scale-in-[1,0.5,0.25,0.125,0.0625]-beats-raw
+    presentation_ground: quad50-and-ACES-for-material-fixtures-HDR-stress-kept-at-500
     next_action: investigate-denoiser-linear-hdr-contract-before-rollout
   T032:
     status: runner-implemented-quality-gate-blocked
@@ -361,7 +384,7 @@ tasks:
     evidence: [../t027-t036-validation.md]
     adb_devices: none
   T035:
-    status: blocked-on-T028-T031-T033-T034
+    status: blocked-on-T031-T033-T034
     plan_item: 17
     requirements: [REQ-001, REQ-002, REQ-003, REQ-007, REQ-008]
     evidence: [../t027-t036-validation.md]
@@ -380,7 +403,7 @@ non_blocking_followups:
 resolved_blockers:
   - rt_hdr_small.tza-origin-version-sha256-license
 denoiser_weight_provenance: verified-local-and-published-archive
-next_task: T028
+next_task: T032
 stage_1_status: completed-capture-scope
 stage_2_status: completed
 stage_3_status: completed-CPU-BLAS
@@ -393,8 +416,8 @@ stage_9_status: completed-pure-scene-parser
 stage_10_status: completed-scene-url-resource-loading
 stage_11_status: completed-camera-and-primary-ray-cpu-validation
 stage_12_status: cpu-analytic-and-mis-hdr-linear-convergence-passed-fixture-only-per-light-gate-pending
-stage_13_status: T027-complete-T028-runtime-transitions-open
-stage_14_status: denoiser-integration-present-quality-and-lifecycle-gates-open
-stage_15_status: denoiser-HDR-quality-failed-runner-smokes-passed
+stage_13_status: T027-T028-complete
+stage_14_status: T029-T030-complete
+stage_15_status: T031-quality-tests-complete-denoiser-HDR-gate-failed-T032-rollout-blocked
 stage_16_status: corpus-not-run-Android-blocked
 stage_17_status: default-backend-withheld-documentation-updated

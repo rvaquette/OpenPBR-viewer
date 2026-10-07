@@ -113,18 +113,20 @@ function sceneBlockMatrix(descriptor) {
     return matrix;
 }
 
-function disposeObjectTree(root) {
+function disposeObjectTree(root, additionalMaterials = []) {
     const geometries = new Set();
     const materials = new Set();
     const textures = new Set();
+    const addMaterial = (material) => {
+        if (!material) return;
+        materials.add(material);
+        for (const value of Object.values(material)) if (value?.isTexture) textures.add(value);
+    };
     root?.traverse?.((object) => {
         if (object.geometry) geometries.add(object.geometry);
-        for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
-            if (!material) continue;
-            materials.add(material);
-            for (const value of Object.values(material)) if (value?.isTexture) textures.add(value);
-        }
+        for (const material of Array.isArray(object.material) ? object.material : [object.material]) addMaterial(material);
     });
+    for (const material of additionalMaterials) addMaterial(material);
     for (const geometry of geometries) geometry.dispose();
     for (const material of materials) material.dispose();
     for (const texture of textures) texture.dispose();
@@ -132,7 +134,7 @@ function disposeObjectTree(root) {
 
 export function disposeReferenceSceneResources(resources) {
     if (!resources) return;
-    disposeObjectTree(resources.objectScene);
+    disposeObjectTree(resources.objectScene,resources.sourceMaterials);
     resources.geometry?.dispose?.();
     resources.groundTexture?.dispose?.();
     const textures = new Set();
@@ -205,9 +207,16 @@ export async function loadReferenceSceneResources(prepared, { loadGltf = (url) =
         if (signal?.aborted || !isCurrent()) sceneError('SCENE_LOAD_SUPERSEDED', prepared.sceneUrl);
 
         const objectScene = new Group();
+        const sourceMaterials = new Set();
+        for (const { group } of loaded) {
+            group.traverse((object) => {
+                for (const material of Array.isArray(object.material) ? object.material : [object.material])
+                    if (material) sourceMaterials.add(material);
+            });
+        }
         for (const { group } of loaded) objectScene.add(group);
         return { objectScene, geometry:mergedGeometry, environment:environmentResults[0],
-            irradiance:environmentResults[1], warnings:prepared.warnings };
+            irradiance:environmentResults[1], sourceMaterials, warnings:prepared.warnings };
     } catch (error) {
         for (const root of loadedScenes) disposeObjectTree(root);
         for (const environment of environmentResults) {

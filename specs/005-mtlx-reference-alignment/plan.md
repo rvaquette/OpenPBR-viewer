@@ -256,18 +256,22 @@ Texture readback et controles par lumiere restent a executer.
 
 ### 13. Options et cycle de vie [REQ-001, REQ-004, REQ-005, REQ-006, REQ-007]
 - [X] T027 [Plan:13] Mapper renderer resolution/maxdepth/maxspp/volume/clamp/envmap/affichage dans main.js ; autres options rejetees/documentees.
-- [ ] T028 [Plan:13] Verifier ressources/invalidation shaders/accumulation aux transitions.
+- [X] T028 [Plan:13] Verifier ressources/invalidation shaders/accumulation aux transitions.
 Controle : A -> B -> A, scene/materiau/camera/lumiere/instance, resize, R raster ->
 pathtracer, erreur puis reprise. Uniforms avant warm-up, samplers cube/2D distincts.
 Mode incompatible .scene en refus explicite. Passage : pas d'etat perime, fuite
-croissante ou accumulation melangee ; readiness fiable.
+croissante ou accumulation melangee ; readiness fiable. A -> B -> A et resize
+passes sous SwiftShader ; revisions scene/sample progressent, readiness et 2 spp
+retrouves a chaque etape, compteurs geometries/textures/programmes stables, aucune
+erreur navigateur ni perte de contexte. Les transitions scene/materiau/lumiere,
+reprise apres erreur et appareil Adreno restent hors de cette recette T028.
 
 ### 14. Reprendre et brancher le denoiser navigateur [REQ-001, REQ-007, REQ-008]
 Inclut le volet de baseline HDR/denoiser reporte de T004 sur decision utilisateur
 du 2026-10-05 : sauvegarder les memes buffers bruts a faible SPP et la reference
 locale a fort SPP avant d'evaluer les sorties du denoiser distant hors pipeline MTLX.
-- [ ] T029 [Plan:14] Reprendre bundle/poids/notices dans src/denoiser/reference/ et public/denoiser/ ; creer src/denoiser/referenceDenoiserAdapter.js. [Source: D:/WebGL2/GLSL-PathTracer-JS/src/external/denoiser/denoiser.js]
-- [ ] T030 [Plan:14] Relier image accumulee, controle GUI et sortie de presentation dans main.js, sans modifier le buffer d'accumulation. [Source: D:/WebGL2/GLSL-PathTracer-JS/src/core/pathtracer/pathtracerRenderer.ts]
+- [X] T029 [Plan:14] Reprendre bundle/poids/notices dans src/denoiser/reference/ et public/denoiser/ ; creer src/denoiser/referenceDenoiserAdapter.js. [Source: D:/WebGL2/GLSL-PathTracer-JS/src/external/denoiser/denoiser.js]
+- [X] T030 [Plan:14] Relier image accumulee, controle GUI et sortie de presentation dans main.js, sans modifier le buffer d'accumulation. [Source: D:/WebGL2/GLSL-PathTracer-JS/src/core/pathtracer/pathtracerRenderer.ts]
 Deux sous-jalons avec controle obligatoire entre eux :
 1. Initialisation : import Vite/dev/build, modele et poids locaux, readiness et execution
    sur petit buffer Float32Array connu ; zero requete CDN obligatoire, aucun OIDN lance.
@@ -282,7 +286,7 @@ ignorer callbacks perimes, restaurer etat GL Three.js et liberer tensors/texture
 Passage : image brute inchangee avec denoiser off et aucun resultat d'une ancienne scene affiche.
 
 ### 15. Valider le denoiser et remplacer OIDN dans les captures [REQ-001, REQ-007, REQ-008]
-- [ ] T031 [Plan:15] Ajouter tests qualite/cycle de vie du denoiser dans tools/mtlx-reference-alignment/, fixtures et budgets dans artifacts/mtlx-reference-alignment/.
+- [X] T031 [Plan:15] Ajouter tests qualite/cycle de vie du denoiser dans tools/mtlx-reference-alignment/, fixtures et budgets dans artifacts/mtlx-reference-alignment. Validation exécutée ; gate qualité HDR échoué, voir le rapport T031.
 - [ ] T032 [Plan:15] Adapter launch_render.mjs pour --denoise=true via le navigateur : attendre le resultat du SPP cible, capturer puis retirer oidnDenoise.exe, --oidn et conversions PFM. Mettre a jour README.md.
 Deux sous-jalons avec controle obligatoire entre eux :
 1. Qualite : images locales a faible SPP vs reference locale fort SPP, metriques

@@ -86,16 +86,22 @@ try {
         const path = resolve(outputDirectory,`t028-${label}.png`);
         await page.locator('canvas').first().screenshot({ path });
         report.transitions.push({ label,mode:state.mode,samples:state.samples,scene:state.scene,
+            sampleResetRevision:state.sampleResetRevision,
             width:state.radiance?.width ?? state.viewport.width,
             height:state.radiance?.height ?? state.viewport.height,capture:path });
     };
     const transition = async (mode,label) => {
         const before = await readState();
         await page.keyboard.press('r');
-        await page.waitForFunction(({ expectedMode,previousSamples }) => {
-            const state = window.__openpbrGetRendererState?.();
-            return state?.mode === expectedMode && state.samples < previousSamples;
-        },{ expectedMode:mode,previousSamples:before.samples },{ timeout:60_000 });
+        try {
+            await page.waitForFunction(({ expectedMode,previousResetRevision }) => {
+                const state = window.__openpbrGetRendererState?.();
+                return state?.mode === expectedMode && state.sampleResetRevision > previousResetRevision;
+            },{ expectedMode:mode,previousResetRevision:before.sampleResetRevision },{ timeout:60_000 });
+        } catch (error) {
+            report.failedTransition = { requestedMode:mode,before,after:await readState() };
+            throw error;
+        }
         const state = await waitReady(mode,64,64);
         await capture(label,state);
         return state;
@@ -108,14 +114,14 @@ try {
 
     const beforeResize = await readState();
     await page.setViewportSize({ width:80,height:48 });
-    await page.waitForFunction(({ previousSamples }) => {
+    await page.waitForFunction(({ previousResetRevision }) => {
         const state = window.__openpbrGetRendererState?.();
-        if (state?.samples >= previousSamples) return false;
+        if (state?.sampleResetRevision <= previousResetRevision) return false;
         try {
             const radiance = window.__openpbrReadLinearRadiance?.();
             return radiance?.width === 80 && radiance?.height === 48;
         } catch { return false; }
-    },{ previousSamples:beforeResize.samples },{ timeout:60_000 });
+    },{ previousResetRevision:beforeResize.sampleResetRevision },{ timeout:60_000 });
     await capture('A-after-resize',await waitReady('Pathtracer MTLX',80,48));
 
     assert.deepEqual(report.transitions.map(({ mode }) => mode),[

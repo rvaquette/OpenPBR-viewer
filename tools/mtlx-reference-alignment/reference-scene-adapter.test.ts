@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
-import { BufferGeometry, Float32BufferAttribute, BufferAttribute, InterleavedBuffer, InterleavedBufferAttribute } from 'three';
+import { BufferGeometry, Float32BufferAttribute, BufferAttribute, Group, InterleavedBuffer, InterleavedBufferAttribute, Mesh, MeshBasicMaterial, Texture } from 'three';
 import { adaptReferenceGeometry } from '../../src/bvh/referenceSceneAdapter.js';
+import { disposeReferenceSceneResources } from '../../src/scene/referenceSceneAdapter.js';
 
 function makeGeometry(indexed = true) {
     const geometry = new BufferGeometry();
@@ -104,4 +105,20 @@ test('adapter is a browser-compatible bundle without distant loaders or engine',
     }
     const api = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].contents).toString('base64')}`);
     assert.equal(api.adaptReferenceGeometry(makeGeometry()).triangleCount, 2);
+});
+
+test('scene disposal releases source glTF materials/textures after viewer material replacement', () => {
+    const texture = new Texture();
+    let textureDisposed = false;
+    texture.addEventListener('dispose',() => { textureDisposed = true; });
+    const sourceMaterial = new MeshBasicMaterial({ map:texture });
+    const viewerMaterial = new MeshBasicMaterial();
+    const objectScene = new Group();
+    const object = new Mesh(makeGeometry(),sourceMaterial);
+    objectScene.add(object);
+    object.material = viewerMaterial;
+
+    disposeReferenceSceneResources({ objectScene,sourceMaterials:new Set([sourceMaterial]) });
+
+    assert.equal(textureDisposed,true);
 });
