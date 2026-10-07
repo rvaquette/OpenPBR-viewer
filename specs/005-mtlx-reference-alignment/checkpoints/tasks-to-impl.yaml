@@ -373,18 +373,42 @@ tasks:
     denoise_true_false_smokes: passed
     oidn_option: explicitly-rejected
   T033:
-    status: not-run-corpus-gate-open
+    status: completed-local-corpus-raw-and-denoised-smoke
     plan_item: 16
     requirements: [REQ-001, REQ-002, REQ-003, REQ-007, REQ-008]
-    evidence: [../t027-t036-validation.md]
+    evidence: [../t027-t036-validation.md, ../../../tools/mtlx-reference-alignment/run.mjs, ../../../artifacts/mtlx-reference-alignment/t033-local-paired-16spp-64x64/report.json]
+    selected_local_cases: 16
+    capture_variants: [denoise-off, denoise-on]
+    capture_size: [64, 64]
+    spp: 16
+    passing_runs: 32
+    failing_runs: 0
+    bearded_man: { triangles: 801904, meshes: 2, instanced_meshes: 0, heap_raw_bytes: 342053799, heap_denoised_bytes: 359066788 }
+    corpus_instanced_mesh_coverage: none
+    image_quality_gate: tracked-separately-in-T031
+    corpus_report_status: PASS
+    full_npm_test: 114-pass-1-unrelated-pinned-notice-hash-failure
   T034:
-    status: blocked-no-android-device
+    status: blocked-kiwi-chromium-gl-invalid-framebuffer-operation
     plan_item: 16
     requirements: [REQ-001, REQ-002, REQ-003, REQ-007, REQ-008]
-    evidence: [../t027-t036-validation.md]
-    adb_devices: none
+    evidence: [../t027-t036-validation.md, ../../../artifacts/mtlx-reference-alignment/t034-adreno/report.json, ../../../artifacts/mtlx-reference-alignment/t034-adreno/kiwi-chromium-logcat-20261007-163448.txt, ../../../artifacts/mtlx-reference-alignment/t034-adreno/pathtracer-64spp-device.png]
+    device: [SM-F731B, SM8550, Android-16, Adreno-740]
+    browser: [com.kiwibrowser.browser, Chrome-139.0.7339.0]
+    native_viewport: [980, 2059, DPR-2.625]
+    render_target: [256, 256]
+    adreno_64spp_and_denoiser: passed-twice
+    raw_buffer_preserved: true
+    presentation_capture_nonblank: true
+    renderer_transitions_and_resize: passed-twice-without-context-loss
+    page_errors: 0
+    external_requests: 0
+    chromium_live_logcat: captured-during-latest-kiwi-run
+    chromium_GL_errors: repeated-GL_INVALID_FRAMEBUFFER_OPERATION-zero-size-attachments
+    t034_gate: blocked-by-unexplained-live-chromium-GL-errors
+    next_action: diagnose-zero-size-framebuffer-attachments-before-T035
   T035:
-    status: blocked-on-T031-T033-T034
+    status: blocked-on-T031-T034
     plan_item: 17
     requirements: [REQ-001, REQ-002, REQ-003, REQ-007, REQ-008]
     evidence: [../t027-t036-validation.md]
@@ -395,7 +419,7 @@ tasks:
     requirements: [REQ-001, REQ-002, REQ-003, REQ-007, REQ-008]
     evidence: [../../../README.md, ../t027-t036-validation.md]
     external_oidn_executable_in_viewer: false
-blockers: [T031-denoiser-HDR-quality, T034-no-Android-device]
+blockers: [T031-denoiser-HDR-quality, T034-Kiwi-Chromium-zero-size-framebuffer-GL-errors]
 non_blocking_followups:
   - TS-and-asset-provenance-authorization
   - complete-denoiser-bundle-license-notices
@@ -403,7 +427,7 @@ non_blocking_followups:
 resolved_blockers:
   - rt_hdr_small.tza-origin-version-sha256-license
 denoiser_weight_provenance: verified-local-and-published-archive
-next_task: T032
+next_task: T034
 stage_1_status: completed-capture-scope
 stage_2_status: completed
 stage_3_status: completed-CPU-BLAS
@@ -419,5 +443,5 @@ stage_12_status: cpu-analytic-and-mis-hdr-linear-convergence-passed-fixture-only
 stage_13_status: T027-T028-complete
 stage_14_status: T029-T030-complete
 stage_15_status: T031-quality-tests-complete-denoiser-HDR-gate-failed-T032-rollout-blocked
-stage_16_status: corpus-not-run-Android-blocked
+stage_16_status: T033-local-paired-smoke-passed-T034-Android-blocked
 stage_17_status: default-backend-withheld-documentation-updated

@@ -4,7 +4,7 @@ status: cpu-analytic-and-mis-hdr-linear-convergence-passed-fixture-only-per-ligh
 runtime_changes: true
 reference_renderer_executed: false
 evidence: [t025-t026-lights.md, ../../src/scene/lightAdapter.js, ../../main.js, ../../glsl/pathtracing/mtlx/common.glsl, ../../glsl/pathtracing/mtlx/pathtracer.glsl, ../../tools/mtlx-reference-alignment/light-adapter.test.mjs]
-next_task: T032
+next_task: T034
 T025_T026_validation:
   command: npm test
   exit_code: 0
@@ -45,7 +45,7 @@ T025_T026_validation:
   final_full_npm_test: 101-pass-0-fail
 T027_T036_validation:
   report: t027-t036-validation.md
-  full_npm_test: 112-pass-0-fail
+  full_npm_test: 114-pass-1-unrelated-reference-import-notice-hash-failure
   build: passed
   renderer_options_T027: completed
   runtime_transitions_T028: passed-A-B-A-resize-resources-stable-11-textures-zero-errors
@@ -55,8 +55,8 @@ T027_T036_validation:
   quality_exposure_sweep_T031: no-tested-scale-beats-raw
   denoiser_quality_T031: failed-HDR-energy-bias
   runner_T032: smoke-passed-quality-gate-blocked
-  corpus_T033: not-run
-  android_T034: blocked-no-device
+  corpus_T033: passed-16-local-cases-x-raw-and-denoised-32-runs
+  android_T034: blocked-kiwi-chromium-logcat-webgl-framebuffer-zero-size-errors
   default_backend_T035: withheld
   cleanup_docs_T036: documented-final-rollout-open
 T023_T024_validation:

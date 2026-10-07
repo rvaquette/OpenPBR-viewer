@@ -3543,7 +3543,7 @@ function init()
     applySceneToneMapping();
     renderer.setPixelRatio( window.devicePixelRatio );
     renderer.setClearColor( 0x09141a );
-    renderer.setSize( window.innerWidth, window.innerHeight );
+    renderer.setSize( Math.max(1, window.innerWidth), Math.max(1, window.innerHeight) );
     renderer.outputColorSpace = SRGBColorSpace;
     renderer.shadowMap.enabled = true;
     renderer.shadowMapSoft = true;
@@ -3644,7 +3644,7 @@ function init()
 function load_geometry(scene_name)
 {
     setGpuDebugStage('loading-geometry');
-    scene.background = env_map_texture;
+    scene.background = is_pathtracing_route() ? null : env_map_texture;
     env_map_texture.mapping = EquirectangularReflectionMapping ;
     env_map_texture.colorSpace = SRGBColorSpace;
     if (!FULLSCREEN_BVH_ROUTE)
@@ -3920,7 +3920,7 @@ function loadReferenceScene(scene_name)
             const rendererOptions = activeSceneRendererOptions || {};
             scene.background = rendererOptions.backgroundColor
                 ? new Color().setRGB(...rendererOptions.backgroundColor,LinearSRGBColorSpace)
-                : rendererOptions.enablebackground === false ? null : env_map_texture;
+                : rendererOptions.enablebackground === false || is_pathtracing_route() ? null : env_map_texture;
             if (!FULLSCREEN_BVH_ROUTE) {
                 neutralMaterial.envMap = env_map_texture;
                 neutralMaterial.uniforms.envMap.value = env_map_texture;
@@ -4646,11 +4646,14 @@ function trigger_recompile()
     let tmp_cam = new OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
     startCompilationProgress();
 
-    let promises = [renderer.compileAsync(scene, tmp_cam)];
+    let promises = is_pathtracing_route() ? [] : [renderer.compileAsync(scene, tmp_cam)];
 
-    // FullScreenQuad meshes aren't in the scene, so compile them separately
+    // FullScreenQuad meshes aren't in the scene, so compile route-owned quads separately.
     if (FULLSCREEN_BVH_ROUTE && pathtracedQuad) {
         promises.push(renderer.compileAsync(pathtracedQuad._mesh, tmp_cam));
+    }
+    if (is_pathtracing_route() && pathtracedFinalQuad) {
+        promises.push(renderer.compileAsync(pathtracedFinalQuad._mesh, tmp_cam));
     }
 
     // Avertissement progressif si la compilation est longue
@@ -4737,8 +4740,12 @@ function finishCompilationProgress()
 // sizes (square, centered), 'max' fills the window at its native resolution.
 function getRenderDimensions()
 {
-    const W = window.innerWidth, H = window.innerHeight;
-    if (activeSceneRenderResolution) return { w:activeSceneRenderResolution[0],h:activeSceneRenderResolution[1] };
+    const W = Math.max(1, Math.floor(window.innerWidth || 1));
+    const H = Math.max(1, Math.floor(window.innerHeight || 1));
+    if (activeSceneRenderResolution) return {
+        w:Math.max(1, Math.floor(activeSceneRenderResolution[0] || 1)),
+        h:Math.max(1, Math.floor(activeSceneRenderResolution[1] || 1)),
+    };
     if (params.render_size === 'max') return { w: W, h: H };
     const side = params.render_size === '512x512' ? 512 : 256;
     return { w: Math.min(side, W), h: Math.min(side, H) };
@@ -4797,11 +4804,26 @@ if (typeof window !== 'undefined' && new URLSearchParams(window.location.search)
     window.__openpbrReadDenoisedRadiance = () => denoisedPresentationTexture?.image?.data?.slice() || null;
 }
 
-window.__openpbrGetRendererState = () => ({ mode:params.renderer_mode,loaded:LOADED,compiling:COMPILING,
-    samples,sampleResetRevision,sceneLoadRevision:referenceSceneLoadRevision,
-    resources:renderer ? { geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,
-        programs:renderer.info.programs?.length ?? null } : null,
-    pathTargetSize:pathtracingRenderTarget ? [pathtracingRenderTarget.width,pathtracingRenderTarget.height] : null });
+window.__openpbrGetRendererState = () => {
+    const sceneMetrics={meshes:0,instancedMeshes:0,instances:0,triangles:0};
+    scene?.traverse?.((object) => {
+        if (!object.isMesh) return;
+        const geometry=object.geometry;
+        const primitiveCount=(geometry?.index?.count ?? geometry?.attributes?.position?.count ?? 0)/3;
+        const instanceCount=object.isInstancedMesh ? object.count : 1;
+        sceneMetrics.meshes++;
+        if (object.isInstancedMesh) sceneMetrics.instancedMeshes++;
+        sceneMetrics.instances+=instanceCount;
+        sceneMetrics.triangles+=primitiveCount*instanceCount;
+    });
+    return { mode:params.renderer_mode,loaded:LOADED,compiling:COMPILING,samples,sampleResetRevision,
+        sceneLoadRevision:referenceSceneLoadRevision,sceneMetrics,
+        resources:renderer ? { geometries:renderer.info.memory.geometries,textures:renderer.info.memory.textures,
+            programs:renderer.info.programs?.length ?? null } : null,
+        jsHeap:performance.memory ? { used:performance.memory.usedJSHeapSize,total:performance.memory.totalJSHeapSize,
+            limit:performance.memory.jsHeapSizeLimit } : null,
+        pathTargetSize:pathtracingRenderTarget ? [pathtracingRenderTarget.width,pathtracingRenderTarget.height] : null };
+};
 
 function updateDenoiserPresentation()
 {

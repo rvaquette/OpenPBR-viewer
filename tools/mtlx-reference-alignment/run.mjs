@@ -47,11 +47,14 @@ export function validateCorpus(referenceRoot = corpus.defaults.referenceRoot) {
 export function buildCommand(entry, options) {
     const size = options.size ?? corpus.defaults.size;
     const samples = options.samples ?? corpus.defaults.samples[options.profile || 'smoke'];
+    const denoiseEnabled = options.denoise === true;
+    assert.ok(entry.target === 'local' || !denoiseEnabled, 'DENOISER_ROUTE_UNSUPPORTED: denoising requires a local Pathtracer MTLX capture');
     assert.ok(Number.isInteger(samples) && samples > 0);
     assert.ok(size.length === 2 && size.every((value) => Number.isInteger(value) && value > 0));
     assert.ok(Number.isInteger(options.timeoutMs ?? corpus.defaults.timeoutMs) && (options.timeoutMs ?? corpus.defaults.timeoutMs) > 0, 'Invalid timeout');
     assert.ok(Number.isInteger(options.port ?? 5181) && (options.port ?? 5181) > 0 && (options.port ?? 5181) <= 65535, 'Invalid port');
-    const output = resolve(options.output, entry.id);
+    const output = resolve(options.output, entry.id,
+        options.denoisePair ? (denoiseEnabled ? 'denoise-on' : 'denoise-off') : '');
     if (entry.target === 'reference') {
         const referenceRoot = resolve(options.referenceRoot || corpus.defaults.referenceRoot);
         return { cwd: referenceRoot, args: [join(root, 'tools/mtlx-reference-alignment/reference-capture.mjs'), '--reference-root', referenceRoot,
@@ -59,19 +62,31 @@ export function buildCommand(entry, options) {
             '--timeout', String(options.timeoutMs || corpus.defaults.timeoutMs), '--dump-dir', join(output, 'glsl'),
             '--output', join(output, 'image.png'), '--report', join(output, 'viewer.json')], output, samples, size };
     }
-    const args = [join(root, 'launch_render.mjs'), '--mode=Pathtracer MTLX', '--gpu=false', '--denoise=false', '--headless=true',
+    const args = [join(root, 'launch_render.mjs'), '--mode=Pathtracer MTLX', '--gpu=false', `--denoise=${denoiseEnabled}`, '--headless=true',
         `--scene=${entry.scene}`, `--spp=${samples}`, `--max_samples=${samples}`, `--size=${size.join('x')}`, `--render_size=${size.join('x')}`,
         `--port=${options.port || 5181}`, `--start-server=${options.startServer === true}`, '--env_irradiance_path=',
         `--envmap=${corpus.defaults.environment}`, '--env_cdf_sampling=false', '--strict_generated_contract=true',
         `--output=${join(output, 'image.png')}`, `--dump-glsl=${join(output, 'glsl')}`, `--report=${join(output, 'viewer.json')}`];
+    if (denoiseEnabled) args.push('--denoiser_backend=cpu');
     if (entry.material) args.push(`--mtlx_url=/${entry.material}`);
-    return { cwd: root, args, output, samples, size };
+    return { cwd: root, args, output, samples, size, denoiseEnabled };
+}
+
+export function buildCaptureRuns(entries,options) {
+    if(options.denoise==='true')
+        assert.ok(entries.every((entry)=>entry.target==='local'),'Denoiser is unsupported for reference captures');
+    return entries.flatMap((entry)=>{
+        const modes=entry.target==='reference'?[false]
+            :options.denoise==='both'?[false,true]:[options.denoise==='true'];
+        return modes.map((denoiseEnabled)=>({entry,command:buildCommand(entry,{...options,denoise:denoiseEnabled,
+            denoisePair:options.denoise==='both'})}));
+    });
 }
 
 export function verifyObserved(report, command, entry) {
     assert.equal(report.requestedMode, 'Pathtracer MTLX');
     assert.equal(report.useGpu, false);
-    assert.equal(report.denoiseEnabled, false);
+    assert.equal(report.denoiseEnabled, command.denoiseEnabled);
     assert.equal(report.observed.ready, true);
     assert.equal(report.observed.shaderError, null);
     assert.equal(report.observed.contextLoss, null);
@@ -79,6 +94,15 @@ export function verifyObserved(report, command, entry) {
     assert.equal(report.observed.gpu?.app?.scene, entry.scene, 'Wrong actual scene');
     assert.ok(report.observed.samples >= command.samples, 'Insufficient samples');
     assert.ok(report.observed.dispatchBytes > 0, 'Missing local MTLX dispatch');
+    if (command.denoiseEnabled) {
+        const denoiser = report.observed.denoiser;
+        assert.equal(denoiser?.status, 'ready', 'Denoiser did not reach ready state');
+        assert.ok(denoiser.samples >= command.samples, 'Denoiser sample count is stale');
+        assert.deepEqual([denoiser.width,denoiser.height],command.size, 'Denoiser dimensions mismatch');
+        assert.ok(report.rawScreenshotPath, 'Missing raw screenshot path');
+        assert.equal(new URL(denoiser.weightsBaseUrl).origin,new URL(report.url).origin,
+            'Denoiser weights are not same-origin');
+    }
     assert.deepEqual(report.browserErrors, [], 'Browser errors');
 }
 
@@ -141,8 +165,8 @@ export function execute(command, timeoutMs, onLog) {
     });
 }
 
-function parseOptions(argv) {
-    const allowed = new Set(['target', 'case', 'profile', 'samples', 'size', 'output', 'port', 'start-server', 'reference-root', 'timeout-ms', 'validate', 'dry-run']);
+export function parseOptions(argv) {
+    const allowed = new Set(['target', 'case', 'profile', 'samples', 'size', 'output', 'port', 'start-server', 'reference-root', 'timeout-ms', 'validate', 'dry-run', 'denoise']);
     const values = {};
     for (const arg of argv) {
         const match = /^--([a-z-]+)(?:=(.*))?$/.exec(arg);
@@ -150,8 +174,11 @@ function parseOptions(argv) {
         values[match[1]] = match[2] ?? 'true';
     }
     assert.ok(!values.profile || ['smoke', 'baseline'].includes(values.profile));
+    const denoise = values.denoise || 'false';
+    assert.ok(['false','true','both'].includes(denoise),'Invalid denoise mode; use false, true, or both');
     return { values, target: values.target || 'local', ids: values.case ? values.case.split(',') : [],
         profile: values.profile || 'smoke', samples: values.samples ? Number(values.samples) : undefined,
+        denoise,
         size: values.size ? values.size.split('x').map(Number) : undefined,
         output: resolve(root, values.output || `artifacts/mtlx-reference-alignment/${values.profile === 'baseline' ? '01-baseline' : 't003-smoke'}/${Date.now()}`),
         port: values.port ? Number(values.port) : 5181, startServer: values['start-server'] === 'true',
@@ -164,7 +191,7 @@ export async function main(argv = process.argv.slice(2)) {
     const coverage = validateCorpus(options.referenceRoot);
     const entries = selectCases(options.target, options.ids);
     if (options.values.validate === 'true') { console.log(JSON.stringify({ status: 'PASS', coverage }, null, 2)); return; }
-    const commands = entries.map((entry) => ({ entry, command: buildCommand(entry, options) }));
+    const commands = buildCaptureRuns(entries,options);
     if (options.values['dry-run'] === 'true') { console.log(JSON.stringify(commands, null, 2)); return; }
     assert.ok(!existsSync(join(options.output, 'report.json')), 'Output already contains a report; choose a new output directory');
     mkdirSync(options.output, { recursive: true });
@@ -172,13 +199,15 @@ export async function main(argv = process.argv.slice(2)) {
         localRevision: execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
         launcherSha256: hash(join(root, 'launch_render.mjs')),
         referenceRevision: execFileSync('git', ['-C', options.referenceRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
-        corpusSha256: hash(fileURLToPath(new URL('./corpus.json', import.meta.url))), profile: options.profile, coverage,
+        corpusSha256: hash(fileURLToPath(new URL('./corpus.json', import.meta.url))), profile: options.profile,
+        denoise:options.denoise,coverage,
         scope: 'selected-cases-only-not-full-baseline-signoff', results: [], status: 'RUNNING' };
     const reportFile = join(options.output, 'report.json');
     writeFileSync(reportFile, `${JSON.stringify(report, null, 2)}\n`);
     for (const { entry, command } of commands) {
         mkdirSync(command.output, { recursive: true });
-        const result = { id: entry.id, target: entry.target, tags: entry.tags, command: [process.execPath, ...command.args], cwd: command.cwd, status: 'RUNNING' };
+        const result = { id: entry.id,target:entry.target,tags:entry.tags,denoiseEnabled:command.denoiseEnabled,
+            command:[process.execPath,...command.args],cwd:command.cwd,status:'RUNNING' };
         if (entry.material) result.materialSha256 = hash(join(root, 'public', entry.material));
         const started = Date.now();
         report.results.push(result);
@@ -191,6 +220,13 @@ export async function main(argv = process.argv.slice(2)) {
             if (entry.target === 'local') {
                 result.viewer = JSON.parse(readFileSync(join(command.output, 'viewer.json'), 'utf8'));
                 verifyObserved(result.viewer, command, entry);
+                result.measurements = {
+                    captureDurationMs:Date.now()-started,
+                    samples:result.viewer.observed.samples,
+                    rendererResources:result.viewer.observed.rendererState?.resources ?? null,
+                    sceneMetrics:result.viewer.observed.rendererState?.sceneMetrics ?? null,
+                    jsHeap:result.viewer.observed.rendererState?.jsHeap ?? result.viewer.observed.gpu?.device?.jsHeap ?? null,
+                };
             } else {
                 assert.ok(!/\[headless MaterialX\]|MaterialX viewer|MaterialX.*(?:generat|closure)/i.test(execution.stdout), 'Reference MTLX activity detected');
                 result.viewer = JSON.parse(readFileSync(join(command.output, 'viewer.json'), 'utf8'));
@@ -198,7 +234,13 @@ export async function main(argv = process.argv.slice(2)) {
                 assert.equal(result.viewer.observed.reachedTarget, true);
                 result.referenceModeEvidence = 'pinned scene, observed SwiftShader/SPP, no MTLX closure in compiled GLSL';
             }
-            result.image = await inspectImage(join(command.output, 'image.png'), command.size, entry.expectedColor);
+            result.image = await inspectImage(join(command.output,'image.png'),command.size,
+                command.denoiseEnabled ? undefined : entry.expectedColor);
+            if (command.denoiseEnabled) {
+                result.rawScreenshotPath = result.viewer.rawScreenshotPath;
+                assert.ok(existsSync(result.rawScreenshotPath),'Missing raw denoiser screenshot');
+                result.rawImage = await inspectImage(result.rawScreenshotPath,command.size,entry.expectedColor);
+            }
             const glslManifest = join(command.output, 'glsl', 'manifest.json');
             result.glslManifest = existsSync(glslManifest) ? glslManifest : null;
             if (entry.target === 'local') assert.ok(result.glslManifest, 'Missing GLSL dump');

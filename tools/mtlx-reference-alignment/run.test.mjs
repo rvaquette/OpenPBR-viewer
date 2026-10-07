@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import sharp from 'sharp';
-import { buildCommand, corpus, selectCases, validateCorpus, verifyObserved, inspectImage, execute } from './run.mjs';
+import { buildCommand, buildCaptureRuns, corpus, parseOptions, selectCases, validateCorpus, verifyObserved, inspectImage, execute } from './run.mjs';
 import { attachPageLogs, withSampleBudget } from './reference-capture.mjs';
 
 test('corpus resources, approved reference scenes and requested coverage', () => {
@@ -28,6 +28,31 @@ test('local command fixes the pathtracer, software rendering, raw output and loc
     assert.throws(() => buildCommand(entry, { output: 'artifacts/test', samples: 0 }));
     assert.throws(() => buildCommand(entry, { output: 'artifacts/test', timeoutMs: NaN }));
     assert.throws(() => buildCommand(entry, { output: 'artifacts/test', port: 65536 }));
+});
+
+test('local corpus commands can build raw and denoised captures as isolated variants', () => {
+    const entry = selectCases('local', ['open-pbr'])[0];
+    const raw = buildCommand(entry,{output:'artifacts/test',denoise:false,denoisePair:true});
+    const denoised = buildCommand(entry,{output:'artifacts/test',denoise:true,denoisePair:true});
+    assert.ok(raw.args.includes('--denoise=false'));
+    assert.ok(denoised.args.includes('--denoise=true'));
+    assert.ok(denoised.args.includes('--denoiser_backend=cpu'));
+    assert.equal(raw.denoiseEnabled,false);
+    assert.equal(denoised.denoiseEnabled,true);
+    assert.match(raw.output,/open-pbr[\\/]denoise-off$/);
+    assert.match(denoised.output,/open-pbr[\\/]denoise-on$/);
+    assert.throws(()=>buildCommand(selectCases('reference')[0],{output:'artifacts/test',denoise:true}),/DENOISER_ROUTE_UNSUPPORTED/);
+});
+
+test('denoise both expands local corpus cases to isolated raw/denoised runs',()=>{
+    const options=parseOptions(['--target=local','--denoise=both','--output=artifacts/test']);
+    const runs=buildCaptureRuns(selectCases('local',['open-pbr']),options);
+    assert.deepEqual(runs.map(({command})=>command.denoiseEnabled),[false,true]);
+    assert.notEqual(runs[0].command.output,runs[1].command.output);
+    assert.equal(parseOptions(['--denoise=false']).denoise,'false');
+    assert.equal(parseOptions(['--denoise=true']).denoise,'true');
+    assert.throws(()=>parseOptions(['--denoise=maybe']),/Invalid denoise mode/);
+    assert.throws(()=>buildCaptureRuns(selectCases('reference'),{...options,denoise:'true'}),/unsupported for reference/);
 });
 
 test('reference commands never enable MaterialX or hardware GPU', () => {
@@ -56,6 +81,25 @@ test('runtime verdict rejects wrong actual mode, shader failure, context loss, e
         (value) => { value.observed.contextLoss = {}; },
         (value) => { value.browserErrors.push({ message: 'error' }); },
     ]) { const invalid = structuredClone(report); mutate(invalid); assert.throws(() => verifyObserved(invalid, command, entry)); }
+});
+
+test('denoised runtime verdict requires same-origin weights, ready output, exact dimensions and raw capture', () => {
+    const entry=selectCases('local',['open-pbr'])[0];
+    const command=buildCommand(entry,{output:'artifacts/test',denoise:true,size:[64,64]});
+    const report={requestedMode:'Pathtracer MTLX',useGpu:false,denoiseEnabled:true,
+        url:'http://localhost:5181/OpenPBR-viewer/?renderer_mode=Pathtracer%20MTLX',
+        rawScreenshotPath:'artifacts/test/raw.png',browserErrors:[],observed:{ready:true,samples:32,
+            shaderError:null,contextLoss:null,dispatchBytes:100,
+            gpu:{app:{rendererMode:'Pathtracer MTLX',scene:entry.scene}},
+            denoiser:{status:'ready',samples:32,width:64,height:64,
+                weightsBaseUrl:'http://localhost:5181/OpenPBR-viewer/denoiser/tzas'}}};
+    verifyObserved(report,command,entry);
+    for(const mutate of [
+        (value)=>{value.observed.denoiser.status='running';},
+        (value)=>{value.observed.denoiser.width=32;},
+        (value)=>{value.observed.denoiser.weightsBaseUrl='https://cdn.invalid/weights';},
+        (value)=>{value.rawScreenshotPath=null;},
+    ]) { const invalid=structuredClone(report); mutate(invalid); assert.throws(()=>verifyObserved(invalid,command,entry)); }
 });
 
 test('pixel validation rejects blank captures and wrong dimensions', async () => {

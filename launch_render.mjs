@@ -244,22 +244,35 @@ if (startServer) {
         shell: true,
         stdio: ['ignore', 'pipe', 'pipe'],
     });
-    // Attendre que Vite soit prêt
     await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('Vite timeout')), 300000);
-        const onServerOutput = data => {
-            const text = data.toString();
-            if (/Local:|localhost:|127\.0\.0\.1:/i.test(text)) {
-                clearTimeout(timeout);
-                resolve();
-            }
+        let settled = false;
+        let pollTimer;
+        const timeout = setTimeout(() => finish(new Error('Vite timeout')), 300000);
+        const finish = error => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timeout);
+            clearTimeout(pollTimer);
+            error ? reject(error) : resolve();
         };
-        viteProcess.stdout.on('data', onServerOutput);
-        viteProcess.stderr.on('data', onServerOutput);
-        viteProcess.on('error', reject);
-        viteProcess.on('exit', code => {
-            if (code !== 0) reject(new Error(`Vite exited before ready (code ${code})`));
-        });
+        const poll = async () => {
+            if (settled) return;
+            if (viteProcess.exitCode !== null) {
+                finish(new Error(`Vite exited before ready (code ${viteProcess.exitCode})`));
+                return;
+            }
+            try {
+                const response = await fetch(`http://localhost:${port}/OpenPBR-viewer/`);
+                if (response.ok) {
+                    finish();
+                    return;
+                }
+            } catch {}
+            if (!settled) pollTimer = setTimeout(poll, 250);
+        };
+        viteProcess.once('error', finish);
+        viteProcess.once('exit', code => finish(new Error(`Vite exited before ready (code ${code})`)));
+        poll();
     });
     console.log('Serveur Vite prêt.');
     await sleep(500); // Délai supplémentaire pour initialisation complète
@@ -624,6 +637,7 @@ try {
             shaderError: window.__openpbrShaderError ?? null,
             contextLoss: window.__openpbrContextLossReport ?? null,
             gpu: window.__openpbrGpuInfo ?? null,
+            rendererState: window.__openpbrGetRendererState?.() ?? null,
             dispatchBytes: (window.__openpbrMtlxDispatch ?? '').length,
             bvhBackend: window.__openpbrBvhBackend ?? null,
             scene: window.__openpbrScene ?? null,

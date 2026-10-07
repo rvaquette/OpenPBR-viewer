@@ -16,6 +16,41 @@ node tools/mtlx-reference-alignment/run.mjs --dry-run --target=all --profile=bas
 node tools/mtlx-reference-alignment/run.mjs --case=standard-shader-ball --samples=2 --size=64x64 --start-server=true --port=5193
 ```
 
+T033 local paired smoke (raw and denoised variants for every local case):
+
+```powershell
+node tools/mtlx-reference-alignment/run.mjs --target=local --profile=smoke --samples=16 --size=64x64 --denoise=both --start-server=true --port=5201 --output=artifacts/mtlx-reference-alignment/t033-local-paired-16spp-64x64
+```
+
+T034 Android/Adreno smoke (requires an authorized Android device and Chrome remote debugging):
+
+```powershell
+$env:ADB_PATH = 'D:\platform-tools\adb.exe'
+& $env:ADB_PATH devices -l
+npm run build
+node tools/mtlx-reference-alignment/adreno-t034-smoke.mjs
+```
+
+The denoiser runs by default. Set `$env:T034_DENOISE = 'false'` for a diagnostic run without it. The script records device/GPU details, 64 spp, raw-buffer integrity, denoiser status, renderer transitions, resize, browser errors, and direct ADB screen captures under `artifacts/mtlx-reference-alignment/t034-adreno/`.
+
+For Kiwi, find its PID-suffixed DevTools socket, forward it to port 9223, and start a live Chromium logcat in a separate terminal:
+
+```powershell
+& $env:ADB_PATH shell cat /proc/net/unix | Select-String 'chrome_devtools_remote'
+& $env:ADB_PATH forward tcp:9223 localabstract:chrome_devtools_remote_<PID>
+& $env:ADB_PATH -s R5CW900CHQD logcat -T 1 -v time chromium:V '*:S' *> artifacts/mtlx-reference-alignment/t034-adreno/kiwi-chromium-live.txt
+```
+
+While logcat is streaming, run the smoke in another terminal:
+
+```powershell
+$env:T034_CDP_URL = 'http://127.0.0.1:9223'
+$env:T034_EXPECT_PACKAGE = 'com.kiwibrowser.browser'
+node tools/mtlx-reference-alignment/adreno-t034-smoke.mjs
+```
+
+Stop the logcat command with Ctrl+C after the smoke finishes. The logcat tag filter captures Chromium GPU/WebGL diagnostics without dumping unrelated Android app logs.
+
 Apres T003, commandes pour T004 (non executees par la preparation) :
 
 ```powershell

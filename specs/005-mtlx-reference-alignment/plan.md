@@ -302,8 +302,8 @@ Passage : qualite et captures validees avant retrait OIDN, aucune dependance a s
 installation ou a D:/oidn-2.5.0 ; --oidn obsolete rejete clairement, pas ignore silencieusement.
 
 ### 16. Recette et mobile [REQ-001 a REQ-008]
-- [ ] T033 [Plan:16] Executer corpus donnees/rayons/probes/images local, denoiser on/off et mesures bearded-man/instances.
-- [ ] T034 [Plan:16] Recette Android/Adreno via ADB : compilation, 64 SPP, quad/transmission, denoiser on/off, transitions et resize.
+- [X] T033 [Plan:16] Executer corpus donnees/rayons/probes/images local, denoiser on/off et mesures bearded-man/instances. Smoke local 64x64/16 spp : 32/32 PASS ; mesures bearded-man dans le rapport T033. Aucun InstancedMesh n'est present dans les 16 cas.
+- [ ] T034 [Plan:16] Recette Android/Adreno via ADB : compilation, 64 SPP, quad/transmission, denoiser on/off, transitions et resize. BLOCKED: Kiwi Chromium logcat reports `GL_INVALID_FRAMEBUFFER_OPERATION` for zero-size framebuffer attachments; see t027-t036-validation.md.
 Controle : corpus passe, aucune erreur console/GLSL/WebGL/context loss, image non vide,
 budgets jalon 1 respectes ou ecarts acceptes. Device absent = jalon non valide,
 pas assimile a SwiftShader. Passage : preuves auto/manuelles et ecarts source/local acceptes.

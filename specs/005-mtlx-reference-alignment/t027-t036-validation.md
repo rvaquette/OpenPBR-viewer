@@ -41,13 +41,27 @@ Consolidated report: `artifacts/mtlx-reference-alignment/t031-quality-summary.js
 
 The launcher syntax check passes. Headless `--denoise=true` completed at 16 spp and exported raw/denoised output plus linear buffers; `--denoise=false` completed at 64 and 256 spp and exported raw buffers. `--oidn` exits with the explicit obsolete-option error. Full capture rollout remains blocked by the T031 quality failure and corpus coverage.
 
-## T033-T036 Gates
+## T033 Corpus captures and measurements
 
-T033 corpus-wide captures/quality are not complete. T034 is blocked: `D:\platform-tools\adb.exe devices` returned no device, so no Adreno result is claimed. T035 must remain blocked until T031, T033, and T034 gates pass. T036 documentation now records provenance and limitations; external OIDN execution is absent from viewer/runner, but final cleanup remains coupled to the unpassed rollout gates.
+Completed local corpus at 64x64/16 spp with `denoise=both`: 16 local cases ran raw and denoised for 32/32 PASS, with per-case GLSL manifests, viewer reports, images, denoised runs retaining their raw PNGs, durations, renderer resource counts, scene mesh/instance/triangle counts, and JS heap measurements. Root report: `artifacts/mtlx-reference-alignment/t033-local-paired-16spp-64x64/report.json`. Reproduce with the paired-capture command in `tools/mtlx-reference-alignment/README.md`.
+
+`bearded-man` raw/denoised both passed at 16 spp: 801,904 triangles, 2 meshes, 0 `InstancedMesh` objects; final heap was approximately 342 MB raw and 359 MB denoised. This local corpus does not contain a true instanced-mesh case, so no instanced draw-path behavior is claimed. These smoke captures do not replace the 128 spp baseline or T031's quality verdict. The full test command reported 114 passes and one unrelated pinned-source-notice hash mismatch in `reference-import.test.mjs`.
+
+## T034 Android / Adreno
+
+The authorized device `R5CW900CHQD` is a Samsung SM-F731B (SM8550, Android 16); SurfaceFlinger and Kiwi both identify Adreno 740 / OpenGL ES 3.2. The T034 soapbubble transmission fixture uses a quad emitter. Two full Kiwi runs reached 64 spp, completed the local denoiser with the raw Float32 SHA-256 unchanged, transitioned Pathtracer -> Rasterizer -> Pathtracer, and resized without context loss. The latest run used the native Kiwi viewport (980x2059 CSS, DPR 2.625) with a bounded 256x256 render target. Its direct ADB screen capture visibly contains the rendered transmission material: `artifacts/mtlx-reference-alignment/t034-adreno/pathtracer-64spp-device.png`.
+
+T034 remains blocked by live Chromium GPU errors. `adb logcat -T 1 -v time chromium:V *:S` ran concurrently with the latest Kiwi smoke and recorded repeated `GL_INVALID_FRAMEBUFFER_OPERATION` errors: incomplete framebuffer attachment with zero size and incomplete draw framebuffer. They did not appear in Playwright's pageerror/console collections, so the harness's runtime result `passed` does not satisfy T034's no-GL-error gate. The time-stamped log is `artifacts/mtlx-reference-alignment/t034-adreno/kiwi-chromium-logcat-20261007-163448.txt`; stderr is empty. The previous Chrome-specific context-loss and black-capture observations are superseded for Kiwi: they reproduced in Chrome but not in either of the two Kiwi runs. Root cause of the zero-size framebuffer errors remains unknown.
+
+Local SwiftShader visual control used the same fixture, HDR environment/irradiance, quad light, 64 spp, 256x256 accumulation target, and Pathtracer MTLX mode (`--gpu=false`). The raw capture `artifacts/mtlx-reference-alignment/t034-local-swiftshader-256-64spp.png` shows both translucent soapbubble lobes with faint cyan/pink reflections; the opaque ground and dark cast shadows dominate, so the bubbles are subtle rather than absent. Linear mean RGB was `[0.3112, 0.3158, 0.3189]`, with 7,990 components above 1 and no non-finite values. With `denoiser_backend=cpu`, the local denoised output `artifacts/mtlx-reference-alignment/t034-local-swiftshader-256-64spp-denoised.png` has the same visible lobes and softens detail, closely matching Kiwi's denoised screen capture. The initial local attempt without explicit `render_size=256x256` used the fixture's 64x64 target and is not the comparison capture. This single-fixture comparison does not override T031's failed cross-material denoiser quality gate.
+
+The T034 harness accepts `T034_CDP_URL` and `T034_EXPECT_PACKAGE` so Kiwi's PID-suffixed DevTools socket can be targeted without using Chrome's socket. Reproduce the live log capture by forwarding that socket to port 9223, running `adb -s R5CW900CHQD logcat -T 1 -v time chromium:V '*:S'` in one terminal, then running `T034_CDP_URL=http://127.0.0.1:9223` and `T034_EXPECT_PACKAGE=com.kiwibrowser.browser` with `node tools/mtlx-reference-alignment/adreno-t034-smoke.mjs` in another. T035 remains blocked by T031 and T034.
+
+T035 remains blocked by T031 and T034. T036 documents provenance and limitations; external OIDN execution is absent from viewer/runner, but final rollout cleanup remains gated.
 
 ## Global Checks
 
 - `node --check launch_render.mjs`: passed.
-- `npm test`: 112 passed, 0 failed.
+- `npm test`: 114 passed, 1 failed in `reference-import.test.mjs` on a pinned notice hash; unrelated to T033.
 - `npm run build`: passed; Vite CJS API deprecation and large-chunk warnings remain.
 - All browser captures above used Chrome ANGLE/Vulkan SwiftShader with `--gpu=false`.

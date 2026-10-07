@@ -1,0 +1,38 @@
+material default
+{
+    material_type materialx
+    materialx_document ../mtlx-input/open_pbr_soapbubble/open_pbr_soapbubble.mtlx
+}
+camera
+{
+    position 7.5 5 7
+    lookat 0 0 0
+    fov 45
+    aperture 0
+    focaldist 8
+}
+gltf
+{
+    file ../test-material-disney-gold/openpbr_objects.glb
+    object * default
+}
+light
+{
+    type quad
+    position -1 4 -1
+    v1 1 4 -1
+    v2 -1 4 1
+    emission 50 50 50
+}
+renderer
+{
+    resolution 64 64
+    envmapfile none
+    envmapirradiancefile none
+    maxspp 64
+    maxdepth 4
+    fireflyclamp 100000
+    hideemitters true
+    enabletonemap true
+    enableaces true
+}
