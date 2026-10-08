@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BufferGeometry, Float32BufferAttribute, Group, Mesh } from 'three';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { loadReferenceSceneResources, prepareReferenceScene, resolveSceneResourceUrl } from '../../src/scene/referenceSceneAdapter.js';
 import { externalSceneAssetUrl, externalSceneServer, isWithinSceneRoot } from '../../src/scene/externalSceneServer.mjs';
 import { createServer } from 'node:http';
@@ -9,6 +10,33 @@ import { runInNewContext } from 'node:vm';
 import { resolve } from 'node:path';
 
 const sceneUrl = 'https://viewer.test/public/scenes/nested/demo.scene';
+
+test('bundled Disney Gold scene loads three local OBJ meshes and distinct materials without external assets', async () => {
+    const localUrl = 'https://viewer.test/OpenPBR-viewer/test-material-disney-gold/test_material_disney_gold.scene';
+    const root = new URL('../../public/test-material-disney-gold/',import.meta.url);
+    const prepared = await prepareReferenceScene(localUrl,{
+        fetchImpl:async (url) => {
+            assert.equal(url,localUrl);
+            return response(readFileSync(new URL('test_material_disney_gold.scene',root),'utf8'));
+        },
+        createMaterialDocument:async () => '<materialx/>',
+    });
+    const resources = await loadReferenceSceneResources(prepared,{
+        loadObj:async (url) => {
+            const path = new URL(url).pathname.split('/test-material-disney-gold/')[1];
+            assert.ok(path);
+            return new OBJLoader().parse(readFileSync(new URL(path,root),'utf8'));
+        },
+    });
+    assert.equal(resources.objects.length,3);
+    assert.deepEqual(resources.objects.map(({materialName}) => materialName),['gold','gold','ground']);
+    assert.equal(prepared.environmentUrl,null);
+    assert.equal(resources.geometry.attributes.position.count / 3,974);
+    const main = readFileSync(new URL('../../main.js',import.meta.url),'utf8');
+    assert.match(main,/'Disney Gold Test':\s*'test-material-disney-gold'/);
+    assert.match(main,/'test-material-disney-gold':'test-material-disney-gold\/test_material_disney_gold.scene'/);
+    assert.match(main,/if \(LOCAL_REFERENCE_SCENES\[v\]\)[\s\S]*?await loadLocalReferenceScene\(v\)/);
+});
 
 test('launcher render-size alias selects rectangular canvas and render target dimensions', () => {
     const launcher = readFileSync(new URL('../../launch_render.mjs',import.meta.url),'utf8');

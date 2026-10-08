@@ -3067,6 +3067,60 @@ var scene_names = {
     'Bearded Man':          'bearded-man'
 };
 
+const LOCAL_REFERENCE_SCENES = Object.freeze({
+    'test-material-disney-gold':'test-material-disney-gold/test_material_disney_gold.scene',
+});
+
+async function prepareViewerReferenceScene(sceneUrl,search,preserveRenderSize = false)
+{
+    activeReferenceScene = await prepareReferenceScene(sceneUrl,{
+        createMaterialDocument:createSceneMaterialDocument,
+        environmentPath:search.has('env_map_path') ? resolveViewerAssetUrl(params.env_map_path) : undefined,
+        irradiancePath:search.has('env_irradiance_path') ? resolveViewerAssetUrl(params.env_irradiance_path) : undefined,
+        environmentBaseUrl:sceneUrl.includes('/external-scenes/') ? getPublicAssetUrl('external-scenes/') : undefined,
+    });
+    params.scene_url = activeReferenceScene.sceneUrl;
+    params.mtlx_material = activeReferenceScene.materialName;
+    const sceneRenderer = activeReferenceScene.scene.blocks.find((block) => block.type === 'renderer')?.values || {};
+    const explicitRendererOverrides = new Set(preserveRenderSize ? ['render_size'] : []);
+    for (const key of ['bounces','max_volume_steps','firefly_clamp','max_samples','skyPower','render_size'])
+        if (search.has(key)) explicitRendererOverrides.add(key);
+    activeSceneRendererOptions = mapSceneRendererOptions(sceneRenderer,explicitRendererOverrides);
+    activeSceneRenderResolution = activeSceneRendererOptions.resolution || null;
+    for (const key of ['bounces','max_volume_steps','firefly_clamp','max_samples','skyPower'])
+        if (activeSceneRendererOptions[key] !== undefined) params[key] = activeSceneRendererOptions[key];
+    window.__openpbrScene = {url:activeReferenceScene.sceneUrl,status:'prepared',material:activeReferenceScene.materialName};
+}
+
+async function loadLocalReferenceScene(sceneName)
+{
+    const revision = ++referenceSceneLoadRevision;
+    LOADED = false;
+    window.__openpbrReady = false;
+    window.__openpbrShaderError = null;
+    delete window.__openpbrSceneLoadError;
+    setGpuDebugStage('loading-scene');
+    setLoadingProgress('Chargement de la scene...');
+    await prepareViewerReferenceScene(getPublicAssetUrl(LOCAL_REFERENCE_SCENES[sceneName]),
+        new URLSearchParams(window.location.search),true);
+    if (revision !== referenceSceneLoadRevision) return;
+    mtlxRouteReferenceMaterialRegistry = null;
+    sceneMaterialVariants = [];
+    await configureSingleMtlxMaterial('',activeReferenceScene.materialName,activeReferenceScene.materialText);
+    if (revision !== referenceSceneLoadRevision) return;
+    mtlxRouteLights = adaptSceneLights(activeReferenceScene.scene);
+    materialDefines.MAX_MTLX_LIGHTS = Math.max(1,mtlxRouteLights.length);
+    await prepareSceneMaterialVariants();
+    if (revision !== referenceSceneLoadRevision) return;
+    const previousArchiveSource = activeMtlxArchiveSource;
+    activeMtlxArchiveSource = null;
+    activeMtlxArchiveSelection = null;
+    retireMtlxArchiveSource(previousArchiveSource);
+    camera_initialized = false;
+    applySceneToneMapping();
+    loadReferenceScene(sceneName);
+}
+
 function reportReferenceSceneError(error)
 {
     const message = `[scene] ${error?.message || error}`;
@@ -3155,27 +3209,16 @@ initializeLoadingProgress();
         return;
     }
 
+    if (!search.has('scene_url') && LOCAL_REFERENCE_SCENES[params.scene_name]) {
+        params.scene_url = getPublicAssetUrl(LOCAL_REFERENCE_SCENES[params.scene_name]);
+        search.set('scene_url',params.scene_url);
+        if (!search.has('render_size')) search.set('render_size',params.render_size);
+    }
     if (search.has('scene_url')) {
         try {
             if (search.has('mtlx_url')) throw new Error('SCENE_MATERIAL_SOURCE_CONFLICT: use the .scene material block instead of mtlx_url');
             const sceneUrl = resolveViewerAssetUrl(params.scene_url);
-            activeReferenceScene = await prepareReferenceScene(sceneUrl,{
-                createMaterialDocument:createSceneMaterialDocument,
-                environmentPath:search.has('env_map_path') ? resolveViewerAssetUrl(params.env_map_path) : undefined,
-                irradiancePath:search.has('env_irradiance_path') ? resolveViewerAssetUrl(params.env_irradiance_path) : undefined,
-                environmentBaseUrl:sceneUrl.includes('/external-scenes/') ? getPublicAssetUrl('external-scenes/') : undefined,
-            });
-            params.scene_url = activeReferenceScene.sceneUrl;
-            params.mtlx_material = activeReferenceScene.materialName;
-            const sceneRenderer = activeReferenceScene.scene.blocks.find((block) => block.type === 'renderer')?.values || {};
-            const explicitRendererOverrides = new Set();
-            for (const key of ['bounces','max_volume_steps','firefly_clamp','max_samples','skyPower','render_size'])
-                if (search.has(key)) explicitRendererOverrides.add(key);
-            activeSceneRendererOptions = mapSceneRendererOptions(sceneRenderer,explicitRendererOverrides);
-            activeSceneRenderResolution = activeSceneRendererOptions.resolution || null;
-            for (const key of ['bounces','max_volume_steps','firefly_clamp','max_samples','skyPower'])
-                if (activeSceneRendererOptions[key] !== undefined) params[key] = activeSceneRendererOptions[key];
-            window.__openpbrScene = { url:activeReferenceScene.sceneUrl, status:'prepared', material:activeReferenceScene.materialName };
+            await prepareViewerReferenceScene(sceneUrl,search);
         } catch (error) {
             reportReferenceSceneError(error);
             return;
@@ -4711,11 +4754,16 @@ function setup_gui()
         pathtracedMaterial.needsUpdate = true;
         trigger_recompile();
     });
-    renderer_folder.add(params, 'scene_name', scene_names).onChange(                                  v => {
+    renderer_folder.add(params, 'scene_name', scene_names).onChange(                            async v => {
         params.scene_url = '';
         activeReferenceScene = null;
         camera_initialized = false;
         setPaused(true);
+        if (LOCAL_REFERENCE_SCENES[v]) {
+            try { await loadLocalReferenceScene(v); }
+            catch (error) { reportReferenceSceneError(error); }
+            return;
+        }
         load_scene(v);
     });
     renderer_folder.add( params, 'smooth_normals' ).onChange(                                         v => { resetSamples(); });
