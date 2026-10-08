@@ -30,7 +30,7 @@ test('parse supports BOM/CRLF, quoted names, comments, out-of-order references a
     assert.equal(scene.blocks.find((block)=>block.type==='camera').values.focaldist,1);
     assert.equal(scene.blocks.find((block)=>block.type==='camera').values.fov,45);
     assert.ok(scene.blocks[0].warnings.includes('MESH_MATRIX_OVERRIDES_TRS'));
-    assert.ok(scene.warnings.some((warning)=>warning.code==='SCENE_OPTION_NO_RUNTIME_EFFECT'));
+    assert.ok(!scene.warnings.some((warning)=>warning.code==='SCENE_OPTION_NO_RUNTIME_EFFECT'));
     assert.equal(scene.blocks.find((block)=>block.type==='renderer').values.envmapfile,'none');
 });
 
@@ -45,7 +45,7 @@ test('inline MaterialX is opaque to comments/braces and source ambiguity is reje
 
 test('unknown/rejected directives, duplicates, arity, nonfinite values and malformed blocks carry locations', () => {
     sceneError(`camera\n{\n position 0 0 1\n lookat 0 0 0\n mystery 1\n}`,/DIRECTIVE_UNKNOWN.*unknown camera directive/);
-    sceneError(`material bad\n{\n specular 1\n}`,/DIRECTIVE_REJECTED.*explicitly rejected/);
+    sceneError(`material bad\n{\n specular NaN\n}`,/VALUE_INVALID/);
     sceneError(`materialx_generator pathtracer`,/DIRECTIVE_REJECTED.*root directive/);
     sceneError(`camera\n{\n position 0 0 NaN\n lookat 0 0 0\n}`,/VALUE_ARITY_INVALID/);
     sceneError(`renderer\n{\n resolution 640\n}`,/VALUE_ARITY_INVALID/);
@@ -78,7 +78,7 @@ test('references resolve independent of declaration order and object globs rejec
     assert.throws(()=>parseSceneText(`mesh\n{\n file ball.obj\n material Missing\n}`),/REFERENCE_UNKNOWN/);
 });
 
-test('approved distant non-MTLX fixtures parse without executing the distant renderer; Disney specular stays rejected', () => {
+test('approved distant non-MTLX fixtures parse including Disney specular', () => {
     const corpus = JSON.parse(readFileSync(resolve('tools/mtlx-reference-alignment/corpus.json'),'utf8'));
     const referenceRoot = corpus.defaults.referenceRoot;
     for (const filename of ['cornell_box_orig.scene','cornell_box_sphere.scene']) {
@@ -90,5 +90,6 @@ test('approved distant non-MTLX fixtures parse without executing the distant ren
         assert.ok(scene.blocks.every((block)=>block.type!=='material' || block.effectiveMaterialType!=='materialx'));
     }
     const disneyGold = readFileSync(join(referenceRoot,'scenes/pathtracer/test_material_disney_gold.scene'),'utf8');
-    sceneError(disneyGold,/DIRECTIVE_REJECTED.*explicitly rejected/,'https://reference.test/scenes/pathtracer/test_material_disney_gold.scene');
+    const goldScene = parseSceneText(disneyGold,{url:'https://reference.test/scenes/pathtracer/test_material_disney_gold.scene'});
+    assert.equal(goldScene.blocks.find((block) => block.name === 'ground').values.specular,1);
 });

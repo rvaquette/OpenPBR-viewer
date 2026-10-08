@@ -1,6 +1,6 @@
-import { BBox } from './reference/bvh/bbox.js';
-import { Vec3 } from './reference/math/vec3.js';
-import { Vec4 } from './reference/math/vec4.js';
+import { BBox } from './reference/bvh/bbox.ts';
+import { Vec3 } from './reference/math/vec3.ts';
+import { Vec4 } from './reference/math/vec4.ts';
 
 function requireGeometry(condition, code, detail) {
     if (!condition) throw new Error(`${code}: ${detail}`);

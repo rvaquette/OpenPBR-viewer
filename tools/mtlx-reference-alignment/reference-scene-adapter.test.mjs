@@ -2,8 +2,37 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BufferGeometry, Float32BufferAttribute, Group, Mesh } from 'three';
 import { loadReferenceSceneResources, prepareReferenceScene, resolveSceneResourceUrl } from '../../src/scene/referenceSceneAdapter.js';
+import { externalSceneAssetUrl, externalSceneServer, isWithinSceneRoot } from '../../src/scene/externalSceneServer.mjs';
+import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { resolve } from 'node:path';
 
 const sceneUrl = 'https://viewer.test/public/scenes/nested/demo.scene';
+
+test('launcher render-size alias selects rectangular canvas and render target dimensions', () => {
+    const launcher = readFileSync(new URL('../../launch_render.mjs',import.meta.url),'utf8');
+    const assignment = launcher.split(/\r?\n/).find((line) => line.startsWith('options.render_size ??='));
+    const viewer = readFileSync(new URL('../../main.js',import.meta.url),'utf8').replace(/\r\n/g,'\n');
+    const dimensionsFunction = viewer.match(/function getRenderDimensions\(\)\n\{[\s\S]*?\n\}/)?.[0];
+    assert.ok(assignment);
+    assert.ok(dimensionsFunction);
+    for (const [options, expected] of [
+        [{ 'render-size':'320x180' },[320,180]],
+        [{ 'render-size':'256x192' },[256,192]],
+        [{ 'render-size':'320x180',render_size:'128x64' },[128,64]],
+        [{},[256,256]],
+        [{render_size:'max'},[640,480]],
+    ]) {
+        runInNewContext(assignment,{options});
+        const result = runInNewContext(`${dimensionsFunction}\ngetRenderDimensions()`,{
+            params:{render_size:options.render_size}, activeSceneRenderResolution:null,
+            window:{innerWidth:640,innerHeight:480},
+        });
+        assert.deepEqual([result.w,result.h],expected);
+    }
+});
+
 const sceneText = `material main
 {
  materialx_document ../materials/main.mtlx
@@ -55,15 +84,16 @@ test('preparation fetches the scene and MaterialX from their owner paths without
     assert.equal(prepared.irradianceUrl,null);
 });
 
-test('preparation fails closed for multiple material bindings, non-MaterialX sources, bad formats and 404s', async () => {
+test('preparation accepts multiple bindings and rejects missing adapters, bad formats and 404s', async () => {
     const fetchScene = (text) => async (url) => url === sceneUrl ? response(text) : response('<materialx/>');
     const multi = sceneText.replace('object "Glass *" main','object "Glass *" other')
         .replace('material main\n{\n materialx_document ../materials/main.mtlx\n}',
             'material main\n{\n materialx_document ../materials/main.mtlx\n}\nmaterial other\n{\n materialx_document ../materials/main.mtlx\n}');
-    await assert.rejects(prepareReferenceScene(sceneUrl,{fetchImpl:fetchScene(multi)}),/SCENE_MATERIAL_DISPATCH_UNSUPPORTED/);
+    const prepared = await prepareReferenceScene(sceneUrl,{fetchImpl:fetchScene(multi)});
+    assert.deepEqual(prepared.materials.map(({name,variant}) => [name,variant]),[['main',2],['other',3]]);
     const nonMtlx = sceneText.replace('materialx_document ../materials/main.mtlx','color 0.5 0.5 0.5');
     await assert.rejects(prepareReferenceScene(sceneUrl,{fetchImpl:fetchScene(nonMtlx)}),/SCENE_MATERIAL_BINDING_UNSUPPORTED/);
-    const unsupported = sceneText.replace('../models/object.glb','../models/object.obj');
+    const unsupported = sceneText.replace('../models/object.glb','../models/object.fbx');
     await assert.rejects(prepareReferenceScene(sceneUrl,{fetchImpl:fetchScene(unsupported)}),/SCENE_MESH_FORMAT_UNSUPPORTED/);
     await assert.rejects(prepareReferenceScene(sceneUrl,{fetchImpl:async () => response('',404)}),/SCENE_DOCUMENT_FETCH_FAILED/);
 });
@@ -106,4 +136,75 @@ test('superseded scene loads reject before returning a publishable candidate', a
     root.add(mesh);
     await assert.rejects(loadReferenceSceneResources(prepared,{ loadGltf:async () => ({scene:root}),
         loadEnvironment:async () => ({texture:{dispose(){}},importance:null}), isCurrent:() => false }),/SCENE_LOAD_SUPERSEDED/);
+});
+
+test('OBJ and indexed GLB meshes merge with missing normals and UVs', async () => {
+    const prepared = await prepareReferenceScene(sceneUrl,{fetchImpl:async (url) => url === sceneUrl
+        ? response(sceneText.replace('object.glb','object.obj')) : response('<materialx/>')});
+    const makeRoot = (indexed) => {
+        const root = new Group();
+        const geometry = new BufferGeometry();
+        geometry.setAttribute('position',new Float32BufferAttribute([0,0,0, 1,0,0, 0,1,0],3));
+        if (indexed) geometry.setIndex([0,1,2]);
+        const mesh = new Mesh(geometry);
+        mesh.name = 'Glass Pane';
+        root.add(mesh);
+        return root;
+    };
+    const calls = [];
+    const resources = await loadReferenceSceneResources(prepared,{
+        loadObj:async (url) => { calls.push(url); return makeRoot(false); },
+        loadGltf:async () => ({scene:makeRoot(true)}),
+        loadEnvironment:async () => ({texture:{dispose(){}},importance:null}),
+    });
+    assert.equal(calls[0],'https://viewer.test/public/scenes/models/object.obj');
+    assert.equal(resources.geometry.attributes.position.count,6);
+    assert.equal(resources.geometry.attributes.normal.count,6);
+    assert.equal(resources.geometry.attributes.uv.count,6);
+});
+
+test('external scene server serves assets read-only and rejects traversal', async () => {
+    const root = resolve('public');
+    assert.equal(isWithinSceneRoot(root,resolve(root,'../private')),false);
+    let middleware;
+    externalSceneServer(root).configureServer({middlewares:{use(handler) { middleware = handler; }}});
+    const server = createServer((request,response) => middleware(request,response,() => {
+        response.writeHead(404); response.end();
+    }));
+    await new Promise((done) => server.listen(0,'127.0.0.1',done));
+    const base = `http://127.0.0.1:${server.address().port}/external-scenes/`;
+    try {
+        assert.equal((await fetch(base + 'tmp_material.mtlx')).status,200);
+        assert.equal((await fetch(base + '%2e%2e%2fpackage.json')).status,403);
+        assert.equal((await fetch(base + 'tmp_material.mtlx',{method:'POST'})).status,405);
+        assert.equal((await fetch(base + '%FF')).status,400);
+    } finally { await new Promise((done) => server.close(done)); }
+});
+
+test('scene lights disable environment and irradiance even when declared in the renderer block', async () => {
+    const text = sceneText + '\nlight\n{\n type sphere\n position 0 5 0\n radius 1\n emission 5 5 5\n}';
+    const prepared = await prepareReferenceScene(sceneUrl,{fetchImpl:async (url) =>
+        response(url === sceneUrl ? text : '<materialx/>')});
+    assert.equal(prepared.environmentUrl,null);
+    assert.equal(prepared.irradianceUrl,null);
+    const withoutEnvironment = await prepareReferenceScene(sceneUrl,{fetchImpl:async (url) =>
+        response(url === sceneUrl ? text.replace(' envmapfile ../env/studio.hdr\n','') : '<materialx/>')});
+    assert.equal(withoutEnvironment.environmentUrl,null);
+    assert.equal(withoutEnvironment.irradianceUrl,null);
+});
+
+test('explicit envmaps resolve through the configurable external root without copying assets', async () => {
+    const root = resolve('public');
+    assert.equal(externalSceneAssetUrl('HDR/studio light.hdr',root),'/external-scenes/HDR/studio%20light.hdr');
+    assert.equal(externalSceneAssetUrl(resolve(root,'HDR/studio.hdr'),root),'/external-scenes/HDR/studio.hdr');
+    assert.equal(externalSceneAssetUrl('https://assets.test/studio.hdr',root),'https://assets.test/studio.hdr');
+    assert.equal(externalSceneAssetUrl('none',root),null);
+    assert.throws(() => externalSceneAssetUrl('../private.hdr',root),/must be within/);
+    const prepared = await prepareReferenceScene(sceneUrl,{
+        fetchImpl:async (url) => response(url === sceneUrl ? sceneText : '<materialx/>'),
+        environmentPath:'HDR/studio.hdr', irradiancePath:'HDR/irradiance/studio.hdr',
+        environmentBaseUrl:'https://viewer.test/external-scenes/',
+    });
+    assert.equal(prepared.environmentUrl,'https://viewer.test/external-scenes/HDR/studio.hdr');
+    assert.equal(prepared.irradianceUrl,'https://viewer.test/external-scenes/HDR/irradiance/studio.hdr');
 });

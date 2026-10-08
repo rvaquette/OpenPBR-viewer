@@ -1,5 +1,5 @@
 export const DEFAULT_BVH_BACKEND = 'threejs';
-export const AVAILABLE_BVH_BACKENDS = Object.freeze(['threejs']);
+export const AVAILABLE_BVH_BACKENDS = Object.freeze(['threejs','reference']);
 
 export function resolveBvhBackend(requested = DEFAULT_BVH_BACKEND, rendererMode = 'Pathtracer MTLX') {
     if (!['threejs', 'reference'].includes(requested)) {
@@ -9,7 +9,7 @@ export function resolveBvhBackend(requested = DEFAULT_BVH_BACKEND, rendererMode 
         if (rendererMode !== 'Pathtracer MTLX') {
             throw new Error(`BVH_BACKEND_ROUTE_UNSUPPORTED: reference is restricted to Pathtracer MTLX, not ${rendererMode}`);
         }
-        throw new Error('BVH_BACKEND_NOT_READY: reference CPU/GPU adapters are not integrated yet; request threejs explicitly');
+        return 'reference';
     }
     return DEFAULT_BVH_BACKEND;
 }

@@ -3,8 +3,24 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { ReferenceDenoiserAdapter, validateLinearRgba } from '../../src/denoiser/referenceDenoiserAdapter.js';
 import { compareLinearRadianceRgb } from './denoiser-metrics.mjs';
+
+test('launcher accepts denoiser alias without overriding the canonical denoise option', () => {
+    const launcher = readFileSync(resolve('launch_render.mjs'),'utf8');
+    const selection = launcher.match(/const denoiseOption =[^\n]+\nconst denoiseEnabled =[^\n]+/)?.[0];
+    assert.ok(selection);
+    for (const [options,mode,expected] of [
+        [{denoiser:'false'},'Pathtracer MTLX',false],
+        [{denoise:'false'},'Pathtracer MTLX',false],
+        [{denoise:'false',denoiser:'true'},'Pathtracer MTLX',false],
+        [{denoise:'true',denoiser:'false'},'Pathtracer MTLX',true],
+        [{},'Pathtracer MTLX',true],
+        [{},'Rasterizer MTLX',false],
+    ]) assert.equal(runInNewContext(`${selection}\ndenoiseEnabled`,{options,mode}),expected);
+    assert.match(launcher,/delete options\.denoiser;/);
+});
 
 test('linear RGBA input validates shape/finiteness without clipping HDR values', () => {
     const input = new Float32Array([0,0.5,3,1, 0.1,2,4,1]);
@@ -85,4 +101,19 @@ test('linear RMSE/PSNR metrics preserve HDR values and reject mismatched/nonfini
     assert.ok(noisy.psnr<Infinity);
     assert.throws(()=>compareLinearRadianceRgb({width:2,height:1,rgba:new Array(8).fill(0)},reference),/SHAPE_INVALID/);
     assert.throws(()=>compareLinearRadianceRgb({width:1,height:1,rgba:[NaN,0,0,1]},reference),/NONFINITE/);
+});
+
+test('adapter reports backend initialization failure without caching an unusable denoiser', async () => {
+    const adapter = new ReferenceDenoiserAdapter({weightsBaseUrl:'http://localhost/denoiser/tzas',origin:'http://localhost',
+        createDenoiser:async () => ({
+            backendReady:false,
+            backendInitialization:Promise.reject(new Error('WebGL is not supported on this device')),
+        }) });
+    await assert.rejects(adapter.execute(new Float32Array([0,0,0,1]),1,1),
+        /DENOISER_BACKEND_UNAVAILABLE: WebGL is not supported on this device/);
+    assert.equal(adapter.denoiser,null);
+    assert.equal(adapter.busy,false);
+    const bundle = readFileSync(resolve('src/denoiser/reference/denoiser.mjs'),'utf8');
+    assert.match(bundle,/this\.backendInitialization = setupBackend\(this, preferedBackend, canvasOrDevice\)/);
+    assert.match(bundle,/this\.backendInitialization\.catch\(\(\) => \{\}\)/);
 });

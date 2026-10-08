@@ -49,6 +49,12 @@ export class ReferenceDenoiserAdapter {
         denoiser.height = height;
         denoiser.flipOutputY = true;
         denoiser.outputMode = 'float32';
+        if (denoiser.backendInitialization) {
+            try { await denoiser.backendInitialization; }
+            catch (error) {
+                throw new Error(`DENOISER_BACKEND_UNAVAILABLE: ${error?.message || String(error)}`,{cause:error});
+            }
+        }
         this.denoiser = denoiser;
         this.width = width;
         this.height = height;

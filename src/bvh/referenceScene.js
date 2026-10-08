@@ -1,7 +1,7 @@
 import { Matrix4 } from 'three';
-import { BBox } from './reference/bvh/bbox.js';
-import { Vec3 } from './reference/math/vec3.js';
-import { BvhTranslator } from './reference/bvh/bvhTranslator.js';
+import { BBox } from './reference/bvh/bbox.ts';
+import { Vec3 } from './reference/math/vec3.ts';
+import { BvhTranslator } from './reference/bvh/bvhTranslator.ts';
 import { createReferenceBvh, inspectReferenceBvh } from './referenceBlas.js';
 
 function requireScene(condition, code, detail) {

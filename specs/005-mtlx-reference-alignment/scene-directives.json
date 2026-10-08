@@ -17,8 +17,8 @@
     },
     "material": {
       "supported": ["materialx_document", "materialx_inline_begin", "materialx_inline_end", "material_type"],
-      "adapted": ["color", "opacity", "alphamode", "alphacutoff", "emission", "metallic", "roughness", "subsurface", "speculartint", "anisotropic", "sheen", "sheentint", "clearcoat", "clearcoatgloss", "spectrans", "ior", "albedotexture", "metallicroughnesstexture", "normaltexture", "emissiontexture", "mediumtype", "mediumdensity", "mediumcolor", "mediumanisotropy"],
-      "rejected": ["specular"]
+      "adapted": ["color", "opacity", "alphamode", "alphacutoff", "emission", "metallic", "roughness", "specular", "subsurface", "speculartint", "anisotropic", "sheen", "sheentint", "clearcoat", "clearcoatgloss", "spectrans", "ior", "albedotexture", "metallicroughnesstexture", "normaltexture", "emissiontexture", "mediumtype", "mediumdensity", "mediumcolor", "mediumanisotropy"],
+      "rejected": []
     },
     "light": {
       "supported": ["position", "emission", "radius", "v1", "v2", "type"],

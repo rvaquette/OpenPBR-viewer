@@ -1,9 +1,11 @@
 
 import { defineConfig } from 'vite'
+import { externalSceneServer } from './src/scene/externalSceneServer.mjs'
 
 // https://vitejs.dev/config/
 export default defineConfig({
   base: "/OpenPBR-viewer/",
+  plugins: [externalSceneServer()],
   build: {
     target: "esnext",
     sourcemap: true,

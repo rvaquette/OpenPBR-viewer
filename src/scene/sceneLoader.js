@@ -8,11 +8,11 @@ export const SCENE_DIRECTIVE_POLICY = Object.freeze({
     }),
     material: Object.freeze({
         supported: Object.freeze(['materialx_document', 'materialx_inline_begin', 'materialx_inline_end', 'material_type']),
-        adapted: Object.freeze(['color', 'opacity', 'alphamode', 'alphacutoff', 'emission', 'metallic', 'roughness',
+        adapted: Object.freeze(['color', 'opacity', 'alphamode', 'alphacutoff', 'emission', 'metallic', 'roughness', 'specular',
             'subsurface', 'speculartint', 'anisotropic', 'sheen', 'sheentint', 'clearcoat', 'clearcoatgloss',
             'spectrans', 'ior', 'albedotexture', 'metallicroughnesstexture', 'normaltexture', 'emissiontexture',
             'mediumtype', 'mediumdensity', 'mediumcolor', 'mediumanisotropy']),
-        rejected: Object.freeze(['specular']),
+        rejected: Object.freeze([]),
     }),
     light: Object.freeze({
         supported: Object.freeze(['position', 'emission', 'radius', 'v1', 'v2', 'type']),
@@ -45,7 +45,7 @@ const VECTOR_ARITY = Object.freeze({
     color:3, emission:3, mediumcolor:3, position:3, lookat:3, v1:3, v2:3,
     backgroundcolor:3, scale:3, rotation:4,
 });
-const FLOAT_DIRECTIVES = new Set(['opacity', 'alphacutoff', 'metallic', 'roughness', 'subsurface', 'speculartint',
+const FLOAT_DIRECTIVES = new Set(['opacity', 'alphacutoff', 'metallic', 'roughness', 'specular', 'subsurface', 'speculartint',
     'anisotropic', 'sheen', 'sheentint', 'clearcoat', 'clearcoatgloss', 'spectrans', 'ior', 'mediumdensity',
     'mediumanisotropy', 'radius', 'aperture', 'focaldist', 'fov', 'maxdepth', 'fireflyclamp', 'maxspp',
     'envmapintensity', 'envmaprotation', 'tilewidth', 'tileheight']);
@@ -280,8 +280,6 @@ function validateBlock(block, url) {
         block.values.aperture = aperture; block.values.focaldist = focaldist; block.values.fov = fov;
     }
     if (block.type === 'renderer') {
-        if (block.values.tilewidth !== undefined || block.values.tileheight !== undefined)
-            block.warnings.push('SCENE_OPTION_NO_RUNTIME_EFFECT');
         for (const directive of ['envmapfile','envmapirradiancefile']) {
             if (block.values[directive] && block.values[directive].toLowerCase() !== 'none')
                 validateResourceUrl(block.values[directive],context,directive);
@@ -349,8 +347,6 @@ export function parseSceneText(text, { url = '<scene>' } = {}) {
             const values = directiveTokens(tokenize(logicalLine.text,logicalLine.context));
             const key = values[0];
             const fieldPolicy = policyFor(directive,key,logicalLine.context);
-            if (fieldPolicy === 'adapted' && (key === 'tilewidth' || key === 'tileheight'))
-                warnings.push({ code:'SCENE_OPTION_NO_RUNTIME_EFFECT',url,line:index+1,block:directive,name,token:key });
             if (key === 'materialx_inline_begin') {
                 const beginLine = index + 1;
                 if (directive !== 'material' || values.length !== 1) fail('SCENE_INLINE_CONTEXT_INVALID',logicalLine.context,'inline source is only valid as a material marker');

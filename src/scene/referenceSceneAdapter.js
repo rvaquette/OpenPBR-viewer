@@ -1,6 +1,7 @@
 import { parseSceneText, resolveSceneReferences } from './sceneLoader.js';
-import { Group, Matrix4, Mesh, Quaternion, Vector3 } from 'three';
+import { Float32BufferAttribute, Group, Matrix4, Quaternion, Vector3 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 function sceneError(code, detail) {
@@ -19,31 +20,17 @@ export function resolveSceneResourceUrl(resource, ownerUrl) {
     return url.href;
 }
 
-function requireGltfUrl(url, block) {
+function requireMeshUrl(url, block) {
     const path = new URL(url).pathname.toLowerCase();
-    if (!path.endsWith('.gltf') && !path.endsWith('.glb'))
-        sceneError('SCENE_MESH_FORMAT_UNSUPPORTED', `${block.type} '${block.values.name || block.name || ''}' requires .gltf or .glb, got '${url}'`);
+    if (!/\.(gltf|glb|obj)$/.test(path))
+        sceneError('SCENE_MESH_FORMAT_UNSUPPORTED', `${block.type} '${block.values.name || block.name || ''}' requires .gltf, .glb or .obj, got '${url}'`);
 }
 
-function selectedMaterial(scene) {
+function sceneMaterials(scene) {
     const materials = scene.blocks.filter((block) => block.type === 'material');
     if (!materials.length) sceneError('SCENE_MATERIAL_SOURCE_REQUIRED', 'scene has no MaterialX material block');
-    const referenced = new Set();
-    for (const block of scene.blocks) {
-        if (block.type === 'mesh') referenced.add(block.values.material);
-        if (block.type === 'gltf') for (const override of block.repeated) referenced.add(override.materialName);
-    }
-    if (referenced.size !== 1 || !referenced.values().next().value)
-        sceneError('SCENE_MATERIAL_DISPATCH_UNSUPPORTED', 'the active viewer supports one explicitly bound scene material per .scene load');
-    const name = referenced.values().next().value;
-    const material = materials.find((block) => block.name === name);
-    if (!material) sceneError('SCENE_REFERENCE_UNKNOWN', `unknown material '${name}'`);
-    const allowed = new Set(['materialx_document','materialx_inline','material_type']);
-    const unsupported = Object.keys(material.values).find((key) => !allowed.has(key));
-    if (unsupported) sceneError('SCENE_MATERIAL_BINDING_UNSUPPORTED', `${material.name}.${unsupported} has no active local scene binding`);
-    if (material.effectiveMaterialType !== 'materialx')
-        sceneError('SCENE_MATERIAL_BINDING_UNSUPPORTED', `${material.name} has no local MaterialX source`);
-    return material;
+    resolveSceneReferences(scene);
+    return materials;
 }
 
 async function readResponse(fetchImpl, url, kind, signal) {
@@ -52,44 +39,56 @@ async function readResponse(fetchImpl, url, kind, signal) {
     return response;
 }
 
-export async function prepareReferenceScene(sceneUrl, { fetchImpl = globalThis.fetch, signal } = {}) {
+export async function prepareReferenceScene(sceneUrl, { fetchImpl = globalThis.fetch, signal,
+    createMaterialDocument = null, environmentPath, irradiancePath, environmentBaseUrl } = {}) {
     if (typeof fetchImpl !== 'function') sceneError('SCENE_FETCH_UNAVAILABLE', 'fetch implementation is required');
     const resolvedSceneUrl = resolveSceneResourceUrl(sceneUrl, globalThis.location?.href || 'http://localhost/');
     const sceneResponse = await readResponse(fetchImpl, resolvedSceneUrl, 'DOCUMENT', signal);
     const scene = parseSceneText(await sceneResponse.text(), { url:resolvedSceneUrl });
-    const material = selectedMaterial(scene);
-    let materialText;
-    let materialUrl = resolvedSceneUrl;
-    if (material.values.materialx_document) {
-        materialUrl = resolveSceneResourceUrl(material.values.materialx_document, resolvedSceneUrl);
-        const materialResponse = await readResponse(fetchImpl, materialUrl, 'MATERIALX', signal);
-        materialText = await materialResponse.text();
-        if (!materialText.trim()) sceneError('SCENE_MATERIALX_EMPTY', `empty MaterialX document ${materialUrl}`);
-    } else {
-        materialText = material.values.materialx_inline;
+    const materials = [];
+    for (const material of sceneMaterials(scene)) {
+        let materialText;
+        let materialUrl = resolvedSceneUrl;
+        if (material.effectiveMaterialType === 'materialx') {
+            const unsupported = Object.keys(material.values).find((key) => !['materialx_document','materialx_inline','material_type'].includes(key));
+            if (unsupported) sceneError('SCENE_MATERIAL_BINDING_UNSUPPORTED', `${material.name}.${unsupported}`);
+            if (material.values.materialx_document) {
+                materialUrl = resolveSceneResourceUrl(material.values.materialx_document,resolvedSceneUrl);
+                materialText = await (await readResponse(fetchImpl,materialUrl,'MATERIALX',signal)).text();
+            } else materialText = material.values.materialx_inline;
+        } else {
+            if (!createMaterialDocument) sceneError('SCENE_MATERIAL_BINDING_UNSUPPORTED', `${material.name} requires a Disney MaterialX adapter`);
+            materialText = await createMaterialDocument(material);
+        }
+        if (!materialText?.trim()) sceneError('SCENE_MATERIALX_EMPTY', `empty MaterialX document ${materialUrl}`);
+        materials.push({ name:material.name, materialText, materialUrl,
+            materialBaseUrl:new URL('.',materialUrl).href, variant:materials.length + 2 });
     }
-
-    const materialBaseUrl = new URL('.', materialUrl).href;
+    const { name:materialName, materialText, materialUrl, materialBaseUrl } = materials[0];
     const geometry = [];
     for (let blockIndex = 0; blockIndex < scene.blocks.length; blockIndex++) {
         const block = scene.blocks[blockIndex];
         if (!['mesh','gltf'].includes(block.type)) continue;
         const fileUrl = resolveSceneResourceUrl(block.values.file, resolvedSceneUrl);
-        requireGltfUrl(fileUrl, block);
+        requireMeshUrl(fileUrl, block);
         geometry.push({ blockIndex, type:block.type, name:block.values.name || block.name || `${block.type}-${geometry.length}`,
-            url:fileUrl, matrix:block.values.matrix || null, position:block.values.position || [0,0,0],
+            url:fileUrl, materialName:block.values.material || materialName, matrix:block.values.matrix || null, position:block.values.position || [0,0,0],
             rotation:block.values.rotation || [0,0,0,1], scale:block.values.scale || [1,1,1],
             overrides:block.repeated.map((override) => ({ ...override })) });
     }
     if (!geometry.length) sceneError('SCENE_GEOMETRY_REQUIRED', 'scene must contain at least one mesh or gltf block');
 
     const renderer = scene.blocks.find((block) => block.type === 'renderer')?.values || Object.create(null);
-    const environmentUrl = renderer.envmapfile && renderer.envmapfile.toLowerCase() !== 'none'
-        ? resolveSceneResourceUrl(renderer.envmapfile, resolvedSceneUrl) : (renderer.envmapfile ? null : undefined);
-    const irradianceUrl = renderer.envmapirradiancefile && renderer.envmapirradiancefile.toLowerCase() !== 'none'
-        ? resolveSceneResourceUrl(renderer.envmapirradiancefile, resolvedSceneUrl) : (renderer.envmapirradiancefile ? null : undefined);
+    const hasSceneLights = scene.blocks.some((block) => block.type === 'light');
+    const envmapfile = environmentPath ?? renderer.envmapfile;
+    const envmapirradiancefile = irradiancePath ?? renderer.envmapirradiancefile;
+    const environmentOwner = environmentBaseUrl || resolvedSceneUrl;
+    const environmentUrl = hasSceneLights ? null : envmapfile && envmapfile.toLowerCase() !== 'none'
+        ? resolveSceneResourceUrl(envmapfile, environmentOwner) : (envmapfile ? null : undefined);
+    const irradianceUrl = hasSceneLights ? null : envmapirradiancefile && envmapirradiancefile.toLowerCase() !== 'none'
+        ? resolveSceneResourceUrl(envmapirradiancefile, environmentOwner) : (envmapirradiancefile ? null : undefined);
     resolveSceneReferences(scene);
-    return Object.freeze({ scene, sceneUrl:resolvedSceneUrl, materialName:material.name, materialText,
+    return Object.freeze({ scene, sceneUrl:resolvedSceneUrl, materialName, materialText, materials:Object.freeze(materials),
         materialUrl, materialBaseUrl, geometry:Object.freeze(geometry), environmentUrl, irradianceUrl,
         warnings:Object.freeze([...scene.warnings]) });
 }
@@ -154,7 +153,7 @@ function objectNames(root) {
 }
 
 export async function loadReferenceSceneResources(prepared, { loadGltf = (url) => new GLTFLoader().loadAsync(url),
-    loadEnvironment = null, signal, isCurrent = () => true } = {}) {
+    loadObj = (url) => new OBJLoader().loadAsync(url), loadEnvironment = null, signal, isCurrent = () => true } = {}) {
     if (!prepared?.scene || !Array.isArray(prepared.geometry))
         sceneError('SCENE_PREPARED_INVALID', 'prepared scene and geometry descriptors are required');
     const loadedScenes = [];
@@ -163,8 +162,9 @@ export async function loadReferenceSceneResources(prepared, { loadGltf = (url) =
     try {
         const settled = await Promise.allSettled(prepared.geometry.map(async (descriptor) => {
             if (signal?.aborted) sceneError('SCENE_LOAD_ABORTED', prepared.sceneUrl);
-            const gltf = await loadGltf(descriptor.url,{ signal, blockIndex:descriptor.blockIndex });
-            const root = gltf?.scene;
+            const isObj = new URL(descriptor.url).pathname.toLowerCase().endsWith('.obj');
+            const asset = await (isObj ? loadObj : loadGltf)(descriptor.url,{ signal, blockIndex:descriptor.blockIndex });
+            const root = isObj ? asset : asset?.scene;
             if (!root?.traverse) sceneError('SCENE_GLTF_INVALID', `no scene root in ${descriptor.url}`);
             const names = objectNames(root);
             const group = new Group();
@@ -184,11 +184,35 @@ export async function loadReferenceSceneResources(prepared, { loadGltf = (url) =
         resolveSceneReferences(prepared.scene,objectNamesByBlock);
 
         const geometries = [];
-        for (const { group } of loaded) {
+        const objects = [];
+        let vertexOffset = 0;
+        for (const { group, descriptor } of loaded) {
             group.traverse((object) => {
                 if (!object.isMesh) return;
-                const geometry = object.geometry.clone();
+                let materialName = descriptor.materialName;
+                for (const override of descriptor.overrides) {
+                    const pattern = override.pattern.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'.*').replace(/\?/g,'.');
+                    if (new RegExp(`^${pattern}$`,'i').test(object.name)) materialName = override.materialName;
+                }
+                const material = prepared.materials.find((candidate) => candidate.name === materialName);
+                if (!material) sceneError('SCENE_REFERENCE_UNKNOWN',materialName);
+                let geometry = object.geometry.clone();
+                if (geometry.index) {
+                    const expanded = geometry.toNonIndexed();
+                    geometry.dispose();
+                    geometry = expanded;
+                }
+                for (const name of Object.keys(geometry.attributes))
+                    if (!['position','normal','uv'].includes(name)) geometry.deleteAttribute(name);
+                if (!geometry.attributes.normal) geometry.computeVertexNormals();
+                const vertexCount = geometry.attributes.position.count;
+                if (!geometry.attributes.uv)
+                    geometry.setAttribute('uv',new Float32BufferAttribute(new Float32Array(vertexCount * 2),2));
+                geometry.setAttribute('materialVariant',new Float32BufferAttribute(new Float32Array(vertexCount).fill(material.variant),1));
                 geometry.applyMatrix4(object.matrixWorld);
+                objects.push({ id:`${descriptor.blockIndex}:${objects.length}`, name:`${descriptor.name}/${object.name || 'mesh'}`,
+                    materialName, vertexOffset, vertexCount });
+                vertexOffset += vertexCount;
                 geometries.push(geometry);
             });
         }
@@ -216,7 +240,7 @@ export async function loadReferenceSceneResources(prepared, { loadGltf = (url) =
         }
         for (const { group } of loaded) objectScene.add(group);
         return { objectScene, geometry:mergedGeometry, environment:environmentResults[0],
-            irradiance:environmentResults[1], sourceMaterials, warnings:prepared.warnings };
+            irradiance:environmentResults[1], sourceMaterials, objects, warnings:prepared.warnings };
     } catch (error) {
         for (const root of loadedScenes) disposeObjectTree(root);
         for (const environment of environmentResults) {

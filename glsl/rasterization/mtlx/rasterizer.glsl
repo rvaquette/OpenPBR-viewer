@@ -57,7 +57,6 @@ void main()
     vec3 L;
     if (material == MATERIAL_OPENPBR)
     {
-        mtlxMaterialVariant = 0;
         mtlx_openpbr_prepare(pW_hit, basis, winputL, rndSeed);
         L = mtlx_openpbr_raster_color(pW_hit, basis, winputL, viewReflectL);
     }

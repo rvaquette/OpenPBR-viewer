@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { BufferGeometry, Float32BufferAttribute } from 'three';
+import { buildReferenceSurfaceScene } from '../../src/bvh/referenceRuntimeAdapter.js';
+import { assertReferenceMaterialCoverage, createReferenceMaterialRegistry } from '../../src/mtlx/referenceMaterialRegistry.js';
 import { bindMtlxVariantHookFunctions, emitMtlxMaterialValueFunction, emitMtlxOpenPbrOpaqueFunction,
     validateMtlxVariantFeatures } from '../../src/mtlx/referenceMaterialHooks.js';
 
@@ -12,6 +16,41 @@ const descriptors = [
     { name:'emission_luminance', type:'float', index:5, tableBacked:true },
     { name:'geometry_opacity', type:'float', index:6, tableBacked:true },
 ];
+
+test('reference runtime builds BLAS/TLAS and preserves neutral and scene parameter variants', () => {
+    const geometry = new BufferGeometry();
+    geometry.setAttribute('position',new Float32BufferAttribute([
+        0,0,0, 1,0,0, 0,1,0,
+        2,0,0, 3,0,0, 2,1,0,
+        4,0,0, 5,0,0, 4,1,0,
+    ],3));
+    geometry.setAttribute('neutralFlag',new Float32BufferAttribute([1,1,1,0,0,0,0,0,0],1));
+    geometry.setAttribute('materialVariant',new Float32BufferAttribute([0,0,0,2,2,2,3,3,3],1));
+    const {scene,records} = buildReferenceSurfaceScene(geometry,{materialKey:'gold',
+        variants:[{variant:2,values:[0.02]},{variant:3,values:[0.5]}]});
+    assert.equal(scene.instances.length,3);
+    assert.deepEqual(records.map(({kind,parameterVariant}) => [kind,parameterVariant]),[
+        ['props',0],['openpbr',2],['openpbr',3],
+    ]);
+    assert.equal(scene.geometry.vertexIndices.length,9);
+    assert.equal(geometry.groups.length,0);
+    assertReferenceMaterialCoverage(scene,createReferenceMaterialRegistry(records,{activeMaterialKey:'gold'}));
+    geometry.attributes.materialVariant.setX(7,2);
+    assert.throws(() => buildReferenceSurfaceScene(geometry,{materialKey:'gold'}),/TRIANGLE_MATERIAL_INVALID/);
+    geometry.dispose();
+});
+
+test('Three.js shadow traversal restores the surface material variant on every return path', () => {
+    const source = readFileSync(new URL('../../glsl/pathtracing/mtlx/pathtracer.glsl',import.meta.url),'utf8').replace(/\r\n/g,'\n');
+    const start = source.indexOf('float TraceShadow(');
+    const end = source.indexOf('\n////////////////////////////////////////////////',start);
+    const shadow = source.slice(start,end).replace(
+        /#ifdef REFERENCE_BVH_ENABLED\n([\s\S]*?)(?:#else\n([\s\S]*?))?#endif/g,
+        (_match,_reference,active = '') => active);
+    assert.match(shadow,/int previousMaterialVariant = mtlxMaterialVariant;[\s\S]*bool hit = trace\(/);
+    assert.match(shadow,/mtlxMaterialVariant = previousMaterialVariant;\s*return 1\.0;/);
+    assert.match(shadow,/mtlxMaterialVariant = previousMaterialVariant;\s*return hit \? 0\.0 : 1\.0;/);
+});
 
 test('generated material hooks read the active parameter variant instead of frozen document summaries', () => {
     assert.match(emitMtlxMaterialValueFunction('bool','mtlx_openpbr_is_thinwalled','thinWalled',false,descriptors),

@@ -231,6 +231,7 @@ bool trace(in vec3 rayOrigin, in vec3 rayDir, in float maxDistance,
         Ts = has_tangents_surface ? gT.xyz : normalToTangent(Ns);
         Bs = cross(safe_normalize(Ns), safe_normalize(Ts));
         material = (gS.x > 0.5) ? MATERIAL_PROPS : MATERIAL_OPENPBR;
+        mtlxMaterialVariant = int(round(gS.y));
     }
     else if (hit_ground)
     {

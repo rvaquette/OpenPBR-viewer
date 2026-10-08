@@ -20,10 +20,13 @@
  *   --screenshot=out.png    Alias de --output
  *   --spp=N                 Samples path-tracing à attendre avant la capture (défaut: 10)
  *   --size=WxH             Résolution du rendu (défaut: 256x256)  ex: --size=1280x720
+ *   --render-size=WxH      Resolution interne (defaut: 256x256, alias: --render_size)
+ *   --tile-size=WxH        Taille des tuiles pathtracer, prioritaire sur le .scene (alias: --tile_size)
  *   --mtlx=file.mtlx       Charge les paramètres matériau depuis un fichier MaterialX OpenPBR
  *   --contract_url=/mtlx/material-contract.json  Contrat de fonctions générées par matériau
  *   --strict_generated_contract=true|false       Active l'echec strict sans fallback legacy (defaut: true)
  *   --denoise=true|false    Débruitage HDR local dans le navigateur (défaut: true pour Pathtracer MTLX)
+ *   --denoiser=true|false   Alias de --denoise
  *   --dump-glsl=dir         Exporte les sources GLSL envoyées à WebGL et le dispatch MTLX généré
  *   --report=file.json     Exporte l'etat observe du viewer et les erreurs navigateur
  *
@@ -34,6 +37,9 @@
  *   --gpu=true|false              false = rendu logiciel SwiftShader (défaut: true)
  *   --scene=shader-ball|standard-shader-ball|glavenus|terrain|bearded-man
  *   --scene_url=/scenes/example.scene   Charge une scene .scene locale
+ *   --scene-file=example.scene     Scene relative au repertoire externe (ou chemin absolu)
+ *   --scene-root=DIR               Racine externe (defaut: D:\WebGL2\GLSL-PathTracer-JS\scenes\pathtracer)
+ *   --envmap=HDR/file.hdr          Envmap relative a --scene-root (ignoree si le .scene contient des lumieres)
  *   --linear_radiance_capture=true     Ajoute les stats RGBA32F avant présentation
  *   --smooth_normals=true|false   Lissage des normales (défaut: true)
  *   --bounces=N                   Nombre de rebonds (défaut: 6)
@@ -67,8 +73,10 @@
 import { chromium }    from 'playwright-core';
 import { spawn, execSync } from 'child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
-import { basename, dirname, isAbsolute, join, resolve } from 'path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'path';
 import { setTimeout as sleep } from 'timers/promises';
+import { DEFAULT_SCENE_ROOT, EXTERNAL_SCENE_PREFIX, externalSceneAssetUrl, isWithinSceneRoot } from './src/scene/externalSceneServer.mjs';
+import { parsePathtracerTileSize } from './src/scene/rendererAdapter.js';
 
 function killProcessTree(proc) {
     if (!proc) return;
@@ -158,6 +166,14 @@ for (const arg of cliArgs) {
 }
 
 const port          = options.port           ?? '5173';
+const sceneRoot = resolve(options['scene-root'] ?? process.env.SCENE_ROOT ?? DEFAULT_SCENE_ROOT);
+const sceneFile = options['scene-file'] ?? (/^[A-Za-z]:[\\/]/.test(options.scene_url || '') ? options.scene_url : null);
+if (sceneFile) {
+    const absoluteScene = resolve(sceneRoot,sceneFile);
+    if (!isWithinSceneRoot(sceneRoot,absoluteScene)) throw new Error('Scene file must be within --scene-root');
+    options.scene_url = EXTERNAL_SCENE_PREFIX + relative(sceneRoot,absoluteScene).replace(/\\/g,'/').split('/').map(encodeURIComponent).join('/');
+}
+delete options['scene-root']; delete options['scene-file'];
 const useGpu        = (options.gpu           ?? 'false') !== 'false';
 const headless      = (options.headless      ?? 'true') !== 'false';
 const browserChoice = (options.browser       ?? 'auto').toLowerCase();
@@ -185,36 +201,51 @@ const dumpGlslDir   = options['dump-glsl']
     : null;
 // Normalize friendly mode aliases to canonical renderer_mode strings.
 const MODE_ALIASES = {
-    'pathtracer-mtlx':   'Pathtracer MTLX',
+    'mtlx':   'Pathtracer MTLX',
     'raster-mtlx':       'Rasterizer MTLX',
 };
 const rawMode       = options.mode ?? 'Rasterizer MTLX';
 const mode          = MODE_ALIASES[rawMode.toLowerCase()] ?? rawMode;
 if (options.oidn !== undefined) throw new Error('--oidn was removed; denoising runs locally in the browser');
-const denoiseEnabled = options.denoise === undefined ? mode === 'Pathtracer MTLX' : options.denoise !== 'false';
+const denoiseOption = options.denoise ?? options.denoiser;
+const denoiseEnabled = denoiseOption === undefined ? mode === 'Pathtracer MTLX' : denoiseOption !== 'false';
 const linearRadianceOutput = options['linear-radiance-output'] ? resolve(options['linear-radiance-output']) : null;
 if (linearRadianceOutput) options.linear_radiance_capture = 'true';
 const [renderW, renderH] = (options.size ?? '256x256').toLowerCase().split('x').map(Number);
+if (options['tile-size'] !== undefined || options.tile_size !== undefined) {
+    const {tileWidth,tileHeight} = parsePathtracerTileSize(options.tile_size ?? options['tile-size']);
+    options.tile_size = `${tileWidth}x${tileHeight}`;
+    delete options['tile-size'];
+}
 
 const mtlxPath      = options.mtlx    ?? null;
 const DEFAULT_ENV_MAP = 'D:\\WebGL2\\MaterialX\\MaterialX-rva\\resources\\Lights\\san_giuseppe_bridge.hdr';
 const DEFAULT_ENV_IRRADIANCE = 'D:\\WebGL2\\MaterialX\\MaterialX-rva\\resources\\Lights\\irradiance\\san_giuseppe_bridge.hdr';
-const envMapInput = options.envmap ?? options.env_map_path ?? DEFAULT_ENV_MAP;
-const envIrradianceInput = options.env_irradiance_path ?? DEFAULT_ENV_IRRADIANCE;
+const explicitEnvMap = options.envmap ?? options.env_map_path;
+const explicitEnvIrradiance = options.env_irradiance_path;
+const envMapInput = explicitEnvMap === undefined
+    ? (options.scene_url ? null : DEFAULT_ENV_MAP) : externalSceneAssetUrl(explicitEnvMap,sceneRoot);
+const envIrradianceInput = explicitEnvIrradiance === undefined
+    ? (options.scene_url || explicitEnvMap !== undefined ? null : DEFAULT_ENV_IRRADIANCE)
+    : externalSceneAssetUrl(explicitEnvIrradiance,sceneRoot);
 delete options.port; delete options.gpu; delete options.headless;
 delete options.browser; delete options['launch-timeout-ms'];
 delete options['start-server']; delete options.screenshot; delete options.output;
 delete options['wait-samples']; delete options['spp']; delete options.mode; delete options.size;
 delete options['dump-glsl'];
 delete options.report; delete options['linear-radiance-output'];
-delete options.mtlx; delete options.denoise; delete options.oidn;
+delete options.mtlx; delete options.denoise; delete options.denoiser; delete options.oidn;
 delete options.envmap; delete options.env_map_path; delete options.env_irradiance_path;
 
 if (!options.renderer_mode) options.renderer_mode = mode;
+options.render_size ??= options['render-size'] ?? '256x256';
+delete options['render-size'];
 if (options.strict_generated_contract === undefined) options.strict_generated_contract = 'true';
-options.env_map_path = prepareEnvAsset(envMapInput, '_env');
-options.env_irradiance_path = prepareEnvAsset(envIrradianceInput, '_env/irradiance');
-options.env_map_provided = 'true';
+if (envMapInput !== null || explicitEnvMap !== undefined)
+    options.env_map_path = envMapInput === null ? 'none' : prepareEnvAsset(envMapInput, '_env');
+if (envIrradianceInput !== null || explicitEnvIrradiance !== undefined)
+    options.env_irradiance_path = envIrradianceInput === null ? 'none' : prepareEnvAsset(envIrradianceInput, '_env/irradiance');
+options.env_map_provided = envMapInput ? 'true' : 'false';
 // --scene is a shorthand alias for the scene_name param
 if (options.scene) { options.scene_name ??= options.scene; delete options.scene; }
 
@@ -242,6 +273,7 @@ if (startServer) {
     console.log('Démarrage du serveur Vite...');
     viteProcess = spawn(`npx vite --port ${port} --strictPort`, [], {
         shell: true,
+        env: { ...process.env, SCENE_ROOT:sceneRoot },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     await new Promise((resolve, reject) => {
@@ -462,10 +494,12 @@ await page.goto(url, { waitUntil: 'domcontentloaded' });
 
 if (options.scene_url) {
     await page.waitForFunction(() => window.__openpbrScene?.status === 'loaded' || window.__openpbrSceneLoadError,
-        null,{ timeout:1200_000 });
+        null,{ timeout:12000_000 });
     const sceneLoad = await page.evaluate(() => window.__openpbrScene ?? null);
     if (sceneLoad?.status !== 'loaded') {
         const message = await page.evaluate(() => window.__openpbrSceneLoadError || 'scene_url did not load');
+        await browser.close();
+        if (viteProcess) killProcessTree(viteProcess);
         throw new Error(`[scene_url] ${message}`);
     }
 }

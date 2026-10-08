@@ -13,6 +13,12 @@ export function mapSceneRendererOptions(values = {},explicitOverrides = new Set(
     for (const [source,target] of mappings) {
         if (Object.hasOwn(values,source) && !explicitOverrides.has(target)) settings[target] = values[source];
     }
+    for (const [source,target] of [['tilewidth','tileWidth'],['tileheight','tileHeight']]) {
+        if (!Object.hasOwn(values,source)) continue;
+        if (!Number.isInteger(values[source]) || values[source] <= 0)
+            fail('SCENE_RENDERER_TILE_SIZE_INVALID',`${source} must be a positive integer`);
+        settings[target] = values[source];
+    }
     if (Array.isArray(values.resolution) && !explicitOverrides.has('render_size'))
         settings.resolution = Object.freeze([...values.resolution]);
 
@@ -29,4 +35,20 @@ export function mapSceneRendererOptions(values = {},explicitOverrides = new Set(
     if (values.openglnormalmap === true)
         fail('SCENE_RENDERER_NORMALMAP_CONVENTION_UNSUPPORTED','scene OpenGL normal-map override is not implemented');
     return Object.freeze(settings);
+}
+
+export function parsePathtracerTileSize(value) {
+    const match = /^(\d+)x(\d+)$/i.exec(value);
+    const tileWidth = match ? Number(match[1]) : 0;
+    const tileHeight = match ? Number(match[2]) : 0;
+    if (!Number.isSafeInteger(tileWidth) || !Number.isSafeInteger(tileHeight) || tileWidth <= 0 || tileHeight <= 0)
+        fail('PATHTRACER_TILE_SIZE_INVALID','expected WxH with positive integer dimensions, e.g. 64x64');
+    return {tileWidth,tileHeight};
+}
+
+export function getPathtracerTileGrid(renderSize, settings = {}, tileSize = '') {
+    const {tileWidth = 64,tileHeight = 64} = {...settings,...(tileSize ? parsePathtracerTileSize(tileSize) : {})};
+    return { tileWidth, tileHeight,
+        columns:Math.ceil(renderSize.w / tileWidth),
+        rows:Math.ceil(renderSize.h / tileHeight) };
 }

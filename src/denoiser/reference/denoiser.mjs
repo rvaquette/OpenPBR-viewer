@@ -7030,7 +7030,11 @@ if (env().get('IS_BROWSER')) {
 // We are wrapping this within an object so it can be stubbed by Jasmine.
 const getNodeFetch = {
     // tslint:disable-next-line:no-require-imports
-    importFetch: () => require('node-fetch')
+    importFetch: () => {
+        if (typeof globalThis.fetch !== 'function')
+            throw new Error('Native fetch is required: use Node.js 18+ or provide a fetch polyfill');
+        return globalThis.fetch.bind(globalThis);
+    }
 };
 let systemFetch;
 class PlatformNode {
@@ -96219,7 +96223,8 @@ class Denoiser {
         this.weights = Weights.getInstance();
         enableProdMode();
         console.log('%c Denoiser initialized..', 'background: #d66b00; color: white;');
-        setupBackend(this, preferedBackend, canvasOrDevice);
+        this.backendInitialization = setupBackend(this, preferedBackend, canvasOrDevice);
+        this.backendInitialization.catch(() => {});
     }
     //* Getters and Setters ------------------------------
     // Weights --
@@ -96614,4 +96619,3 @@ class Denoiser {
 }
 
 export { Denoiser };
-//# sourceMappingURL=index.mjs.map

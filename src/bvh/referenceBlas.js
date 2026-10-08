@@ -1,7 +1,7 @@
-import { Bvh, NodeType } from './reference/bvh/bvh.js';
-import { SplitBvh } from './reference/bvh/splitBvh.js';
-import { BBox } from './reference/bvh/bbox.js';
-import { Vec3 } from './reference/math/vec3.js';
+import { Bvh, NodeType } from './reference/bvh/bvh.ts';
+import { SplitBvh } from './reference/bvh/splitBvh.ts';
+import { BBox } from './reference/bvh/bbox.ts';
+import { Vec3 } from './reference/math/vec3.ts';
 
 export const REFERENCE_BVH_PROFILES = Object.freeze({
     blas: Object.freeze({ algorithm: 'SplitBvh', traversalCost: 2, bins: 64,

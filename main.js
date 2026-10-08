@@ -21,9 +21,11 @@ import { loadNativeTexture } from './src/textures/textureLoader.js';
 import { disposeReferenceSceneResources, loadReferenceSceneResources, prepareReferenceScene } from './src/scene/referenceSceneAdapter.js';
 import { createSceneCamera, parseSceneCameraOverrides, verticalFovFromHorizontal } from './src/scene/cameraAdapter.js';
 import { adaptSceneLights, LIGHT_SAMPLING_MODE, packLocalLightTexels } from './src/scene/lightAdapter.js';
-import { mapSceneRendererOptions } from './src/scene/rendererAdapter.js';
+import { getPathtracerTileGrid, mapSceneRendererOptions, parsePathtracerTileSize } from './src/scene/rendererAdapter.js';
 import { ReferenceDenoiserAdapter } from './src/denoiser/referenceDenoiserAdapter.js';
 import { DEFAULT_BVH_BACKEND, AVAILABLE_BVH_BACKENDS, resolveBvhBackend } from './src/bvh/backend.mjs';
+import { buildReferenceSurfaceScene } from './src/bvh/referenceRuntimeAdapter.js';
+import { uploadReferenceSceneTextures } from './src/bvh/referenceGpuAdapter.js';
 import { assertReferenceMaterialCoverage, assertReferenceMaterialParameterSchema,
     createReferenceMaterialRegistry } from './src/mtlx/referenceMaterialRegistry.js';
 import { emitMtlxMaterialValueFunction as emitVariantMtlxMaterialValueFunction,
@@ -100,6 +102,7 @@ async function showLoadingProgress(message)
 function buildBvh(geometry)
 {
     resolveBvhBackend(params.bvh_backend, params.renderer_mode);
+    if (params.bvh_backend === 'reference') return null;
     setGpuDebugStage('building-bvh');
     const bvh = new MeshBVH(geometry, { strategy: SAH });
     setGpuDebugStage('bvh-built');
@@ -136,6 +139,9 @@ function disposeMaterialGpuResources(materials)
 
 function disposeRouteGpuResources()
 {
+    referenceBvhResources?.dispose();
+    referenceBvhResources = null;
+    mtlxRouteReferenceMaterialRegistry = null;
     pathtracedQuad?.dispose();
     pathtracedQuad = null;
     if (pathtracedFinalQuad) {
@@ -186,6 +192,7 @@ function adaptBvhGlslForEngine(source)
 // GLSL prelude providing the BVH struct/intersection primitives, chosen per engine.
 function bvhGlslPrelude()
 {
+    if (params.bvh_backend === 'reference') return '';
     return shaderStructs + shaderIntersectFunction;
 }
 
@@ -274,6 +281,7 @@ var params =
     bounces:                            6,
     max_samples:                        512,
     render_size:                        '256x256',   // render-target size for fullscreen BVH routes; final quad upscales to screen
+    tile_size:                          '',
     max_volume_steps:                   64,
     firefly_clamp:                      10.0,
     wireframe:                          false,
@@ -390,6 +398,8 @@ var denoiserLastError = null;
 var mtlxParameterUpdateQueue = Promise.resolve();
 var mtlxRouteLightsTexture = null;
 var mtlxRouteReferenceMaterialRegistry = null;
+let referenceBvhResources = null;
+let sceneMaterialVariants = [];
 var mtlxRouteActiveMaterialKey = 'default-material';
 var activeMtlxArchiveSource = null;
 var activeMtlxArchiveSelection = null;
@@ -802,7 +812,8 @@ const MTLX_LIGHT_TEXELS_PER_LIGHT = 6;
 
 function mtlxReferenceParameterVariantCount()
 {
-    const maxVariant = Math.max(1, ...(mtlxRouteReferenceMaterialRegistry?.entries || []).map((entry) => entry.parameterVariant));
+    const maxVariant = Math.max(1, ...sceneMaterialVariants.map((entry) => entry.variant),
+        ...(mtlxRouteReferenceMaterialRegistry?.entries || []).map((entry) => entry.parameterVariant));
     return maxVariant + 1;
 }
 
@@ -863,6 +874,7 @@ function createMtlxLightsTexture()
     const parameterValuesByVariant = new Map(registryEntries
         .filter((entry) => entry.kind === 'openpbr' && entry.parameterVariant >= 2)
         .map((entry) => [entry.parameterVariant, entry.parameterValues]));
+    for (const material of sceneMaterialVariants) parameterValuesByVariant.set(material.variant,material.values);
     for (const [variant, values] of parameterValuesByVariant) {
         values.forEach((value, index) => {
             const base = (parameterRowOffset + variant * parameters.length + index) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4;
@@ -948,6 +960,26 @@ function registerReferenceMaterialRegistry(scene, records)
             (rowOffset + index) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4,
             (rowOffset + index) * MTLX_LIGHT_TEXELS_PER_LIGHT * 4 + 4))),
     });
+}
+
+function bindReferenceSurfaceGeometry(geometry)
+{
+    setGpuDebugStage('building-bvh');
+    const {scene:referenceScene,records} = buildReferenceSurfaceScene(geometry,{
+        materialKey:mtlxRouteActiveMaterialKey,variants:sceneMaterialVariants,
+    });
+    const candidate = uploadReferenceSceneTextures(renderer,referenceScene,{
+        reservedTextureUnits:8 + mtlxRouteTextureAtlas.textures.length,
+    });
+    try { registerReferenceMaterialRegistry(referenceScene,records); }
+    catch (error) { candidate.dispose(); throw error; }
+    const previous = referenceBvhResources;
+    referenceBvhResources = candidate;
+    Object.assign(pathtracedMaterial.uniforms,candidate.uniforms);
+    previous?.dispose();
+    window.__openpbrReferenceBvh = {counts:candidate.packed.counts,byteLength:candidate.packed.byteLength,
+        stackRequirement:candidate.packed.stackRequirement};
+    setGpuDebugStage('bvh-built');
 }
 
 if (typeof window !== 'undefined')
@@ -1372,6 +1404,7 @@ function packSurfaceGeom(geometry)
     const tan  = geometry.attributes.tangent || null;
     const uv   = geometry.attributes.uv || null;
     const neutral = geometry.attributes.neutralFlag || null;
+    const variant = geometry.attributes.materialVariant || null;
     const gN = new Float32Array(N * 4);
     const gT = new Float32Array(N * 4);
     const gS = new Float32Array(N * 4);
@@ -1386,6 +1419,7 @@ function packSurfaceGeom(geometry)
         gT[4*i+2] = tan ? tan.getZ(i) : 0.0;
         gT[4*i+3] = uv  ? uv.getY(i)  : 0.0;
         gS[4*i+0] = neutral ? neutral.getX(i) : 0.0;
+        gS[4*i+1] = variant ? variant.getX(i) : 0.0;
     }
     return {
         gN: new Float32BufferAttribute(gN, 4),
@@ -1413,6 +1447,7 @@ function buildCombinedSurfaceGeometry(neutralGeom, surfaceGeom)
     const tan  = new Float32Array(N * 4);
     const uv   = new Float32Array(N * 2);
     const neu  = new Float32Array(N);
+    const variants = new Float32Array(N);
     let hasN = false, hasT = false, hasU = false;
     const copy = (G, base, flag) => {
         if (!G) return;
@@ -1426,6 +1461,7 @@ function buildCombinedSurfaceGeometry(neutralGeom, surfaceGeom)
             if (t) { tan[j*4+0] = t.getX(i); tan[j*4+1] = t.getY(i); tan[j*4+2] = t.getZ(i); tan[j*4+3] = t.itemSize > 3 ? t.getW(i) : 1.0; }
             if (u) { uv[j*2+0] = u.getX(i); uv[j*2+1] = u.getY(i); }
             neu[j] = flag; // Keep the neutral flag
+            variants[j] = G.attributes.materialVariant?.getX(i) || 0;
         }
     };
     copy(A, 0, 1.0);
@@ -1436,6 +1472,7 @@ function buildCombinedSurfaceGeometry(neutralGeom, surfaceGeom)
     if (hasT) g.setAttribute('tangent', new Float32BufferAttribute(tan, 4));
     if (hasU) g.setAttribute('uv', new Float32BufferAttribute(uv, 2));
     g.setAttribute('neutralFlag', new Float32BufferAttribute(neu, 1));
+    g.setAttribute('materialVariant', new Float32BufferAttribute(variants, 1));
     return g;
 }
 
@@ -1639,6 +1676,71 @@ const DEFAULT_MTLX = `<?xml version="1.0"?>
     <input name="surfaceshader" type="surfaceshader" nodename="default_mtl" />
   </surfacematerial>
 </materialx>`;
+
+function createSceneMaterialDocument(material)
+{
+    const mappings = {
+        color:['base_color','color3',[0.8,0.8,0.8]], metallic:['base_metalness','float',0],
+        roughness:['specular_roughness','float',0.5], specular:['specular_weight','float',1],
+        ior:['specular_ior','float',1.5], anisotropic:['specular_roughness_anisotropy','float',0],
+        subsurface:['subsurface_weight','float',0], sheen:['fuzz_weight','float',0],
+        clearcoat:['coat_weight','float',0], spectrans:['transmission_weight','float',0],
+        opacity:['geometry_opacity','float',1], emission:['emission_color','color3',[0,0,0]],
+    };
+    const allowed = new Set([...Object.keys(mappings),'material_type','clearcoatgloss']);
+    const unsupported = Object.keys(material.values).find((name) => !allowed.has(name));
+    if (unsupported) throw new Error(`SCENE_MATERIAL_BINDING_UNSUPPORTED: ${material.name}.${unsupported}`);
+    const document = new DOMParser().parseFromString(DEFAULT_MTLX,'application/xml');
+    const surface = document.querySelector('open_pbr_surface');
+    surface.replaceChildren();
+    const addInput = (name,type,value) => {
+        const input = document.createElement('input');
+        input.setAttribute('name',name);
+        input.setAttribute('type',type);
+        input.setAttribute('value',Array.isArray(value) ? value.join(', ') : String(value));
+        surface.appendChild(input);
+    };
+    for (const [directive,[name,type,fallback]] of Object.entries(mappings))
+        addInput(name,type,material.values[directive] ?? fallback);
+    addInput('coat_roughness','float',1 - (material.values.clearcoatgloss ?? 1));
+    addInput('emission_luminance','float',material.values.emission ? 1 : 0);
+    return new XMLSerializer().serializeToString(document);
+}
+
+async function prepareSceneMaterialVariants()
+{
+    sceneMaterialVariants = [];
+    if (!activeReferenceScene || !params.scene_url) return;
+    const primary = activeReferenceScene.materials[0];
+    const comparableShader = (source) => source.split('\n').map((line) => line.trim()).filter(Boolean).join('\n');
+    for (const material of activeReferenceScene.materials) {
+        let descriptors = mtlxRouteParamDescriptors;
+        if (material !== primary) {
+            const textures = extractMtlxTextureBindings(material.materialText,material.materialBaseUrl);
+            if (JSON.stringify(textures.map(({sampler,source}) => [sampler,source])) !==
+                JSON.stringify(mtlxRouteTextureBindings.map(({sampler,source}) => [sampler,source])))
+                throw new Error(`SCENE_MATERIAL_TEXTURES_UNSUPPORTED: ${material.name} uses different textures`);
+            const generated = is_mtlx_bvh_raster_route()
+                ? await generateMtlxRasterDispatch(material.materialText)
+                : await generateMtlxRouteDispatch(material.materialText);
+            const binding = bindMtlxParametersToTexture(adaptMtlxTextureShader(generated.glsl,mtlxRouteTextureAtlas),
+                material.materialText,material.name);
+            if (comparableShader(bindMtlxVariantHookFunctions(binding.glsl,binding.parameters)) !== comparableShader(mtlxRouteDispatchGlsl) ||
+                JSON.stringify(binding.parameters.map(({name,type}) => [name,type])) !==
+                JSON.stringify(mtlxRouteParamDescriptors.map(({name,type}) => [name,type])))
+                throw new Error(`SCENE_MATERIAL_GRAPH_UNSUPPORTED: ${material.name} must share the first material's graph and parameter schema`);
+            descriptors = binding.parameters;
+            const parameters = generated.mtlxParams;
+            materialDefines.VOLUME_ENABLED ||= parameters.transmissionWeight > 0 && parameters.transmissionDepth > 0 && !parameters.geometry_thin_walled;
+            materialDefines.TRANSMISSION_ENABLED ||= parameters.transmissionWeight > 0 && parameters.dispersionScale > 0;
+            materialDefines.THIN_FILM_ENABLED ||= parameters.thinFilmWeight > 0;
+        }
+        if (!descriptors.length && activeReferenceScene.materials.length > 1)
+            throw new Error('SCENE_MATERIAL_VARIANTS_UNAVAILABLE: generated shader has no editable parameter table');
+        sceneMaterialVariants.push({ name:material.name, variant:material.variant,
+            values:descriptors.map(({value}) => Array.isArray(value) ? [...value] : value) });
+    }
+}
 
 // Load (and cache) the MaterialX WASM generator module.
 // Bump on every republish of the public/mtlx bundle so clients never mix a cached
@@ -2834,7 +2936,6 @@ var COMPILING;
 var FULLSCREEN_BVH_ROUTE;
 var samples = 0;
 var sampleResetRevision = 0;
-const PATH_TRACER_TILE_SIZE = 64;
 const PATH_TRACER_INTERACTIVE_SCALE = 0.25;
 const PATH_TRACER_CAMERA_SETTLE_MS = 200;
 let pathtracerTileIndex = 0;
@@ -3023,6 +3124,7 @@ initializeLoadingProgress();
     }
     try {
         activeSceneCameraOverrides = parseSceneCameraOverrides(search);
+        if (params.tile_size) parsePathtracerTileSize(params.tile_size);
         if (!Object.hasOwn(LIGHT_SAMPLING_MODE,params.scene_light_sampling_mode))
             throw new Error('SCENE_LIGHT_SAMPLING_MODE_INVALID: expected mis, nee or bsdf');
     } catch (error) {
@@ -3032,7 +3134,7 @@ initializeLoadingProgress();
 
     window.__openpbrBvhBackend = {
         requested: params.bvh_backend, active: null,
-        available: [...AVAILABLE_BVH_BACKENDS], referenceReady: false,
+        available: [...AVAILABLE_BVH_BACKENDS], referenceReady: true,
     };
     try {
         window.__openpbrBvhBackend.active = resolveBvhBackend(params.bvh_backend, params.renderer_mode);
@@ -3057,7 +3159,12 @@ initializeLoadingProgress();
         try {
             if (search.has('mtlx_url')) throw new Error('SCENE_MATERIAL_SOURCE_CONFLICT: use the .scene material block instead of mtlx_url');
             const sceneUrl = resolveViewerAssetUrl(params.scene_url);
-            activeReferenceScene = await prepareReferenceScene(sceneUrl);
+            activeReferenceScene = await prepareReferenceScene(sceneUrl,{
+                createMaterialDocument:createSceneMaterialDocument,
+                environmentPath:search.has('env_map_path') ? resolveViewerAssetUrl(params.env_map_path) : undefined,
+                irradiancePath:search.has('env_irradiance_path') ? resolveViewerAssetUrl(params.env_irradiance_path) : undefined,
+                environmentBaseUrl:sceneUrl.includes('/external-scenes/') ? getPublicAssetUrl('external-scenes/') : undefined,
+            });
             params.scene_url = activeReferenceScene.sceneUrl;
             params.mtlx_material = activeReferenceScene.materialName;
             const sceneRenderer = activeReferenceScene.scene.blocks.find((block) => block.type === 'renderer')?.values || {};
@@ -3139,6 +3246,7 @@ initializeLoadingProgress();
             materialDefines.VOLUME_ENABLED       = hasTransmission && p.transmissionDepth > 0 && !p.geometry_thin_walled;
             materialDefines.TRANSMISSION_ENABLED = hasTransmission && p.dispersionScale > 0;
             materialDefines.THIN_FILM_ENABLED    = p.thinFilmWeight > 0;
+            await prepareSceneMaterialVariants();
             console.log('[mtlx-route] generated', mtlxRouteDispatchGlsl.split('\n').length, 'lines of dispatch GLSL');
         } else {
             const result = await generateMtlxGlsl(mtlxText);
@@ -3166,6 +3274,7 @@ initializeLoadingProgress();
         substitutionRuntimeState.contractValidationStep = substitutionRuntimeState.contractValidationStep || 'glsl-generation';
         substitutionRuntimeState.failureCause = substitutionRuntimeState.failureCause || 'generated_shading_unavailable';
         console.error('[mtlx] strict generated shading init failed:', e);
+        if (activeReferenceScene) { reportReferenceSceneError(e); return; }
     }
 
     await loadMtlxMaterialLibrary();
@@ -3175,6 +3284,9 @@ initializeLoadingProgress();
 
 function createMtlxRouteFragmentShader()
 {
+    resolveBvhBackend(params.bvh_backend,params.renderer_mode);
+    if (params.bvh_backend === 'reference') materialDefines.REFERENCE_BVH_ENABLED = true;
+    else delete materialDefines.REFERENCE_BVH_ENABLED;
     const mtlxRouteCommon = is_mtlx_bvh_raster_route()
         ? glsl_rasterization_mtlx_common
         : glsl_mtlx_route_common;
@@ -3769,7 +3881,13 @@ function load_geometry(scene_name)
                 // Set up mesh properties for pathtracing
                 BVH_SURFACE  = mesh_loader.result.bvh;
                 let combinedSurface = null;   // MTLX route: neutral+openpbr merged BVH (cached)
+                if (params.bvh_backend === 'reference') {
+                    const geometry = buildCombinedSurfaceGeometry(MESH_PROPS?.geometry,MESH_SURFACE.geometry);
+                    try { bindReferenceSurfaceGeometry(geometry); }
+                    finally { geometry.dispose(); }
+                }
                 for (const pm of get_pathtrace_materials()) {
+                    if (params.bvh_backend === 'reference') continue;
                     if (pm.uniforms.geomN_surface)
                     {
                         // MTLX route: merge neutral (props) + openpbr into one BVH.
@@ -3956,7 +4074,9 @@ function loadReferenceScene(scene_name)
             BVH_SURFACE = FULLSCREEN_BVH_ROUTE ? buildBvh(resources.geometry) : null;
 
             if (FULLSCREEN_BVH_ROUTE) {
+                if (params.bvh_backend === 'reference') bindReferenceSurfaceGeometry(resources.geometry);
                 for (const material of get_pathtrace_materials()) {
+                    if (params.bvh_backend === 'reference') continue;
                     if (material.uniforms.geomN_surface) {
                         const combinedGeometry = buildCombinedSurfaceGeometry(null,resources.geometry);
                         const combined = { bvh:buildBvh(combinedGeometry), packed:packSurfaceGeom(combinedGeometry) };
@@ -4012,6 +4132,7 @@ function loadReferenceScene(scene_name)
             LOADED = true;
             setGpuDebugStage('scene-loaded');
             window.__openpbrScene = { url:activeReferenceScene.sceneUrl, status:'loaded', material:activeReferenceScene.materialName,
+                objects:resources.objects, materials:sceneMaterialVariants.map(({name,variant}) => ({name,variant})),
                 geometryBlocks:resources.objectScene.children.length, geometryTriangles:resources.geometry.index
                     ? resources.geometry.index.count / 3 : resources.geometry.attributes.position.count / 3 };
             camera_initialized = false;
@@ -4405,6 +4526,63 @@ function makeGuiDraggable()
     handle.addEventListener('pointercancel', stopDragging);
 }
 
+function refreshSceneMaterialTable()
+{
+    const previous = mtlxRouteLightsTexture;
+    const texture = createMtlxLightsTexture();
+    for (const material of get_pathtrace_materials())
+        if (material.uniforms.mtlxLightsTex) material.uniforms.mtlxLightsTex.value = texture;
+    if (previous && previous !== texture) previous.dispose();
+    resetSamples();
+}
+
+function setSceneObjectMaterial(objectId,materialName)
+{
+    const object = activeReferenceResources?.objects.find((candidate) => candidate.id === objectId);
+    const material = sceneMaterialVariants.find((candidate) => candidate.name === materialName);
+    if (!object || !material) throw new Error('SCENE_MATERIAL_ASSIGNMENT_INVALID');
+    const geometry = activeReferenceResources.geometry;
+    const attribute = geometry.attributes.materialVariant;
+    attribute.array.fill(material.variant,object.vertexOffset,object.vertexOffset + object.vertexCount);
+    object.materialName = materialName;
+    if (params.bvh_backend === 'reference') {
+        bindReferenceSurfaceGeometry(geometry);
+        return;
+    }
+    const packed = packSurfaceGeom(geometry);
+    for (const shader of get_pathtrace_materials())
+        shader.uniforms.geomS_surface?.value.updateFrom(packed.gS);
+    resetSamples();
+}
+
+function setupSceneMaterialControls(folder)
+{
+    if (!activeReferenceResources || !sceneMaterialVariants.length) return;
+    window.__openpbrSetSceneObjectMaterial = setSceneObjectMaterial;
+    const objectsFolder = folder.addFolder('Scene Objects');
+    const names = sceneMaterialVariants.map(({name}) => name);
+    for (const object of activeReferenceResources.objects)
+        objectsFolder.add(object,'materialName',names).name(object.name)
+            .onChange((name) => setSceneObjectMaterial(object.id,name));
+    objectsFolder.close();
+    for (const material of sceneMaterialVariants) {
+        const materialFolder = folder.addFolder(material.name);
+        mtlxRouteParamDescriptors.forEach((descriptor,index) => {
+            if (descriptor.hidden) return;
+            const state = { value:material.values[index] };
+            const update = () => { material.values[index] = state.value; refreshSceneMaterialTable(); };
+            if (Array.isArray(state.value)) {
+                if (descriptor.uiType === 'color3') materialFolder.addColor(state,'value').name(descriptor.uiName).onChange(update);
+                else {
+                    const vectorFolder = materialFolder.addFolder(descriptor.uiName);
+                    state.value.forEach((_value,component) => vectorFolder.add(state.value,String(component)).onChange(update));
+                }
+            } else materialFolder.add(state,'value').name(descriptor.uiName).onChange(update);
+        });
+        materialFolder.close();
+    }
+}
+
 function setup_gui()
 {
     if (gui) {
@@ -4427,7 +4605,10 @@ function setup_gui()
     mtlx_library_folder.add({ open: openMtlxEditorDialog }, 'open').name('Edit MaterialX XML');
     mtlx_library_folder.close();
 
-    if (uses_mtlx_fullscreen_shader()) setupMtlxParameterControls(material_folder);
+    if (uses_mtlx_fullscreen_shader()) {
+        if (activeReferenceScene && params.scene_url) setupSceneMaterialControls(material_folder);
+        else setupMtlxParameterControls(material_folder);
+    }
     else
     {
     // Base folder
@@ -4638,7 +4819,14 @@ function post_load_setup()
 }
 
 const SHADER_COMPILE_WARN_MS  = 10000;  // avertissement après 10 s
-const SHADER_COMPILE_ABORT_MS = 600000;  // timeout d'abandon après 600 s
+const SHADER_COMPILE_ABORT_MS = 6000000;  // timeout d'abandon après 600 s
+
+function compileShaderObject(object,camera)
+{
+    if (renderer.extensions.has('KHR_parallel_shader_compile'))
+        return renderer.compileAsync(object,camera);
+    return Promise.resolve().then(() => renderer.compile(object,camera));
+}
 
 function trigger_recompile()
 {
@@ -4646,14 +4834,14 @@ function trigger_recompile()
     let tmp_cam = new OrthographicCamera( - 1, 1, 1, - 1, 0, 1 );
     startCompilationProgress();
 
-    let promises = is_pathtracing_route() ? [] : [renderer.compileAsync(scene, tmp_cam)];
+    let promises = is_pathtracing_route() ? [] : [compileShaderObject(scene, tmp_cam)];
 
     // FullScreenQuad meshes aren't in the scene, so compile route-owned quads separately.
     if (FULLSCREEN_BVH_ROUTE && pathtracedQuad) {
-        promises.push(renderer.compileAsync(pathtracedQuad._mesh, tmp_cam));
+        promises.push(compileShaderObject(pathtracedQuad._mesh, tmp_cam));
     }
     if (is_pathtracing_route() && pathtracedFinalQuad) {
-        promises.push(renderer.compileAsync(pathtracedFinalQuad._mesh, tmp_cam));
+        promises.push(compileShaderObject(pathtracedFinalQuad._mesh, tmp_cam));
     }
 
     // Avertissement progressif si la compilation est longue
@@ -4736,8 +4924,6 @@ function finishCompilationProgress()
     window.__openpbrSamples = 0;
 }
 
-// Canvas size for the selected render_size. '256x256'/'512x512' are literal pixel
-// sizes (square, centered), 'max' fills the window at its native resolution.
 function getRenderDimensions()
 {
     const W = Math.max(1, Math.floor(window.innerWidth || 1));
@@ -4747,8 +4933,10 @@ function getRenderDimensions()
         h:Math.max(1, Math.floor(activeSceneRenderResolution[1] || 1)),
     };
     if (params.render_size === 'max') return { w: W, h: H };
-    const side = params.render_size === '512x512' ? 512 : 256;
-    return { w: Math.min(side, W), h: Math.min(side, H) };
+    const size = /^(\d+)x(\d+)$/i.exec(params.render_size);
+    const width = size && Number(size[1]) > 0 ? Number(size[1]) : 256;
+    const height = size && Number(size[2]) > 0 ? Number(size[2]) : 256;
+    return { w: Math.min(width, W), h: Math.min(height, H) };
 }
 
 function getPathtracerRenderDimensions()
@@ -4822,7 +5010,9 @@ window.__openpbrGetRendererState = () => {
             programs:renderer.info.programs?.length ?? null } : null,
         jsHeap:performance.memory ? { used:performance.memory.usedJSHeapSize,total:performance.memory.totalJSHeapSize,
             limit:performance.memory.jsHeapSizeLimit } : null,
-        pathTargetSize:pathtracingRenderTarget ? [pathtracingRenderTarget.width,pathtracingRenderTarget.height] : null };
+        pathTargetSize:pathtracingRenderTarget ? [pathtracingRenderTarget.width,pathtracingRenderTarget.height] : null,
+        pathTileGrid:pathtracingRenderTarget ? getPathtracerTileGrid(
+            {w:pathtracingRenderTarget.width,h:pathtracingRenderTarget.height},activeSceneRendererOptions || {},params.tile_size) : null };
 };
 
 function updateDenoiserPresentation()
@@ -5165,17 +5355,17 @@ function render()
             const dimensions = getRenderDimensions();
             const renderDimensions = pathtracing ? getPathtracerRenderDimensions() : dimensions;
             const tiledPathtracing = pathtracing && !pathtracerInteractivePreview;
-            const tilesX = Math.ceil(renderDimensions.w / PATH_TRACER_TILE_SIZE);
-            const tilesY = Math.ceil(renderDimensions.h / PATH_TRACER_TILE_SIZE);
+            const {tileWidth,tileHeight,columns:tilesX,rows:tilesY} = getPathtracerTileGrid(
+                renderDimensions,activeSceneRendererOptions || {},params.tile_size);
             const tileX = tiledPathtracing ? pathtracerTileIndex % tilesX : 0;
             const tileY = tiledPathtracing ? Math.floor(pathtracerTileIndex / tilesX) : 0;
-            const viewportX = tileX * PATH_TRACER_TILE_SIZE;
-            const viewportY = tileY * PATH_TRACER_TILE_SIZE;
+            const viewportX = tileX * tileWidth;
+            const viewportY = tileY * tileHeight;
             const viewportWidth = tiledPathtracing
-                ? Math.min(PATH_TRACER_TILE_SIZE, renderDimensions.w - viewportX)
+                ? Math.min(tileWidth, renderDimensions.w - viewportX)
                 : renderDimensions.w;
             const viewportHeight = tiledPathtracing
-                ? Math.min(PATH_TRACER_TILE_SIZE, renderDimensions.h - viewportY)
+                ? Math.min(tileHeight, renderDimensions.h - viewportY)
                 : renderDimensions.h;
 
             sync_shader_uniforms(active_pathtrace_material().uniforms);
