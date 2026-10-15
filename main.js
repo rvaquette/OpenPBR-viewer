@@ -4392,7 +4392,7 @@ function reset_camera(scene_name)
     orbitControls.flySpeed = 0.01;
     orbitControls.update();
 
-    if (params.render_size !== 'max' && scene_name !== 'test-material-disney-gold')
+    if (false) //params.render_size !== 'max' && scene_name !== 'test-material-disney-gold')
     {
         if (!bounds.isEmpty())
         {
